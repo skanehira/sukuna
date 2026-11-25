@@ -34,7 +34,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap">
 <style>
-:root { --ground:#f4f5f7; --surface:#ffffff; --raised:#eceef2; --line:#e1e4ea; --ink:#1a1d24; --muted:#646c7c; --sel:#dde1ff; --accent:#4753d6; --done:#1c8650; --doing:#946200; --wait:#cf2f58; --add:#e0f4e7; --del:#fde4e9; color-scheme:light; }
+:root { --ground:#f4f5f7; --surface:#ffffff; --raised:#eceef2; --line:#e1e4ea; --ink:#1a1d24; --muted:#646c7c; --sel:#dde1ff; --accent:#4753d6; --done:#1c8650; --doing:#946200; --wait:#b8264c; --add:#e0f4e7; --del:#fde4e9; color-scheme:light; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme=light]) { --ground:#0e1014; --surface:#15181e; --raised:#242a36; --line:#333949; --ink:#e7e9ee; --muted:#a2a9b8; --sel:#2c3566; --accent:#8b9bff; --done:#57c785; --doing:#e2b04a; --wait:#ff7d93; --add:#12301f; --del:#3a1a22; color-scheme:dark; } }
 :root[data-theme=dark] { --ground:#0e1014; --surface:#15181e; --raised:#242a36; --line:#333949; --ink:#e7e9ee; --muted:#a2a9b8; --sel:#2c3566; --accent:#8b9bff; --done:#57c785; --doing:#e2b04a; --wait:#ff7d93; --add:#12301f; --del:#3a1a22; color-scheme:dark; }
 body { background:var(--ground); color:var(--ink); font-family:"Zen Kaku Gothic New","Hiragino Sans",sans-serif; -webkit-font-smoothing:antialiased; word-break:auto-phrase; }
@@ -72,21 +72,21 @@ function useKept(k, d) { const [v, set] = useState(() => load(k, d)); useEffect(
  * 見本データ (架空のプロジェクト)
  * ------------------------------------------------------------------ */
 const PROJECTS = [
-  { id: "shop-api", auto: true, worktrees: [["main", "main", "会話 2 件"], ["issue-42", "feat/stock", "#42"], ["try-cache", "try-cache", "会話なし"]], convs: ["予約 API の壁打ち", "エラー処理の調査"] },
+  { id: "shop-api", auto: true, worktrees: [["main", "main", "会話 2 件"], ["issue-42", "feat/stock", "#42"], ["try-cache", "try-cache", "会話なし"]], convs: ["予約 API の壁打ち", "エラー処理の調査", "決済の調査"] },
   { id: "booking-web", auto: true, worktrees: [["main", "main", "会話 1 件"]], convs: ["画面の相談"] },
   { id: "notes-cli", auto: false, worktrees: [["main", "main", "会話 1 件"]], convs: ["README の見直し"] },
 ];
 const ISSUES = [
   { id: 42, project: "shop-api", title: "在庫の引き当てを追加する", state: "設計レビュー", wait: true, why: "設計の承認", ago: "12分前" },
   { id: 43, project: "shop-api", title: "注文 CSV の文字化けを直す", state: "実装中", wait: false, why: "実装 11分", ago: "1分前" },
-  { id: 44, project: "shop-api", title: "返金の扱いを決める", state: "判断待ち", wait: true, why: "利用枠切れで停止", ago: "3時間前" },
+  { id: 44, project: "shop-api", title: "返金の扱いを決める", state: "停止中", wait: true, why: "利用枠切れで停止", ago: "3時間前" },
   { id: 45, project: "shop-api", title: "ログの保存期間を設定する", state: "実装待ち", wait: false, why: "#43 の完了を待つ", ago: "40分前" },
   { id: 46, project: "shop-api", title: "商品検索を速くする", state: "下書き", wait: false, why: "", ago: "2日前" },
   { id: 7, project: "booking-web", title: "予約の変更画面を作る", state: "設計待ち", wait: false, why: "設計 4分", ago: "30秒前" },
   { id: 8, project: "booking-web", title: "カレンダーの祝日表示", state: "実装中", wait: true, why: "merge 前の確認", ago: "25分前" },
   { id: 9, project: "booking-web", title: "通知メールの文面", state: "完了", wait: false, why: "", ago: "1日前" },
 ];
-const STATES = ["判断待ち", "設計レビュー", "実装中", "設計待ち", "精査待ち", "実装待ち", "下書き", "完了", "取り下げ"];
+const STATES = ["停止中", "設計レビュー", "実装中", "設計待ち", "精査待ち", "実装待ち", "下書き", "完了", "取り下げ"];
 
 const mk = (rows) => rows.map(([k, t, x]) => ({ k, t, ...(x || {}) }));
 const CONV = mk([
@@ -131,9 +131,13 @@ const DECISIONS = [
   { k: "保留", t: "引き当ての期限を設定で変えられるか", id: "q2" },
 ];
 /* ほかの会話の見本。題名に合う短いやりとりだけを持つ */
+/* 見本では、shop-api の 3 つ目の会話を最初から閉じた会話にしておく */
+const convKey = (pid, n) => `conv-${pid}--${n}`;
+const CLOSED0 = [convKey("shop-api", 2)];
 const OTHER = {
-  "エラー処理の調査": ["決済 API のエラーが続く原因を調べて。", "原因は再試行の上限でした。3 回で打ち切っていて、一時的な障害でも失敗になります。", "● Read(src/payment/retry.ts)  62 行", "上限を 5 回にし、間隔を倍々に伸ばす案を出せます。進めますか?"],
-  "README の見直し": ["README が古いので、構成から見直したい。", "構成の案を 3 つ出しました。", "A: 使い方を先頭に置く / B: 導入手順を先頭に置く / C: 目的と設計を先頭に置く", "どれで進めますか?"],
+  "決済の調査": ["決済が二重に走る条件を調べて。", "再試行と Webhook の両方で確定していました。Webhook の側だけで確定する形に直せます。"],
+  "エラー処理の調査": ["決済 API のエラーが続く原因を調べて。", "原因は再試行の上限でした。3 回で打ち切っていて、一時的な障害でも失敗になります。", "● Read(src/payment/retry.ts)  62 行", "上限を 5 回にし、間隔を倍々に伸ばす案を用意しました。"],
+  "README の見直し": ["README が古いので、構成から見直したい。", "構成の案を 3 つ出しました。", "A: 使い方を先頭に置く / B: 導入手順を先頭に置く / C: 目的と設計を先頭に置く", "A を勧めます。"],
   "画面の相談": ["予約の変更画面は、1 画面にまとめたい。", "日付と人数を同じ画面で変えられる形にします。確認の画面は別に出します。"],
 };
 const otherConv = (name) => { const t = OTHER[name] || ["この会話を始めます。", "どうぞ。"]; return mk([["you", "あなた"], ["text", t[0]], ["ai", "AI"], ...t.slice(1).map((x) => [x.startsWith("●") ? "tool" : "text", x])]); };
@@ -153,7 +157,7 @@ const LIST = [
   { sect: "判断待ち", project: "shop-api", title: "#42 在庫の引き当てを追加する", why: "設計の承認", ago: "12分前", unread: true, go: { s: "issue", project: "shop-api", issue: 42, tab: 1 } },
   { sect: "判断待ち", project: "shop-api", title: "会話: 予約 API の壁打ち", why: "質問 2 件: 期限切れの戻し方 ほか", ago: "5分前", unread: true, go: { s: "conv", project: "shop-api", conv: 0 } },
   { sect: "判断待ち", project: "booking-web", title: "#8 カレンダーの祝日表示", why: "merge 前の確認", ago: "25分前", go: { s: "issue", project: "booking-web", issue: 8, tab: 2 } },
-  { sect: "判断待ち", project: "shop-api", title: "#44 返金の扱いを決める", why: "利用枠切れで停止", ago: "3時間前", go: { s: "issue", project: "shop-api", issue: 44, tab: 0 } },
+  { sect: "判断待ち", project: "shop-api", title: "#44 返金の扱いを決める", why: "利用枠切れで停止", ago: "3時間前", go: { s: "issue", project: "shop-api", issue: 44, tab: 4 } },
   { sect: "指示待ち", project: "notes-cli", title: "会話: README の見直し", why: "構成の案を 3 つ出しました", ago: "8分前", unread: true, go: { s: "conv", project: "notes-cli", conv: 0 } },
   { sect: "指示待ち", project: "shop-api", title: "会話: エラー処理の調査", why: "原因は再試行の上限でした", ago: "2時間前", go: { s: "conv", project: "shop-api", conv: 1 } },
   { sect: "作業中", project: "shop-api", title: "#43 注文 CSV の文字化けを直す", why: "実装 11分 · Bash(npm test -- csv)", ago: "1分前", go: { s: "issue", project: "shop-api", issue: 43, tab: 3 } },
@@ -161,8 +165,8 @@ const LIST = [
 ];
 const SECTIONS = [["判断待ち", "判断しないと作業が進まないもの"], ["指示待ち", "作業が一区切りし、次の指示を待つもの"], ["作業中", "AI が作業しているもの"]];
 const goKey = (g) => `${g.s}-${g.project}-${g.issue ?? ""}-${g.conv ?? ""}`;
-const listLines = (seen) => SECTIONS.flatMap(([name, desc]) => {
-  const rows = LIST.filter((x) => x.sect === name);
+const listLines = (seen, hidden = []) => SECTIONS.flatMap(([name, desc]) => {
+  const rows = LIST.filter((x) => x.sect === name && !hidden.includes(goKey(x.go)));
   return [{ k: "sect", cols: [name, String(rows.length)], sect: name },
     ...(rows.length ? rows.map((x) => ({ k: "row", cols: [x.title, x.why, x.project, x.ago], unread: x.unread && !seen.has(goKey(x.go)), sect: name, go: x.go }))
       : [{ k: "note", t: `${desc}はありません` }])];
@@ -185,7 +189,7 @@ const designOf = () => [
 ];
 const prOf = (v) => v.issue === 8 ? [
   { k: "head", t: "PR #128 予約カレンダーに祝日を表示する" },
-  kv("状況", "merge の前に確認"), kv("CI", "test 成功 / lint 成功 / e2e 実行中"),
+  kv("状況", "merge 前の確認"), kv("CI", "test 成功 / lint 成功 / e2e 実行中"),
   { k: "head", t: "src/calendar/holiday.ts" },
   { k: "del", t: "  18 - const days = fetchHolidays()" },
   { k: "add", t: "  18 + const days = await fetchHolidays(year)" },
@@ -211,7 +215,7 @@ const agentsOf = (v) => v.issue === 43 ? [
   { k: "head", t: "工程" },
   flow([["done", "精査"], ["done", "設計"], ["doing", "実装 11分"], ["todo", "レビュー"], ["todo", "PR"], ["todo", "merge"]]),
   { k: "head", t: "エージェント" },
-  { k: "ahead", cols: ["名前", "状態", "経過", "いましていること"] },
+  { k: "ahead", of: "agent", cols: ["名前", "状態", "経過", "いましていること"] },
   agent("doing", 0, "/dev-impl (親)", "実行中", "18分", "実装を依頼して、結果を待っている"),
   agent("doing", 1, "dev-impl-implementer", "実行中", "11分", "Bash npm test -- csv"),
   agent("todo", 1, "review-impl", "待機中", "—", "実装が終わると始まる"),
@@ -222,7 +226,7 @@ const agentsOf = (v) => v.issue === 43 ? [
   { k: "head", t: "工程" },
   flow([["done", "精査"], ["doing", "設計 4分"], ["todo", "設計レビュー"], ["todo", "実装"], ["todo", "レビュー"], ["todo", "PR"], ["todo", "merge"]]),
   { k: "head", t: "エージェント" },
-  { k: "ahead", cols: ["名前", "状態", "経過", "いましていること"] },
+  { k: "ahead", of: "agent", cols: ["名前", "状態", "経過", "いましていること"] },
   agent("doing", 0, "/dev-feat-spec (親)", "実行中", "4分", "Read docs/design/DESIGN.md"),
   { k: "note", t: "エージェントの行で Enter を押すと、そのエージェントの会話が開き、指示を送れます。" },
   { k: "head", t: "操作" },
@@ -261,6 +265,7 @@ const TASK_TREE = [
   rkv("進み", "50%  (末端のタスク 2 / 4)"), rkv("内訳", "完了 2 · 停止 1 · 未着手 1"), rkv("経過", "18分"),
   { k: "bar", parts: [10, 0, 5, 5] },
   { k: "head", t: "タスク" },
+  { k: "ahead", of: "task", cols: ["タスク", "状態", "進み"] },
   task("done", 0, "文字コードの判定", "100%", 0),
   task("doing", 0, "CSV の書き出し", "50%", 1),
   task("done", 1, "正常系", "100%", 1),
@@ -282,9 +287,10 @@ const TASK_DETAIL = [
 ];
 const hk = (a, b, c) => ({ k: "key", cols: [a, b, c || "どこでも"] });
 const HELP = [
+  { k: "note", t: "Ctrl を使うキーは macOS のブラウザを前提にしています。Windows と Linux では、ブラウザのショートカットと重なるものがあります。" },
   { k: "head", t: "開く・戻る" },
   hk("Enter", "開く・選ぶ"), hk("-", "1 つ前の画面へ戻る"), hk("Ctrl+l / Ctrl+h", "issue の中の次 / 前の表示へ", "issue (主のウィンドウ)"),
-  hk("Ctrl+o", "飛ぶ前の位置へ戻る", "会話"), hk("Space h", "一覧を開く"), hk("Space p", "ツリーへ移る"), hk("Space b / Space n", "会話を始める・切り替える"),
+  hk("Ctrl+o", "飛ぶ前の位置へ戻る", "会話"), hk("Space h", "一覧を開く"), hk("Space p", "ツリーへ移る"), hk("Space n", "会話を始める・切り替える"), hk("Space b", "会話とスレッドの一覧 (閉じたものを含む)"), hk("Space z", "会話を締めくくる", "会話"),
   { k: "head", t: "ウィンドウ" },
   hk("Ctrl+w h / l", "左 / 右のウィンドウへ"), hk("Ctrl+w j / k", "入力欄へ / 会話へ", "入力欄を開いているとき"), hk("Ctrl+h", "1 つ前の表示へ戻る", "右のウィンドウ"), hk("q", "閉じる", "右のウィンドウ"),
   { k: "head", t: "会話" },
@@ -306,21 +312,26 @@ const HELP = [
   hk("h j k l", "1 文字・1 行"), hk("w b e", "単語"), hk("0 ^ $", "行頭・行末"), hk("gg / G", "先頭・末尾"), hk("{ }", "段落"), hk("Ctrl+d / Ctrl+u", "半画面"),
   hk("/ ? n N *", "検索"), hk("f t ; ,", "行の中の文字へ"), hk("v / V / Ctrl+v", "文字・行・矩形の選択"), hk("iw ap など", "テキストオブジェクト", "選択中"), hk("y", "コピー"),
 ];
-const settingsOf = (paused) => [
-  { k: "head", t: "全体" },
-  kv("自動フロー", paused ? "停止中" : "動作中"), kv("バックアップ", "毎日 03:00  (最終: 今日 03:00、7 日分)"),
-  { k: "action", t: paused ? "自動フローを再開する" : "自動フローを一時停止する", act: "pause" },
-  { k: "action", t: "バックアップから復元する", act: "restore" },
-  { k: "head", t: "プロジェクト shop-api" },
-  kv("モデル", "opus"), kv("許可の扱い", "確認しない (bypassPermissions)"), kv("自動で処理する段階", "精査 / 設計 / 実装"), kv("実装の同時実行", "5 件まで"), kv("merge", "自動"),
-  { k: "action", t: "GitHub の issue を下書きとして取り込む", act: "import" },
-  { k: "action", t: "プロジェクトを登録する / 解除する", act: "project" },
-];
+const settingsOf = (paused, conf) => {
+  const row = (name) => kv(name, conf[name], { field: name, store: "conf" });
+  return [
+    { k: "head", t: "全体" },
+    kv("自動フロー", paused ? "停止中" : "動作中"), row("バックアップ"),
+    { k: "action", t: paused ? "自動フローを再開する" : "自動フローを一時停止する", act: "pause" },
+    { k: "action", t: "バックアップから復元する", act: "restore" },
+    { k: "head", t: "プロジェクト shop-api" },
+    row("モデル"), row("許可の扱い"), row("自動で処理する段階"), row("実装の同時実行"), row("merge"),
+    { k: "note", t: "値の行で i を押すと、その値を書けます。" },
+    { k: "action", t: "GitHub の issue を下書きとして取り込む", act: "import" },
+    { k: "action", t: "プロジェクトを登録する", act: "project" },
+    { k: "action", t: "このプロジェクトの登録を解除する", act: "unregister" },
+  ];
+};
 
 /* ------------------------------------------------------------------ *
  * 画面の中身 (どの画面も「行の並び」= バッファとして作る)
  * ------------------------------------------------------------------ */
-const issueGo = (i) => ({ s: "issue", project: i.project, issue: i.id, tab: i.state === "設計レビュー" ? 1 : i.why === "merge 前の確認" ? 2 : 0 });
+const issueGo = (i) => (i.state === "下書き" ? { s: "issueForm", project: i.project } : { s: "issue", project: i.project, issue: i.id, tab: i.state === "設計レビュー" ? 1 : i.why === "merge 前の確認" ? 2 : i.why === "利用枠切れで停止" ? 4 : 0 });
 const issueRow = (i, withProject) => ({ k: withProject ? "row" : "irow", cols: withProject ? [`#${i.id} ${i.title}`, i.why || i.state, i.project, i.ago] : [`#${i.id} ${i.title}`, i.why || "—", i.ago], sect: i.wait ? "判断待ち" : "", go: issueGo(i) });
 function linesOf(v, ctx) {
   switch (v.s) {
@@ -332,8 +343,8 @@ function linesOf(v, ctx) {
       });
       return [
         ...(groups.length ? groups : [{ k: "note", t: "issue はまだありません。Space o で作ります。" }]),
-        { k: "head", t: `会話  ${p.convs.length}` },
-        ...p.convs.map((c, n) => { const x = LIST.find((y) => y.title === `会話: ${c}` && y.project === p.id); return { k: "irow", cols: [`会話: ${c}`, x?.why || "—", x?.ago || "—"], sect: x?.sect, unread: false, go: { s: "conv", project: p.id, conv: n } }; }),
+        { k: "head", t: `会話  ${p.convs.filter((_, n) => !(ctx.hidden || []).includes(convKey(p.id, n))).length}` },
+        ...p.convs.map((c, n) => { const x = LIST.find((y) => y.title === `会話: ${c}` && y.project === p.id); return { k: "irow", cols: [`会話: ${c}`, x?.why || "—", x?.ago || "—"], sect: x?.sect, unread: false, go: { s: "conv", project: p.id, conv: n } }; }).filter((r) => !(ctx.hidden || []).includes(goKey(r.go))),
         { k: "action", t: "会話を始める", act: "newconv:" + p.id },
       ];
     }
@@ -345,12 +356,20 @@ function linesOf(v, ctx) {
     case "search": return [
       { k: "head", t: `「${ctx.query || "在庫"}」を含む issue と会話   2 件` },
       issueRow(ISSUES[0], true),
-      { k: "row", cols: ["会話: 予約 API の壁打ち", "在庫の引き当ても同じ API で…", "shop-api", "5分前"], go: { s: "conv", project: "shop-api", conv: 0 } },
+      { k: "row", cols: ["会話: 予約 API の壁打ち", LIST[1].why, "shop-api", "5分前"], sect: "判断待ち", go: { s: "conv", project: "shop-api", conv: 0 } },
+    ];
+    case "convs": return [
+      ...PROJECTS.flatMap((p) => p.convs.map((c, n) => ({ c, n })).filter(({ n }) => !ctx.gone.includes(convKey(p.id, n))).map(({ c, n }) => {
+        const k = convKey(p.id, n), x = LIST.find((y) => goKey(y.go) === k), shut = ctx.closed.includes(k);
+        return { k: "row", cols: [`会話: ${c}`, shut ? "閉じた" : x?.why || "開いている", p.id, x?.ago || "3日前"], sect: shut ? "" : x?.sect, conv: k, go: { s: "conv", project: p.id, conv: n } };
+      })),
+      ...ctx.threads.map((t) => ({ k: "row", cols: [`スレッド: ${t.text}`, t.done ? "終了" : "進行中", "shop-api", "いま"], thread: t.id })),
+      { k: "note", t: "閉じた会話は、開くと再開して一覧に戻ります。" },
     ];
     case "help": return HELP;
-    case "settings": return settingsOf(ctx.paused);
+    case "settings": return settingsOf(ctx.paused, ctx.conf);
     case "issueForm": return [
-      kv("題名", ctx.form.題名, { field: "題名" }), kv("本文", ctx.form.本文, { field: "本文" }), kv("親", ctx.form.親, { field: "親" }), kv("依存", ctx.form.依存, { field: "依存" }),
+      kv("プロジェクト", ctx.project), kv("題名", ctx.form.題名, { field: "題名" }), kv("本文", ctx.form.本文, { field: "本文" }), kv("親", ctx.form.親, { field: "親" }), kv("依存", ctx.form.依存, { field: "依存" }),
       kv("優先度", ctx.form.優先度, { field: "優先度" }), kv("merge 前の確認", ctx.form["merge 前の確認"], { field: "merge 前の確認" }),
       { k: "note", t: "項目の行で i を押すと、その項目を書けます。" },
       { k: "head", t: "操作" },
@@ -370,7 +389,7 @@ const convName = (v) => (PROJECTS.find((p) => p.id === v.project)?.convs[v.conv 
 const issueName = (v) => { const i = ISSUES.find((x) => x.id === v.issue && x.project === v.project); return i ? `#${i.id} ${i.title}` : `#${v.issue}`; };
 const titleOf = (v) => ({
   home: "一覧", project: `プロジェクト ${v.project}`, issue: `${v.project} / ${issueName(v)}`,
-  conv: `${v.project} / 会話: ${convName(v)}`, agentconv: `${v.project} / ${issueName(v)} / ${v.agent}`, file: v.file, grep: "ファイルの中身を検索", search: "issue と会話を検索", help: "ヘルプ", settings: "設定",
+  conv: `${v.project} / 会話: ${convName(v)}`, agentconv: `${v.project} / ${issueName(v)} / ${v.agent}`, file: v.file, grep: "ファイルの中身を検索", search: "issue と会話を検索", convs: "会話とスレッドの一覧", help: "ヘルプ", settings: "設定",
   issueForm: "issue の作成・編集 (下書き)", terminal: "ターミナル", 404: "見つかりません", offline: "サーバーにつながりません", loading: "読み込み中",
 }[v.s] || v.s);
 
@@ -381,8 +400,8 @@ const titleOf = (v) => ({
 const LINE = {
   head: "text-[13px] font-bold text-ink app-head", you: "!leading-5", ai: "!leading-5", text: "", ask: "font-bold", tool: "font-mono text-[12px] text-muted", note: "text-[13px] text-muted",
   choice: "", action: "", item: "", wait: "text-wait", add: "font-mono text-[12px] bg-add", del: "font-mono text-[12px] bg-del", code: "font-mono text-[13px] whitespace-pre", tree: "font-mono text-[13px] whitespace-pre",
-  dir: "font-mono text-[12px] text-muted whitespace-pre", file: "font-mono text-[13px] whitespace-pre", task: "whitespace-pre", bar: "", sep: "text-accent text-[12px] font-medium", sect: "whitespace-pre", row: "whitespace-pre", irow: "whitespace-pre",
-  kv: "", rkv: "", key: "", agent: "whitespace-pre", ahead: "whitespace-pre app-colhead", step: "whitespace-pre", flow: "whitespace-pre text-[13px] text-muted", wt: "whitespace-pre", queued: "text-doing", skeleton: "app-skel",
+  dir: "font-mono text-[12px] text-muted whitespace-pre", file: "font-mono text-[13px] whitespace-pre", task: "whitespace-pre", bar: "", sep: "text-accent text-[12px] font-medium", sect: "whitespace-pre app-head", row: "whitespace-pre", irow: "whitespace-pre",
+  kv: "", rkv: "app-hang", key: "", agent: "whitespace-pre", ahead: "whitespace-pre app-colhead", step: "whitespace-pre", flow: "whitespace-pre text-[13px] text-muted", wt: "whitespace-pre", queued: "text-doing", skeleton: "app-skel",
 };
 const PAD = { head: 14, you: 4, ai: 4, sect: 8 };
 /* 桁の幅 (rem)。バッファの行と、ウィンドウの見出しに置く列の見出しの両方が、この値を使う */
@@ -427,7 +446,7 @@ const KEYS = [
   ["<Space>wh", "winLeft"], ["<Space>wl", "winRight"], ["<Space>wk", "winUp"], ["<Space>wj", "winDown"],
   ["<Space>q", "question"], ["<Space>c", "instruct"], ["<Space>sq", "sendq"], ["<Space>sc", "sendc"], ["<Space>sa", "senda"],
   ["<Space>i", "recent"], ["<Space>m", "toc"], ["<Space>d", "decisions"],
-  ["<Space>l", "stock"], ["<Space>r", "thread"], ["<Space>t", "timeline"], ["<Space>e", "files"], ["<Space>b", "switch"], ["<Space>k", "worktree"],
+  ["<Space>l", "stock"], ["<Space>r", "thread"], ["<Space>t", "timeline"], ["<Space>e", "files"], ["<Space>b", "convs"], ["<Space>z", "closeconv"], ["<Space>k", "worktree"],
   ["<Space>h", "home"], ["<Space>p", "tree"], ["<Space>o", "issueForm"], ["<Space>g", "terminal"], ["<Space>/", "grep"], ["<Space>f", "search"], ["<Space>n", "switch"], ["<Space>x", "stop"],
 ];
 Vim.unmap("<Space>");
@@ -435,8 +454,8 @@ Vim.unmap("<C-w>", "normal");
 KEYS.forEach(([k, name, ctx]) => { Vim.defineAction("app_" + name, (cm, args) => HANDLERS.get(cm.cm6)?.(name, args)); Vim.mapCommand(k, "action", "app_" + name, {}, ctx ? { context: ctx } : {}); });
 /* Space に続けて押せるキー。Space を押すと、ステータス行の上に候補として出す */
 const WHICH = {
-  " ": [["q", "質問"], ["c", "指示"], ["l", "ストック"], ["s", "送る…"], ["r", "スレッド"], ["i", "直近"], ["m", "目次"], ["d", "決まったこと"], ["t", "タイムライン"], ["e", "ファイル"], ["/", "中身を検索"], ["f", "issue と会話を検索"],
-    ["n", "会話を始める・切り替える"], ["o", "issue を作る"], ["k", "worktree"], ["g", "ターミナル"], ["h", "一覧"], ["p", "ツリー"], ["x", "AI を止める"], ["w", "ウィンドウ…"]],
+  " ": [["q", "質問"], ["c", "指示"], ["l", "ストック"], ["s", "+送る"], ["r", "スレッド"], ["i", "直近"], ["m", "目次"], ["d", "決まったこと"], ["t", "タイムライン"], ["e", "ファイル"], ["/", "中身を検索"], ["f", "issue と会話を検索"],
+    ["n", "会話を始める・切り替える"], ["b", "会話とスレッドの一覧"], ["z", "会話を締めくくる"], ["o", "issue を作る"], ["k", "worktree"], ["g", "ターミナル"], ["h", "一覧"], ["p", "ツリー"], ["x", "AI を止める"], ["w", "+ウィンドウ"]],
   " s": [["a", "全部送る"], ["q", "質問だけ送る"], ["c", "指示だけ送る"]],
   " w": [["h", "左へ"], ["l", "右へ"], ["j", "入力欄へ"], ["k", "会話へ"]],
 };
@@ -467,6 +486,8 @@ class Check extends WidgetType {
     return e;
   }
 }
+/* 桁の幅。ウィンドウが狭いときは、同じ比率のまま縮める (列の見出しも同じ式を使う) */
+const colW = (kind, m) => { const ws = W[kind] || [], w = ws[m]; if (!w) return null; return `min(${w}rem, ${((w / ws.reduce((a, b) => a + b, 0)) * (ws.includes(0) ? 55 : 86)).toFixed(1)}cqw)`; };
 function decorate(lines, doc) {
   const b = new RangeSetBuilder();
   let mine = false;
@@ -485,9 +506,9 @@ function decorate(lines, doc) {
     else if (l.cols) {
       let p = line.from;
       colsOf(l).forEach((c, m) => {
-        const w = W[l.k]?.[m];
+        const w = colW(l.of || l.k, m);
         const extra = (l.k === "row" || l.k === "irow") && m === 0 ? (l.unread ? " font-bold" : "") : (l.k === "row" || l.k === "irow") && m === 1 ? (l.sect === "判断待ち" ? " text-wait" : " text-muted") : (l.k === "task" || l.k === "agent") && m === 1 ? " " + ST[l.st][1] : "";
-        b.add(p, p + c.length, Decoration.mark({ class: (w ? "inline-block align-bottom whitespace-pre overflow-hidden text-ellipsis " : "") + (COLC[l.k]?.[m] || "") + extra, ...(w ? { attributes: { style: `width:${w}rem` } } : {}) }));
+        b.add(p, p + c.length, Decoration.mark({ class: (w ? "inline-block align-bottom whitespace-pre overflow-hidden text-ellipsis " : "") + (COLC[l.k]?.[m] || "") + extra, ...(w ? { attributes: { style: `width:${w}` } } : {}) }));
         if (l.st && m === 0) b.add(p + l.d * 4, p + l.d * 4 + 1, Decoration.mark({ class: ST[l.st][1] }));
         p += c.length + 2;
       });
@@ -509,7 +530,9 @@ const THEME = (side) => EditorView.theme({
   ".cm-line.bg-add, .cm-line.bg-del": { borderRadius: "0" },
   /* 見出しは、濃い太字と下の線で中身と分ける。列の見出しは、薄い地の帯にする。ツリーのプロジェクト名は線を引かない */
   ...(side === "tree" ? { ".cm-line.app-head": { color: "var(--muted)", fontSize: "12px" } } : { ".cm-line.app-head": { borderBottom: "1px solid var(--line)", borderRadius: "0", paddingBottom: "2px" } }),
-  ".cm-line.app-colhead": { backgroundColor: "var(--ground)", borderBottom: "1px solid var(--line)", borderRadius: "0" },
+  ".cm-line.app-colhead": { borderBottom: "1px solid var(--line)", borderRadius: "0" },
+  /* 項目と値の行が折り返したら、2 行目も値の位置から始める */
+  ".cm-line.app-hang": { paddingLeft: "calc(4rem + 12px)", textIndent: "calc(-4rem - 8px)" }, ".cm-line.app-hang > span": { textIndent: "0" },
   ".cm-line.app-you, .cm-line.app-ai": { borderRadius: "0", paddingLeft: "12px", marginLeft: "8px" },
   ".cm-line.app-you": { backgroundColor: "var(--raised)", boxShadow: "inset 3px 0 0 var(--accent)" },
   ".cm-line.app-ai": { boxShadow: "inset 3px 0 0 color-mix(in srgb, var(--ink) 28%, transparent)" },
@@ -645,7 +668,7 @@ function PromptEditor({ label, initial, working, stocking, plain, onSubmit, onCl
 /* ウィンドウの見出し。sub には、列の見出しや、issue の中の表示の並びを置く (バッファの外なので通常の HTML) */
 function Frame({ title, focused, right, children, edge, sub }) {
   return (
-    <section className={`flex flex-col min-w-0 min-h-0 ${edge ? "border-l border-line" : "bg-ground"}`} aria-label={title}>
+    <section className={`flex flex-col min-w-0 min-h-0 ${edge ? "border-l border-line" : "bg-ground"}`} style={{ containerType: "inline-size" }} aria-label={title}>
       <div className={`relative h-9 shrink-0 pl-4 pr-2 text-[13px] flex items-center justify-between gap-3 ${focused ? "text-ink font-bold" : "text-muted font-medium"}`}>
         {focused && <span className="absolute left-[5px] top-1/2 -mt-[3px] w-1.5 h-1.5 rounded-full bg-accent" aria-hidden="true" />}
         <span className="truncate min-w-0">{title}</span>{right}
@@ -660,7 +683,7 @@ function ColHead({ kind, side }) {
   const left = (NUMS.has(side) ? 40 : 0) + SIGN_W[side] + (side === "right" || side === "tree" ? 4 : 8);
   return (
     <div className="h-6 shrink-0 border-b border-line whitespace-pre text-muted leading-6 overflow-hidden" style={{ paddingLeft: left, fontSize: SIZE[side][0] }} aria-hidden="true">
-      {HEADS[kind].map((h, n) => <React.Fragment key={h}>{n > 0 && "  "}<span className={`inline-block text-[12px] ${COLC[kind][n].includes("text-right") ? "text-right" : ""}`} style={W[kind][n] ? { width: W[kind][n] + "rem" } : undefined}>{h}</span></React.Fragment>)}
+      {HEADS[kind].map((h, n) => <React.Fragment key={h}>{n > 0 && "  "}<span className={`inline-block text-[12px] ${COLC[kind][n].includes("text-right") ? "text-right" : ""}`} style={colW(kind, n) ? { width: colW(kind, n) } : undefined}>{h}</span></React.Fragment>)}
     </div>
   );
 }
@@ -670,14 +693,14 @@ const Hint = ({ items }) => <span className="truncate min-w-0">{items.map(([k, d
  * PC のプロトタイプ
  * ------------------------------------------------------------------ */
 const DRAFT = {};
-const CONFIRM = { approve: "設計を承認して、実装へ進めますか?", merge: "merge を許可しますか?", close: "issue を取り下げて閉じますか?", rmworktree: "この worktree を消しますか?", restore: "バックアップから復元しますか?" };
+const CONFIRM = { approve: "設計を承認して、実装へ進めますか?", merge: "merge を許可しますか?", close: "issue を取り下げて閉じますか?", rmworktree: "この worktree を消しますか?", restore: "バックアップから復元しますか?", unregister: "このプロジェクトの登録を解除しますか?" };
 const KIND = { プロンプト: "会話に送る", 質問: "質問", 指示: "指示", 確定事項: "確定事項", 差し戻し: "差し戻しの指摘", 預けた指示の編集: "預けた指示を直す", スレッドへの返信: "スレッドへの返信", 項目: "項目を書く" };
-const TABLES = new Set(["project", "help", "settings", "issueForm", "search", "grep", "404", "offline", "loading"]);
+const TABLES = new Set(["convs", "project", "help", "settings", "issueForm", "search", "grep", "404", "offline", "loading"]);
 const issueOf = (v) => (v.s === "issue" ? ISSUES.find((i) => i.id === v.issue && i.project === v.project) : null);
 function PC() {
   const [hist, setHist] = useKept("pc.hist", [{ s: "home" }]);
   const v = hist[hist.length - 1];
-  const [focus, setFocus] = useState("main");
+  const [focus, setFocus] = useState(() => (load("once.pc.input", null) ? "prompt" : "main"));
   const [right, setRight] = useKept("pc.right", null);
   const [rstack, setRstack] = useKept("pc.rstack", []);
   const [mode, setMode] = useState(() => (load("pc.hist", [{}]).slice(-1)[0].s === "terminal" ? "TERMINAL" : "NORMAL"));
@@ -687,7 +710,7 @@ function PC() {
   const [seen, setSeen] = useState(() => new Set(load("pc.seen", [])));
   useEffect(() => { save("pc.seen", [...seen]); }, [seen]);
   const [sent, setSent] = useKept("pc.sent", []);
-  const [input, setInput] = useState(null);
+  const [input, setInput] = useState(() => once("pc.input"));
   const [cmd, setCmd] = useState("");
   const [term, setTerm] = useState(["$ "]);
   const [msg, setMsg] = useState(null);
@@ -695,9 +718,14 @@ function PC() {
   const [crash, setCrash] = useState(false);
   const [paused, setPaused] = useKept("pc.paused", false);
   const [wt, setWt] = useKept("pc.wt", "main");
-  const [leader, setLeader] = useState("");
-  const [confirm, setConfirm] = useState(null);
+  const [leader, setLeader] = useState(() => once("pc.leader") ?? "");
+  const [confirm, setConfirm] = useState(() => once("pc.confirm"));
   const [query, setQuery] = useKept("pc.query", "");
+  const [offline, setOffline] = useKept("pc.offline", false);
+  const [closed, setClosed] = useKept("pc.closed", CLOSED0);
+  const [gone, setGone] = useKept("pc.gone", []);
+  const hidden = [...closed, ...gone];
+  const [conf, setConf] = useKept("pc.conf", { モデル: "opus", 許可の扱い: "確認しない (bypassPermissions)", 自動で処理する段階: "精査 / 設計 / 実装", 実装の同時実行: "5 件まで", merge: "自動", バックアップ: "毎日 03:00  (最終: 今日 03:00、7 日分)" });
   const [form, setForm] = useKept("pc.form", { 題名: "在庫の引き当てを追加する", 本文: "予約の作成時に在庫を引き当てる。", 親: "#40 在庫管理", 依存: "なし", 優先度: "高", "merge 前の確認": "しない" });
   const box = useRef(null), views = useRef({}), prev = useRef(null), uid = useRef(0), removed = useRef(null), lead = useRef("");
   const [at2, setAt2] = useState({});
@@ -742,18 +770,18 @@ function PC() {
   const treeLines = [
     { k: "item", t: "一覧", go: { s: "home" } },
     ...PROJECTS.flatMap((p) => [
-      { k: "head", t: p.id + (p.auto ? "" : "  (手動)"), go: { s: "project", project: p.id } },
-      ...p.convs.map((c, n) => ({ k: "item", t: `  会話: ${c}`, go: { s: "conv", project: p.id, conv: n } })),
+      { k: "head", t: p.id + (p.auto ? "" : "  (自動の処理なし)"), go: { s: "project", project: p.id } },
+      ...p.convs.map((c, n) => ({ k: "item", t: `  会話: ${c}`, go: { s: "conv", project: p.id, conv: n } })).filter((x) => !hidden.includes(goKey(x.go))),
       ...ISSUES.filter((i) => i.project === p.id && !["完了", "取り下げ"].includes(i.state)).map((i) => ({ k: "item", t: `  #${i.id} ${i.title}`, go: issueGo(i) })),
     ]),
     { k: "head", t: "アプリ" },
     { k: "item", t: "設定", go: { s: "settings" } }, { k: "item", t: "ヘルプ", go: { s: "help" } },
   ];
-  let mainLines = v.s === "home" ? listLines(seen)
+  let mainLines = v.s === "home" ? listLines(seen, hidden)
     : v.s === "terminal" ? term.map((t) => ({ k: "code", t }))
     : working ? [...WORKING, ...queue.map((q) => ({ k: "queued", t: `届く前の指示: ${q.text}`, queued: q.id }))]
     : rich ? CONV.map((l) => (l.choice && answered === l.choice ? { ...l, t: l.t.replace("[ ]", "[x]") } : l))
-    : linesOf(v, { form, query, paused });
+    : linesOf(v, { form, query, paused, conf, project, hidden, closed, gone, threads });
   if (rich && answered) mainLines = [...mainLines, { k: "you", t: "あなた" }, { k: "text", t: `Q1 は ${answered} で進めてください。` }];
   const mine = sent.filter((x) => x.key === key);
   if (mine.length) mainLines = [...mainLines, ...mine.flatMap((x) => [{ k: "you", t: "あなた" }, ...x.text.split("\n").map((t) => ({ k: "text", t })), ...(x.images ? [{ k: "tool", t: `画像 ${x.images} 件` }] : [])]), { k: "sep", t: "──── AI が応答を作成中 ────" }];
@@ -762,7 +790,7 @@ function PC() {
   threadsHere.filter((t) => t.key === key).forEach((t) => { marks[t.line] = t.done ? "✓" : "?"; });
   if (input && input.key === key && input.line !== undefined && !input.id) for (let n = input.line; n <= input.line2; n++) marks[n] = "›";
   const stockAt = (n) => stockHere.find((s) => s.key === key && n >= s.line && n <= s.line2);
-  const treeMarks = {}; treeLines.forEach((l, n) => { if (l.go && (l.go.s === "home" || l.go.s === "settings" || l.go.s === "help" ? v.s === l.go.s : l.go.s === "project" ? v.s === "project" && v.project === l.go.project : chatV && (v.s === "conv" || v.s === "issue" || v.s === "file") && goKey(l.go) === goKey(chatV))) treeMarks[n] = "›"; });
+  const treeMarks = {}; treeLines.forEach((l, n) => { if (l.go && (l.go.s === "home" || l.go.s === "settings" || l.go.s === "help" ? v.s === l.go.s : l.go.s === "project" ? v.s === "project" && v.project === l.go.project : chatV && (v.s === "conv" || v.s === "issue" || v.s === "file" || v.s === "agentconv") && goKey(l.go) === goKey(chatV.s === "agentconv" ? { ...chatV, s: "issue" } : chatV))) treeMarks[n] = "›"; });
   const proj = PROJECTS.find((p) => p.id === project) || PROJECTS[0];
   const live = threadsHere.filter((t) => !t.done);
   const span = (s) => `${s.line + 1}${s.line2 > s.line ? "-" + (s.line2 + 1) : ""}`;
@@ -778,21 +806,27 @@ function PC() {
     ? [...DECISIONS.map((d) => ({ k: d.k === "保留" ? "wait" : "item", t: `${d.k}: ${d.t}`, jump: at(d.id) })),
        { k: "text", t: "" }, { k: "note", t: "リポジトリの docs/DESIGN_NOTES.md に保存しています。" }]
     : right === "stock"
-    ? (stockHere.length ? [...stockHere.flatMap((s) => [{ k: "item", t: `${s.kind === "質問" ? "?" : "!"} ${span(s)}  ${s.text}`, stock: s.id }, ...s.quote.slice(0, 2).map((q) => ({ k: "tool", t: `    > ${q}`, stock: s.id }))]),
+    ? (stockHere.length ? [...stockHere.flatMap((s) => [{ k: "item", t: `${s.kind === "質問" ? "?" : "!"} ${span(s)}  ${s.text}`, stock: s.id }, ...s.quote.slice(0, 2).map((q) => ({ k: "tool", t: `    > ${q.replace(/^\[[ x]\] /, "")}`, stock: s.id }))]),
         { k: "head", t: `送る  (送り先: ${dest})` }, { k: "action", t: "全部送る", act: "senda" }, { k: "action", t: "質問だけ送る", act: "sendq" }, { k: "action", t: "指示だけ送る", act: "sendc" }]
         : [{ k: "note", t: dest ? "この会話のストックはありません。" : "会話か issue を開くと、ストックを使えます。" }, { k: "note", t: "箇所を v か V で選び、Space q (質問) か Space c (指示) を押します。" }])
     : right === "thread"
-    ? (threadsHere.length ? threadsHere.flatMap((t) => [{ k: "head", t: `${t.done ? "✓ 終了" : "? 進行中"}  ${t.text}`, thread: t.id }, ...t.quote.slice(0, 2).map((q) => ({ k: "tool", t: `    > ${q}`, thread: t.id })),
+    ? (threadsHere.length ? threadsHere.flatMap((t) => [{ k: "head", t: `${t.done ? "✓ 終了" : "? 進行中"}  ${t.text}`, thread: t.id }, ...t.quote.slice(0, 2).map((q) => ({ k: "tool", t: `    > ${q.replace(/^\[[ x]\] /, "")}`, thread: t.id })),
         ...(t.done ? [{ k: "action", t: "再開する", act: "reopen:" + t.id }] : [{ k: "ai", t: "AI" }, { k: "text", t: "調べた結果を、ここに答えます。" }, { k: "note", t: "(プロトタイプでは、回答の中身を省略しています)" },
           { k: "action", t: "確定事項をまとめて終える", act: "finish:" + t.id }, { k: "action", t: "閉じるだけ", act: "close:" + t.id }, { k: "action", t: "このスレッドの AI を止める", act: "halt:" + t.id }])])
         : [{ k: "note", t: "この会話のスレッドはありません。" }, { k: "note", t: "質問をストックして送ると、質問ごとにスレッドが始まります。" }])
+    : right === "close" ? [
+        ...(mine.length ? [{ k: "wait", t: "AI が応答を作成中です。閉じるには、AI を止めます。" }] : []),
+        { k: "head", t: "できたもの" }, rkv("issue", "#47 引き当ての期限を設定値にする"), rkv("ファイル", "docs/design/features/stock.md"), rkv("コミット", "1 件"), rkv("PR", "なし"),
+        { k: "head", t: "残っているもの" }, rkv("未コミット", "なし"), rkv("未 push", "コミット 1 件"), rkv("ストック", `未送信 ${stockHere.length} 件`), rkv("スレッド", `動いているもの ${live.length} 件`),
+        { k: "head", t: "操作" }, { k: "action", t: mine.length ? "AI を止めて、この会話を閉じる" : "この会話を閉じる", act: "closeconv" }, { k: "action", t: "やめて会話に戻る", act: "backconv" },
+        { k: "note", t: "閉じても、会話の内容・目次・決まったことは残ります。" }, { k: "note", t: "worktree とファイルは消しません。" }]
     : right === "timeline" ? TASK_TREE
     : right === "task" ? TASK_DETAIL
     : right === "files" ? FILES
-    : right === "switch" ? PROJECTS.flatMap((p) => [{ k: "head", t: p.id }, ...p.convs.map((c, n) => ({ k: "item", t: `会話: ${c}`, go: { s: "conv", project: p.id, conv: n } })), ...ISSUES.filter((i) => i.project === p.id && !["下書き", "完了", "取り下げ"].includes(i.state)).map((i) => ({ k: "item", t: `#${i.id} ${i.title}`, go: issueGo(i) })), { k: "action", t: `${p.id} で会話を始める`, act: "newconv:" + p.id }, ...(p.id === project ? [{ k: "action", t: "worktree を作って会話を始める", act: "newconvwt" }] : [])])
-    : right === "worktree" ? [...proj.worktrees.map(([w, br, use]) => ({ k: "wt", cols: [w, br, use], act: "worktree:" + w, wt: w })), { k: "text", t: "" }, { k: "action", t: "worktree を作る", act: "newworktree" }, { k: "note", t: "● は、いま開いている会話か issue が使っている worktree です。" }]
+    : right === "switch" ? PROJECTS.flatMap((p) => [{ k: "head", t: p.id }, ...p.convs.map((c, n) => ({ k: "item", t: `会話: ${c}`, go: { s: "conv", project: p.id, conv: n } })).filter((x) => !hidden.includes(goKey(x.go))), ...ISSUES.filter((i) => i.project === p.id && !["下書き", "完了", "取り下げ"].includes(i.state)).map((i) => ({ k: "item", t: `#${i.id} ${i.title}`, go: issueGo(i) })), { k: "action", t: `${p.id} で会話を始める`, act: "newconv:" + p.id }, ...(p.id === project ? [{ k: "action", t: "worktree を作って会話を始める", act: "newconvwt" }] : [])])
+    : right === "worktree" ? [...proj.worktrees.map(([w, br, use]) => ({ k: "wt", cols: [w, br, use], act: "worktree:" + w, wt: w })), { k: "text", t: "" }, { k: "action", t: "worktree を作る", act: "newworktree" }, { k: "note", t: "● は、いま開いている会話か issue が動いている場所です。" }, { k: "note", t: "main はプロジェクトのディレクトリで、worktree を作らない会話はここで動きます。" }]
     : [];
-  const wtNow = issueOf(v) ? `issue-${v.issue}` : wt;
+  const wtNow = (v.s === "issue" || v.s === "agentconv") && v.issue ? `issue-${v.issue}` : wt;
   const rightMarks = right === "worktree" ? Object.fromEntries(proj.worktrees.map(([w], n) => [n, w === wtNow ? "●" : ""]).filter((x) => x[1])) : undefined;
   const linesFor = { tree: treeLines, main: mainLines, right: rightLines };
 
@@ -839,6 +873,9 @@ function PC() {
     else if (name === "worktree") { setWt(arg); toast(`worktree ${arg} に切り替えました`); }
     else if (a === "newworktree") toast("worktree try-2 を作りました", "ok");
     else if (a === "rmworktree") toast("未 push のコミットがあるため消していません", "error");
+    else if (a === "closeconv") { setClosed((c) => [...c.filter((x) => x !== goKey(v)), goKey(v)]); setRight(null); setRstack([]); open({ s: "home" }); toast(`会話: ${convName(v)} を閉じました。Space b の一覧から開き直せます`, "ok"); }
+    else if (a === "backconv") closeRight();
+    else if (name === "rmconv") { setGone((g) => [...g, arg]); toast("会話とそのスレッドを削除しました"); }
     else if (a === "reload") setHist([{ s: "home" }]);
     else toast("プロトタイプでは動きを省略しています");
   };
@@ -871,7 +908,7 @@ function PC() {
       setStock((s) => [...s, { id: Date.now(), kind: "指示", text: body, quote: ["スレッドの確定事項"], key: t?.key ?? key, line: t?.line ?? 0, line2: t?.line ?? 0, ckey }]);
       setThreads((ts) => ts.map((x) => (x.id === i.thread ? { ...x, done: true } : x))); setRight("stock"); toast("確定事項を指示としてストックに入れ、スレッドを終えました", "ok");
     } else if (i.kind === "預けた指示の編集") { setQueue((q) => q.map((x) => (x.id === i.id ? { ...x, text: body } : x))); toast("預けた指示を直しました", "ok"); }
-    else if (i.kind === "項目") { setForm((f) => ({ ...f, [i.field]: body })); toast(`${i.field}を書き換えました`, "ok"); }
+    else if (i.kind === "項目") { (i.store === "conf" ? setConf : setForm)((f) => ({ ...f, [i.field]: body })); toast(`${i.field}を書き換えました`, "ok"); }
     else if (i.kind === "差し戻し") toast("差し戻しました。設計した会話の続きで直します", "ok");
     else if (i.kind === "スレッドへの返信") toast("スレッドに送りました", "ok");
     else if (working && !now) { setQueue((q) => [...q, { id: Date.now(), text: body }]); toast("預けました。今の作業が終わると届きます", "ok"); }
@@ -887,12 +924,13 @@ function PC() {
   const enter = (where) => {
     const l = linesFor[where][lineNo(where)]; if (!l) return;
     if (l.act === "answer") return ask("プロンプト", { text: DRAFT[key] || "" });
-    if (l.choice) { setAnswered(l.choice); toast(`${l.choice} で答えました`, "ok"); return; }
+    if (l.choice) { removed.current = { answer: true }; setAnswered(l.choice); toast(`${l.choice} で答えました。u で取り消せます`, "ok"); return; }
     if (l.jump !== undefined) return jump(l.jump);
     if (l.detail !== undefined) { setRight("task"); return; }
     if (l.stock) { const s = stock.find((x) => x.id === l.stock); if (s && s.key === key) jump(s.line); return; }
     if (l.thread) { const t = threads.find((x) => x.id === l.thread); if (t && t.key === key) jump(t.line); return; }
-    if (l.field) return ask("項目", { field: l.field, text: form[l.field] });
+    if (l.field) return ask("項目", { field: l.field, store: l.store, text: (l.store === "conf" ? conf : form)[l.field] });
+    if (l.conv && closed.includes(l.conv)) { setClosed((c) => c.filter((x) => x !== l.conv)); toast("会話を再開しました。一覧に戻します", "ok"); }
     if (l.go) open(l.go); else act(l.act);
   };
   const move = (d) => { const order = ["tree", "main", ...(right ? ["right"] : [])]; setFocus((f) => order[Math.max(0, Math.min(order.length - 1, order.indexOf(f === "prompt" ? "main" : f) + d))]); };
@@ -910,7 +948,7 @@ function PC() {
         if (v.s === "terminal" && where === "main") return setMode("TERMINAL");
         if (where === "right" && right === "thread" && live.length) return ask("スレッドへの返信", { from: "right" });
         const l = linesFor[where]?.[lineNo(where)];
-        if (where === "main" && l?.field) return ask("項目", { field: l.field, text: form[l.field] });
+        if (where === "main" && l?.field) return ask("項目", { field: l.field, store: l.store, text: (l.store === "conf" ? conf : form)[l.field] });
         if (!chat) return toast("ここには送り先の会話がありません。会話を開いてから i を押してください");
         ask("プロンプト", { text: DRAFT[key] || "" });
       },
@@ -920,12 +958,13 @@ function PC() {
       rback: () => { if (where === "right") backRight(); else if (v.s === "issue") tabTo((v.tab || 0) - 1); },
       cmd: () => { setCmd(""); setMode("COMMAND"); },
       tabNext: () => { if (where !== "right" && v.s === "issue") tabTo((v.tab || 0) + 1); },
-      nextMark: () => jumpMark(1), prevMark: () => jumpMark(-1), closeRight: () => { if (where === "right") closeRight(); },
+      nextMark: () => jumpMark(1), prevMark: () => jumpMark(-1), closeRight: () => { if (right && where !== "prompt") closeRight(); },
       jumpBack: () => { const w = views.current.main; if (w && prev.current !== null) { const p = prev.current; prev.current = w.state.selection.main.head; w.dispatch({ selection: { anchor: Math.min(p, w.state.doc.length) }, effects: EditorView.scrollIntoView(p, { y: "center" }) }); setFocus("main"); } },
       winLeft: () => move(-1), winRight: () => move(1), winUp: () => setFocus("main"), winDown: () => { if (input) setFocus("prompt"); },
       drop: () => {
         const q = where === "main" ? mainLines[lineNo("main")]?.queued : null, s = where === "right" && right === "stock" ? stock.find((x) => x.id === cur()?.stock) : where === "main" ? stockAt(lineNo("main")) : null;
         if (where === "right" && right === "worktree" && cur()?.wt) return act("rmworktree");
+        if (where === "main" && v.s === "convs") { const l = mainLines[lineNo("main")]; if (l?.conv) setConfirm({ a: "rmconv:" + l.conv, t: `「${l.cols[0]}」とそのスレッドを削除しますか? 取り消せません` }); return; }
         if (q) { removed.current = { queue: queue.find((y) => y.id === q) }; setQueue((x) => x.filter((y) => y.id !== q)); toast("預けた指示を取り消しました。u で戻せます"); }
         else if (s) { removed.current = { stock: s }; setStock((x) => x.filter((y) => y.id !== s.id)); toast(`${s.kind}を取り消しました。u で戻せます`); }
       },
@@ -933,13 +972,14 @@ function PC() {
         const q = where === "main" ? queue.find((x) => x.id === mainLines[lineNo("main")]?.queued) : null, s = where === "right" && right === "stock" ? stock.find((y) => y.id === cur()?.stock) : where === "main" ? stockAt(lineNo("main")) : null;
         if (q) ask("預けた指示の編集", { text: q.text, id: q.id }); else if (s) ask(s.kind, { ...s, from: where });
       },
-      undo: () => { const r = removed.current; if (!r) return; removed.current = null; if (r.stock) setStock((s) => [...s, r.stock]); if (r.queue) setQueue((q) => [...q, r.queue]); toast("取り消しを戻しました", "ok"); },
+      undo: () => { const r = removed.current; if (!r) return; removed.current = null; if (r.answer) setAnswered(null); if (r.stock) setStock((s) => [...s, r.stock]); if (r.queue) setQueue((q) => [...q, r.queue]); toast("取り消しを戻しました", "ok"); },
       question: () => (where === "tree" ? toast("ツリーには質問を付けられません") : startStock(where, "質問")),
       instruct: () => (where === "tree" ? toast("ツリーには指示を付けられません") : startStock(where, "指示")),
       sendq: () => send("q"), sendc: () => send("c"), senda: () => send("a"),
       recent: () => (rich ? openRight("recent") : toast(chat ? "プロトタイプでは、この会話の直近を用意していません" : "直近は、会話の表示で使えます")),
       toc: () => (rich ? openRight("toc") : toast(chat ? "プロトタイプでは、この会話の目次を用意していません" : "目次は、会話の表示で使えます")),
       decisions: () => (rich ? openRight("decisions") : toast(chat ? "プロトタイプでは、この会話の決まったことを用意していません" : "決まったことは、会話の表示で使えます")),
+      convs: () => open({ s: "convs" }), closeconv: () => (v.s === "conv" ? openRight("close") : toast("締めくくれるのは会話です。issue は、情報の表示で取り下げます")),
       home: () => open({ s: "home" }), tree: () => setFocus("tree"), issueForm: () => open({ s: "issueForm" }), terminal: () => open({ s: "terminal" }),
       grep: () => { setCmd("rg "); setMode("COMMAND"); }, search: () => { setCmd("find "); setMode("COMMAND"); }, stop: () => act("stop"),
     };
@@ -951,13 +991,16 @@ function PC() {
     if (["h", "help"].includes(name)) open({ s: "help" });
     else if (name === "home" || name === "ls") open({ s: "home" });
     else if (name === "set") open({ s: "settings" });
+    else if (name === "close") onAct("main")("closeconv");
+    else if (name === "convs") open({ s: "convs" });
     else if (name === "q") { if (right) closeRight(); else back(); }
     else if (name === "issue") { const i = ISSUES.find((x) => String(x.id) === arg); open(i ? issueGo(i) : { s: "404" }); }
     else if (name === "project") open(PROJECTS.some((p) => p.id === arg) ? { s: "project", project: arg } : { s: "404" });
     else if (name === "rg" || name === "find") { if (!arg) return toast("検索する語を入れてください", "error"); setQuery(arg); open({ s: name === "rg" ? "grep" : "search" }); }
     else if (name === "pause" || name === "resume") act("pause");
     else if (name === "stop") act("stop");
-    else if (name === "404" || name === "offline" || name === "loading") open({ s: name });
+    else if (name === "404" || name === "loading") open({ s: name });
+    else if (name === "offline") { setOffline((o) => !o); toast(offline ? "サーバーにつながりました" : "サーバーにつながりません。最後に取得した表示のまま読めます"); }
     else if (name === "crash") setCrash(true);
     else if (name === "map") toast("キーの割り当てを変更しました", "ok");
     else if (name) toast(`コマンド :${name} はありません。:h で一覧を見られます`, "error");
@@ -986,6 +1029,9 @@ function PC() {
     if (mode === "COMMAND") return;
     if (mode === "TERMINAL") box.current?.focus(); else views.current[focus]?.focus();
   }, [mode, key, focus, right, input?.uid]);
+  useEffect(() => { syncScreen(); }, [hist, right]);
+  /* 入力欄が開いて主のウィンドウが縮んでも、カーソルの行が隠れないようにする */
+  useEffect(() => { if (!input) return; const t = setTimeout(() => { const w = views.current.main; if (w) w.dispatch({ effects: EditorView.scrollIntoView(w.state.selection.main.head, { y: "nearest" }) }); }, 50); return () => clearTimeout(t); }, [input?.uid]);
   /* 会話を開いたら未読を既読にし、直近を右に出す */
   useEffect(() => {
     setMsg((m) => (m && Date.now() - m.at < 600 ? m : null));
@@ -993,13 +1039,13 @@ function PC() {
     prev.current = views.current.main ? views.current.main.state.doc.line(at("lastread") + 1).from : null;
     if (!seen.has(goKey(v))) { setSeen((s) => new Set(s).add(goKey(v))); setRight("recent"); }
   }, [key]);
-  const count = (name) => LIST.filter((x) => x.sect === name).length;
+  const count = (name) => LIST.filter((x) => x.sect === name && !hidden.includes(goKey(x.go))).length;
   const onMode = (where) => (m) => { if (focus === where || m !== "NORMAL") setMode((x) => (x === "COMMAND" || x === "TERMINAL" ? x : m)); };
   const bufProps = (where) => ({ act: onAct(where), onKeys, onMode: onMode(where), onView: (w) => { views.current[where] = w; }, onFocus: () => setFocus(where), onLine: (n) => setAt2((x) => (x[where] === n ? x : { ...x, [where]: n })) });
   const issue = v.s === "issue" ? ISSUES.find((i) => i.id === v.issue && i.project === v.project) : null;
-  const tabMark = (n) => !issue ? null : n === 1 && issue.state === "設計レビュー" ? ["●", "text-wait", "判断待ち"] : n === 2 && issue.why === "merge 前の確認" ? ["●", "text-wait", "判断待ち"] : n === 3 && [43, 7].includes(issue.id) ? ["◐", "text-doing", "作業中"] : null;
-  const mainTitle = v.s === "file" && dest ? `${chatV.project} / ${dest} / ${v.file}` : titleOf(v);
-  const WIN = { tree: "ツリー", main: v.s === "issue" ? `${issueName(v)} / ${TABS[v.tab || 0]}` : mainTitle, right: RIGHT[right] || "", prompt: KIND[input?.kind] || "" };
+  const tabMark = (n) => !issue ? null : n === 1 && issue.state === "設計レビュー" ? ["●", "text-wait", "判断待ち"] : n === 2 && issue.why === "merge 前の確認" ? ["●", "text-wait", "判断待ち"] : n === 3 && [43, 7].includes(issue.id) ? ["◐", "text-doing", "作業中"] : n === 4 && issue.why === "利用枠切れで停止" ? ["●", "text-wait", "判断待ち"] : null;
+  const mainTitle = v.s === "terminal" ? `ターミナル  ${project} / ${wt === "main" ? "プロジェクトのディレクトリ" : "worktree: " + wt}` : v.s === "file" && dest ? `${chatV.project} / ${dest} / ${v.file}` : titleOf(v);
+  const WIN = { tree: "ツリー", main: v.s === "issue" ? `${issueName(v)} / ${TABS[v.tab || 0]}` : v.s === "agentconv" ? v.agent : v.s === "conv" ? `会話: ${convName(v)}` : mainTitle, right: RIGHT[right] || "", prompt: KIND[input?.kind] || "" };
   const here = focus === "prompt" ? null : linesFor[focus]?.[at2[focus] ?? 0];
   const hereStock = focus === "main" ? stockAt(at2.main ?? 0) : null;
   const backHint = rstack.length || right === "task" ? [["Ctrl+h", "前の表示へ"]] : [];
@@ -1016,13 +1062,14 @@ function PC() {
     : here?.wt ? [["Enter", "この worktree に切り替える"], ["dd", "消す"], ["q", "閉じる"]]
     : here?.stock && focus === "right" ? [["Enter", "引用した箇所へ"], ["cc", "直す"], ["dd", "取り消す"], ["Space s a", "全部送る"], ...backHint, ["q", "閉じる"]]
     : here?.jump !== undefined ? [["Enter", "会話のその場所へ"], ["Ctrl+o", "元の位置へ"], ...backHint, ["q", "閉じる"]]
-    : focus === "right" ? [["Enter", "選ぶ"], ...backHint, ["q", "閉じる"], ["Ctrl+w h", "左のウィンドウへ"]]
+    : focus === "right" ? [...(right === "thread" && live.length ? [["i", "返信"]] : []), ["Enter", "選ぶ"], ...backHint, ["q", "閉じる"], ["Ctrl+w h", "左のウィンドウへ"]]
     : focus === "tree" ? [["Enter", "開く"], ["Ctrl+w l", "主のウィンドウへ"]]
     : v.s === "home" ? [["●", "未読"], ["Enter", "開く"], ["/", "検索"], ["Space n", "会話を始める・切り替える"], ["Space o", "issue を作る"], ["Space", "ほかのキー"]]
+    : v.s === "convs" ? [["Enter", here?.cols?.[1] === "閉じた" ? "再開して開く" : "開く"], ["dd", "削除する"], ["-", "戻る"]]
     : v.s === "terminal" ? [["i", "入力へ戻る"], ["-", "戻る"]]
     : working ? [["i", "指示を預ける"], ["Space x", "AI を止める"], ...tabHint, ["Space t", "タイムライン"], ["-", "戻る"]]
     : v.s === "agentconv" ? [["i", `${v.agent} に指示を送る`], ["Space q", "質問"], ["Space c", "指示"], ["-", "エージェントの一覧へ戻る"]]
-    : chat ? [["i", "入力"], ["Space q", "質問"], ["Space c", "指示"], ["Space i", "直近"], ["Space m", "目次"], ...tabHint.slice(0, 1), ["-", "戻る"], ["Space", "ほかのキー"]]
+    : chat ? [...(right ? [["Ctrl+w l", "右へ"]] : []), ["i", "入力"], ["Space q", "質問"], ["Space c", "指示"], ["Space i", "直近"], ["Space m", "目次"], ...tabHint.slice(0, 1), ["-", "戻る"], ["Space", "ほかのキー"]]
     : v.s === "issue" ? [...tabHint, ["Space q", "質問"], ["Space c", "指示"], ["Enter", "選ぶ"], ["-", "戻る"]]
     : v.s === "file" ? [["Space q", "質問"], ["Space c", "指示"], ["Space e", "ファイルツリー"], ["-", "戻る"]]
     : [["Enter", "選ぶ"], ["-", "戻る"], ["Space h", "一覧"], ["Space", "ほかのキー"]];
@@ -1031,11 +1078,11 @@ function PC() {
     <div className="h-7 shrink-0 flex items-center gap-1 pl-2 pr-2 border-b border-line text-[12px]" role="tablist" aria-label="issue の中の表示">
       {TABS.map((t, n) => { const m = tabMark(n); return (
         <button key={t} role="tab" aria-selected={n === (v.tab || 0)} tabIndex={-1} onClick={() => tabTo(n)} className={`rounded px-2 leading-5 ${n === (v.tab || 0) ? "bg-raised text-ink font-bold" : "text-muted font-medium hover:bg-raised"}`}>
-          <span className="font-mono mr-1 font-normal">{n + 1}</span>{t}{m && <span className={`ml-1 ${m[1]}`} title={m[2]}>{m[0]}</span>}
+          {t}{m && <span className={`ml-1 ${m[1]}`} title={m[2]}>{m[0]}</span>}
         </button>); })}
       <span className="ml-auto"><Hint items={[["Ctrl+h", "前の表示"], ["Ctrl+l", "次の表示"]]} /></span>
     </div>
-  ) : v.s === "terminal" ? null : HEADS[{ home: "row", project: "irow", search: "row", help: "key" }[v.s]] ? <ColHead kind={{ home: "row", project: "irow", search: "row", help: "key" }[v.s]} side={side} />
+  ) : v.s === "terminal" ? null : HEADS[{ home: "row", project: "irow", search: "row", convs: "row", help: "key" }[v.s]] ? <ColHead kind={{ home: "row", project: "irow", search: "row", convs: "row", help: "key" }[v.s]} side={side} />
     : v.s === "issueForm" || v.s === "settings" ? <ColHead kind="kv" side={side} /> : null;
 
   return (
@@ -1044,7 +1091,7 @@ function PC() {
         <Frame title="プロジェクト" focused={focus === "tree"}>
           <Buffer side="tree" posKey="tree" lines={treeLines} marks={treeMarks} {...bufProps("tree")} />
         </Frame>
-        <Frame edge title={mainTitle} focused={focus === "main"} sub={sub} right={dest && chat ? <span className="text-[12px] text-muted font-normal shrink-0">{wtNow === "main" ? "worktree なし" : "worktree: " + wtNow}</span> : null}>
+        <Frame edge title={mainTitle} focused={focus === "main"} sub={sub} right={dest && (chat || v.s === "issue") ? <span className="text-[12px] text-muted font-normal shrink-0">{wtNow === "main" ? "worktree なし" : "worktree: " + wtNow}</span> : null}>
           <Boundary scope="ウィンドウ" onReset={() => setCrash(false)} onHome={() => { setCrash(false); open({ s: "home" }); }}>
             {v.s === "terminal" && mode === "TERMINAL"
               ? <pre className="flex-1 overflow-auto px-3 py-1 text-[13px] leading-5 font-mono">{term.join("\n")}█</pre>
@@ -1067,8 +1114,8 @@ function PC() {
         </div>
       )}
       {leader && (
-        <div className="border-t border-line bg-raised px-3 py-1 text-[12px] flex flex-wrap gap-x-4 gap-y-0.5" role="status">
-          <span className="font-mono font-bold text-accent">{leader === " " ? "Space" : "Space " + leader.trim()}</span>
+        <div className="border-t border-line bg-raised px-3 py-1 text-[12px] grid gap-x-4 gap-y-0.5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(11rem, 1fr))" }} role="status">
+          <span className="col-span-full font-mono font-bold text-accent">{leader === " " ? "Space" : "Space " + leader.trim()}</span>
           {WHICH[leader].map(([k, d]) => <span key={k}><span className="font-mono text-ink">{k}</span><span className="text-muted ml-1">{d}</span></span>)}
         </div>
       )}
@@ -1079,6 +1126,7 @@ function PC() {
       {confirm && <div className="border-t border-line bg-ground flex items-center text-[13px] px-3 h-7 font-bold" role="alertdialog" aria-label="確認">{confirm.t}<span className="font-mono font-normal ml-3">(y / n)</span></div>}
       <div className="h-7 shrink-0 text-[12px] flex gap-3 border-t border-line bg-ground items-center px-2 overflow-hidden whitespace-nowrap">
         <span className={`rounded px-1.5 text-[12px] leading-5 font-mono font-bold text-ground ${/^VISUAL/.test(mode) ? "bg-accent" : { INSERT: "bg-done", REPLACE: "bg-done", TERMINAL: "bg-doing", COMMAND: "bg-ink" }[mode] || "bg-muted"}`}>{mode}</span>
+        {offline && <span className="text-wait font-bold shrink-0" role="status">✕ オフライン (13:42 時点の表示。AI は動き続けています)</span>}
         <span className="text-ink font-medium truncate max-w-[20rem]">{WIN[focus]}</span><Hint items={hints} />
         <span className="ml-auto text-wait shrink-0">判断待ち {count("判断待ち")}</span><span className="text-muted shrink-0">指示待ち {count("指示待ち")}</span><span className="text-muted shrink-0">作業中 {count("作業中")}</span>
         {dest && <span className={`shrink-0 ${stockHere.length ? "text-accent font-bold" : "text-muted"}`}>ストック 指示 {nc} / 質問 {nq}</span>}{paused && <span className="text-wait shrink-0">自動フロー停止中</span>}<span className="shrink-0"><Hint items={[[":h", "ヘルプ"]]} /></span>
@@ -1092,7 +1140,7 @@ function PC() {
     </div>
   );
 }
-const RIGHT = { recent: "直近", toc: "目次", decisions: "決まったこと", stock: "ストック", thread: "スレッド", timeline: "タイムライン", task: "タスクの詳細", files: "ファイル", switch: "会話を始める・切り替える", worktree: "worktree" };
+const RIGHT = { close: "会話を締めくくる", recent: "直近", toc: "目次", decisions: "決まったこと", stock: "ストック", thread: "スレッド", timeline: "タイムライン", task: "タスクの詳細", files: "ファイル", switch: "会話を始める・切り替える", worktree: "worktree" };
 
 
 /* ------------------------------------------------------------------ *
@@ -1133,29 +1181,36 @@ function Phone() {
   const [seen, setSeen] = useState(new Set());
   const [pick, setPick] = useState(null);
   const [ans, setAns] = useState(null);
-  const [draft, setDraft] = useState("");
+  const [draft, setDraft] = useKept("phone.draft", "");
   const [reply, setReply] = useState(null);
-  const [sheet, setSheet] = useState(null);
+  const [sheet, setSheet] = useState(() => once("phone.sheet"));
+  useEffect(() => { syncScreen(); }, [stack]);
   const [note, setNote] = useState("");
   const [sel, setSel] = useState(null);
-  const [stock, setStock] = useState([]);
-  const [fold, setFold] = useState(true);
+  const [stock, setStock] = useKept("phone.stock", []);
+  const [threads, setThreads] = useKept("phone.threads", []);
+  const [moved, setMoved] = useKept("phone.moved", {});
+  const [queue, setQueue] = useKept("phone.queue", []);
+  const [offline] = useState(() => !!once("phone.offline"));
+  const [title, setTitle] = useState("");
+  const [first, setFirst] = useState("");
+  const [fold, setFold] = useState(false);
   const [q, setQ] = useState("");
   const timer = useRef(null);
-  /* 取り消せる操作は、5 秒のあいだ「取り消す」を出す */
-  const say = (t, undo) => { clearTimeout(timer.current); setMsg({ t, undo }); timer.current = setTimeout(() => setMsg(null), undo ? 5000 : 3000); };
+  /* 取り消せる操作は、8 秒のあいだ「取り消す」を出す */
+  const say = (t, undo) => { clearTimeout(timer.current); setMsg({ t, undo }); timer.current = setTimeout(() => setMsg(null), undo ? 8000 : 3000); };
   const openRow = (x) => {
     setSeen((v) => new Set(v).add(goKey(x.go)));
     go({ p: x.why === "設計の承認" ? "review" : x.why === "merge 前の確認" ? "pr" : x.why === "利用枠切れで停止" ? "stopped" : x.sect === "作業中" ? "agent" : "chat", x });
   };
-  const Row = ({ x }) => {
+  const Row = ({ x, bare }) => {
     const unread = x.unread && !seen.has(goKey(x.go));
     return (
-      <button onClick={() => openRow(x)} className="w-full min-h-[56px] text-left flex items-start gap-2 pl-2 pr-4 py-2 border-b border-line active:bg-raised">
+      <button onClick={() => openRow(x)} className="w-full min-h-[48px] text-left flex items-start gap-2 pl-2 pr-4 py-1.5 border-b border-line active:bg-raised">
         <span className={`mt-2 w-2 h-2 rounded-full shrink-0 ${unread ? "bg-accent" : "bg-transparent"}`} aria-label={unread ? "未読" : undefined} />
         <span className="flex-1 min-w-0">
-          <span className="flex items-baseline gap-2"><span className={`flex-1 truncate text-[15px] ${unread ? "font-bold" : "font-medium"}`}>{x.title}</span><span className="text-[12px] text-muted shrink-0">{x.ago}</span></span>
-          <span className="flex items-baseline gap-2 text-[13px]"><span className={`truncate ${x.sect === "判断待ち" ? "text-wait" : "text-muted"}`}>{x.why}</span><span className="text-[12px] text-muted font-mono shrink-0 ml-auto">{x.project}</span></span>
+          <span className="flex items-baseline gap-2"><span className={`flex-1 truncate text-[14px] ${unread ? "font-bold" : "font-medium"}`}>{x.title}</span><span className="text-[12px] text-muted shrink-0">{x.ago}</span></span>
+          <span className="flex items-baseline gap-2 text-[13px]"><span className={`truncate ${x.sect === "判断待ち" ? "text-wait" : "text-muted"}`}>{x.why}</span>{!bare && <span className="text-[12px] text-muted font-mono shrink-0 ml-auto">{x.project}</span>}</span>
         </span>
       </button>
     );
@@ -1174,22 +1229,24 @@ function Phone() {
   const Diff = ({ file, rows }) => (
     <div className="rounded-lg border border-line overflow-hidden font-mono text-[12px] leading-5">
       <div className="px-3 py-1 bg-raised text-muted truncate">{file}</div>
-      {rows.map((r) => <div key={r} className={`px-3 ${r[0] === "+" ? "bg-add" : "bg-del"}`}>{r}</div>)}
+      {rows.map((r) => <div key={r} className={`px-3 whitespace-pre ${r.includes(" + ") ? "bg-add" : "bg-del"}`}>{r}</div>)}
     </div>
   );
   const H = ({ children }) => <h3 className="text-[12px] font-bold text-muted mt-4 mb-1">{children}</h3>;
   const Foot = ({ children }) => <div className="p-2 border-t border-line bg-surface flex gap-2 shrink-0">{children}</div>;
-  const tabs = [["inbox", "受信箱", ICONS.inbox], ["projects", "プロジェクト", ICONS.folder], ["search", "検索", ICONS.search]];
-  const judge = LIST.filter((x) => x.sect === "判断待ち").length;
+  const tabs = [["inbox", "一覧", ICONS.inbox], ["projects", "プロジェクト", ICONS.folder], ["search", "検索", ICONS.search]];
+  /* 承認や許可を済ませた行は、判断待ちから作業中へ移る */
+  const rowsIn = (name) => LIST.map((x) => (moved[goKey(x.go)] ? { ...x, sect: "作業中", why: moved[goKey(x.go)], unread: false } : x)).filter((x) => x.sect === name);
+  const judge = rowsIn("判断待ち").length;
   const plus = <IconBtn label="会話か issue を作る" d={ICONS.plus} onClick={() => setSheet("new")} tone="text-accent" />;
-  const rowsOf = (pid) => [...(PROJECTS.find((p) => p.id === pid)?.convs || []).map((c) => LIST.find((x) => x.title === `会話: ${c}`) || { title: `会話: ${c}`, why: "指示待ち", project: pid, ago: "", sect: "指示待ち", go: { s: "conv", project: pid, conv: c } }),
+  const rowsOf = (pid) => [...(PROJECTS.find((p) => p.id === pid)?.convs || []).filter((_, n) => !CLOSED0.includes(convKey(pid, n))).map((c) => LIST.find((x) => x.title === `会話: ${c}`) || { title: `会話: ${c}`, why: "指示待ち", project: pid, ago: "", sect: "指示待ち", go: { s: "conv", project: pid, conv: c } }),
     ...ISSUES.filter((i) => i.project === pid && !["完了", "取り下げ"].includes(i.state)).map((i) => LIST.find((x) => x.title.startsWith(`#${i.id} `)) || { title: `#${i.id} ${i.title}`, why: i.why || i.state, project: pid, ago: i.ago, sect: i.state, go: issueGo(i) })];
   return (
     <div className="mx-auto w-full max-w-[390px] h-[800px] rounded-[2rem] border border-line bg-ground shadow-overlay overflow-hidden flex flex-col relative">
       {s.p === "inbox" && (<>
-        <Top title="受信箱" right={plus} />
+        <Top title="一覧" right={plus} />
         <div className="flex-1 overflow-auto">
-          {SECTIONS.map(([name, desc]) => { const rows = LIST.filter((x) => x.sect === name); return <div key={name}><Sect>{name}<span className="ml-2 font-mono font-normal">{rows.length}</span></Sect>{rows.length ? rows.map((x) => <Row key={goKey(x.go)} x={x} />) : <p className="px-4 py-3 text-[13px] text-muted">{desc}はありません</p>}</div>; })}
+          {SECTIONS.map(([name]) => { const rows = rowsIn(name); return <div key={name}><Sect>{name}<span className="ml-2 font-mono font-normal">{rows.length}</span></Sect>{rows.length ? rows.map((x) => <Row key={goKey(x.go)} x={x} />) : <p className="px-4 py-3 text-[13px] text-muted">{name}はありません</p>}</div>; })}
         </div>
       </>)}
       {s.p === "projects" && (<>
@@ -1197,14 +1254,14 @@ function Phone() {
         <div className="flex-1 overflow-auto">
           {PROJECTS.map((p) => { const n = LIST.filter((x) => x.project === p.id && x.sect === "判断待ち").length; return (
             <button key={p.id} onClick={() => go({ p: "project", id: p.id })} className="w-full min-h-[56px] px-4 py-2 flex items-center gap-3 text-left border-b border-line active:bg-raised">
-              <span className="flex-1 min-w-0"><span className="block font-mono font-semibold text-[15px] truncate">{p.id}</span><span className="block text-[12px] text-muted">会話 {p.convs.length} 件 · issue {ISSUES.filter((i) => i.project === p.id && !["完了", "取り下げ"].includes(i.state)).length} 件{p.auto ? "" : " · 手動"}</span></span>
+              <span className="flex-1 min-w-0"><span className="block font-mono font-semibold text-[15px] truncate">{p.id}</span><span className="block text-[12px] text-muted">会話 {p.convs.filter((_, n) => !CLOSED0.includes(convKey(p.id, n))).length} 件 · issue {ISSUES.filter((i) => i.project === p.id && !["完了", "取り下げ"].includes(i.state)).length} 件{p.auto ? "" : " · 自動の処理は止めている"}</span></span>
               {n > 0 && <span className="text-[12px] text-wait font-bold">判断待ち {n}</span>}
             </button>); })}
         </div>
       </>)}
       {s.p === "project" && (<>
-        <Bar title={s.id} sub="会話と issue" right={<IconBtn label="会話を始める" d={ICONS.plus} onClick={() => say(`${s.id} で会話を始めました`)} tone="text-accent" />} />
-        <div className="flex-1 overflow-auto">{rowsOf(s.id).length ? rowsOf(s.id).map((x) => <Row key={x.title} x={x} />) : <p className="px-4 py-3 text-[13px] text-muted">会話も issue もありません。右上の + で会話を始めます。</p>}</div>
+        <Bar title={s.id} sub="会話と issue" right={<IconBtn label="会話を始める" d={ICONS.plus} onClick={() => go({ p: "newconv", id: s.id })} tone="text-accent" />} />
+        <div className="flex-1 overflow-auto">{rowsOf(s.id).length ? [...new Set(rowsOf(s.id).map((x) => x.sect))].sort((a, b) => ["判断待ち", "指示待ち", "作業中"].indexOf(a) - ["判断待ち", "指示待ち", "作業中"].indexOf(b) + (["判断待ち", "指示待ち", "作業中"].includes(a) ? 0 : 99) - (["判断待ち", "指示待ち", "作業中"].includes(b) ? 0 : 99)).map((sect) => <div key={sect}><Sect>{sect}<span className="ml-2 font-mono font-normal">{rowsOf(s.id).filter((x) => x.sect === sect).length}</span></Sect>{rowsOf(s.id).filter((x) => x.sect === sect).map((x) => <Row key={x.title} x={x} bare />)}</div>) : <p className="px-4 py-3 text-[13px] text-muted">会話も issue もありません。右上の + で会話を始めます。</p>}</div>
       </>)}
       {s.p === "search" && (<>
         <Top title="検索" />
@@ -1212,9 +1269,11 @@ function Phone() {
         <div className="flex-1 overflow-auto">{q.trim() ? (PROJECTS.flatMap((p) => rowsOf(p.id)).filter((x) => x.title.includes(q.trim())).map((x) => <Row key={x.project + x.title} x={x} />).concat(PROJECTS.flatMap((p) => rowsOf(p.id)).some((x) => x.title.includes(q.trim())) ? [] : [<p key="none" className="px-4 py-3 text-[13px] text-muted">「{q.trim()}」を含む issue と会話はありません</p>])) : <p className="px-4 py-3 text-[13px] text-muted">題名と会話の中身から探します</p>}</div>
       </>)}
       {s.p === "chat" && (<>
-        <Bar title={s.x.title} sub={`${s.x.project} · 返事を待っています`} right={<IconBtn label="目次やストックを開く" d={ICONS.more} onClick={() => setSheet("more")} />} />
+        <Bar title={s.x.title} sub={`${s.x.project} · ${s.x.sect === "作業中" ? "AI が作業中 · " + s.x.why.split(" · ")[0] : "返事を待っています"}`} right={<IconBtn label="目次やストックを開く" d={ICONS.more} onClick={() => setSheet("more")} />} />
+        {offline && <div className="shrink-0 px-4 py-2 bg-del text-[13px] font-bold" role="status">接続が切れています。書いた内容は残っています</div>}
+        {s.x.title === LIST[1].title ? (<>
         <div className="shrink-0 border-b border-line bg-surface text-[13px]">
-          <button onClick={() => setFold((f) => !f)} aria-expanded={!fold} className="w-full h-10 px-4 flex items-center gap-2 text-left"><span className="font-bold text-wait">判断すること 2</span>{stock.length > 0 && <span className="text-accent font-bold">· ストック {stock.length}</span>}{draft.trim() && <span className="text-muted">· 書きかけあり</span>}<span className={`ml-auto text-muted ${fold ? "" : "rotate-180"}`}><Icon d={ICONS.down} s={5} /></span></button>
+          <button onClick={() => setFold((f) => !f)} aria-expanded={!fold} className="w-full h-11 px-4 flex items-center gap-2 text-left"><span className="font-bold text-wait">判断すること 2</span>{stock.length > 0 && <span className="text-accent font-bold">· ストック {stock.length}</span>}{draft.trim() && <span className="text-muted">· 書きかけあり</span>}<span className={`ml-auto text-muted ${fold ? "" : "rotate-180"}`}><Icon d={ICONS.down} s={5} /></span></button>
           {!fold && ["q1", "q2"].map((id) => <a key={id} href={"#p" + id} onClick={() => setFold(true)} className="flex items-center min-h-[44px] px-4 border-t border-line">{CONV[at(id)].t}</a>)}
         </div>
         <div className="flex-1 overflow-auto px-3 py-3 text-[15px] leading-6">
@@ -1224,7 +1283,7 @@ function Phone() {
           <div className="border-l-2 border-line pl-3 space-y-2">
             <div className="text-[12px] text-muted"><span className="font-bold text-ink">AI</span> · 5分前 · 文を押すと質問・指示を書けます</div>
             {P_AI.map(([id, t]) => <p key={id} onClick={() => setSel(sel === id ? null : id)} className={`rounded ${sel === id ? "bg-sel" : ""} ${stock.some((x) => x.id === id) ? "border-l-2 border-accent pl-2" : ""}`}>{t}</p>)}
-            <Diff file="docs/design/features/stock.md" rows={["- 在庫は出荷時に減らす。", "+ 在庫は予約の作成時に引き当てる。", "+ 引き当ては 30 分で期限切れになる。"]} />
+            <Diff file="docs/design/features/stock.md" rows={["12 - 在庫は出荷時に減らす。", "12 + 在庫は予約の作成時に引き当て、出荷時に減らす。", "13 + 引き当ては 30 分で期限切れになる。"]} />
             <div id="pq1" className="rounded-lg bg-surface border border-line p-3">
               <p className="font-bold">{CONV[at("q1")].t}</p>
               {[["A", "1 分ごとの定期処理で戻す", "推奨"], ["B", "次の引き当てのときに戻す", ""]].map(([k, t, tag]) => (
@@ -1232,18 +1291,30 @@ function Phone() {
                   <span className="font-bold">{k}</span><span className="flex-1">{t}</span>{tag && <span className="text-[12px] text-accent font-bold">{tag}</span>}
                 </button>))}
               {ans ? <p className="mt-2 text-[13px] text-done font-bold">{ans} で答えました</p>
-                : <button disabled={!pick} onClick={() => { const k = pick; setAns(k); say(`${k} で答えました`, () => setAns(null)); }} className="mt-2 w-full h-11 rounded-lg bg-accent text-ground font-bold disabled:opacity-40">{pick ? `${pick} で答える` : "選んでから答える"}</button>}
+                : <button disabled={!pick} onClick={() => { const k = pick; setAns(k); say(`${k} で答えました`, () => setAns(null)); }} className="mt-2 w-full h-11 rounded-lg bg-accent text-ground font-bold disabled:bg-raised disabled:text-muted">{pick ? `${pick} で答える` : "選んでから答える"}</button>}
             </div>
             <div id="pq2" className="rounded-lg bg-surface border border-line p-3"><p className="font-bold">{CONV[at("q2")].t}</p><button onClick={() => setReply("Q2")} className="mt-2 w-full h-11 rounded-lg border border-line font-bold text-[14px]">Q2 に文章で答える</button></div>
           </div>
         </div>
+        </>) : (
+          <div className="flex-1 overflow-auto px-3 py-3 text-[15px] leading-6">
+            <div className="border-l-2 border-line pl-3 space-y-2">
+              <div className="text-[12px] text-muted"><span className="font-bold text-ink">AI</span> · {s.x.ago}</div>
+              <p>{s.x.why}</p>
+              {s.x.sect === "作業中" && <p className="text-[13px] text-doing font-bold">AI が作業中です。送った指示は、今の作業が終わると届きます。</p>}
+            </div>
+            {queue.map((t, n) => <div key={n} className="mt-2 rounded-lg border border-line bg-surface px-3 py-1 flex items-center gap-2 text-[14px]"><span className="text-[12px] text-doing font-bold shrink-0">預けた指示</span><span className="flex-1 truncate">{t}</span><button className="h-11 px-2 text-[13px] text-muted font-bold" onClick={() => { setQueue((q) => q.filter((_, m) => m !== n)); say("預けた指示を取り消しました"); }}>取り消す</button></div>)}
+          </div>
+        )}
+        {offline && <div className="shrink-0 px-3 py-1 border-t border-line text-[13px] flex items-center gap-2"><span className="text-wait font-bold shrink-0">未送信</span><span className="flex-1 truncate">期限は設定で変えられるようにして</span><span className="text-[12px] text-muted shrink-0">つながったら送ります</span><button className="h-11 px-3 rounded-lg border border-line font-bold" onClick={() => say("まだつながっていません")}>いま送る</button></div>}
         {sel && <div className="shrink-0 px-3 py-2 border-t border-line bg-raised flex items-center gap-2 text-[13px]"><span className="flex-1 truncate text-muted">選んだ文: {P_AI.find((x) => x[0] === sel)[1]}</span><button className="h-11 px-3 rounded-lg border border-line bg-surface font-bold" onClick={() => setSheet("質問")}>質問</button><button className="h-11 px-3 rounded-lg border border-line bg-surface font-bold" onClick={() => setSheet("指示")}>指示</button></div>}
         <div className="shrink-0 border-t border-line bg-surface p-2">
-          {reply && <div className="flex items-center text-[12px] text-accent font-bold px-2 pb-1">{reply} への返事<button aria-label="返事の相手を外す" className="ml-2 text-muted h-6 px-2" onClick={() => setReply(null)}>×</button></div>}
+          {reply && <div className="flex items-center text-[12px] text-accent font-bold px-2 pb-1">{reply} への返事<button aria-label="返事の相手を外す" className="ml-1 text-muted w-11 h-11" onClick={() => setReply(null)}>×</button></div>}
           <div className="flex items-end gap-1">
             <IconBtn label="画像とスキルを足す" d={ICONS.plus} onClick={() => setSheet("attach")} tone="text-muted" />
             <textarea aria-label="返事" rows={Math.min(6, Math.max(1, draft.split("\n").length))} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={reply ? `${reply} に答える` : "返事を書く"} className="flex-1 min-w-0 min-h-[44px] rounded-2xl border border-line bg-ground px-3 py-2.5 text-[16px] leading-6 resize-none" />
-            <button aria-label="送る" disabled={!draft.trim()} onClick={() => { setDraft(""); setReply(null); say("送りました"); }} className="w-11 h-11 rounded-full grid place-items-center bg-accent text-ground disabled:opacity-40 shrink-0"><Icon d={ICONS.send} /></button>
+            {s.x.sect === "作業中" && draft.trim() && <button className="h-11 px-2 text-[12px] font-bold text-wait shrink-0" onClick={() => { setDraft(""); setQueue([]); say("AI を止めて、すぐに送りました"); }}>止めて送る</button>}
+            <button aria-label="送る" disabled={!draft.trim()} onClick={() => { const t = draft.trim(); setDraft(""); setReply(null); if (s.x.sect === "作業中") { setQueue((q) => [...q, t]); say("預けました。今の作業が終わると届きます"); } else say(offline ? "つながったら送ります" : "送りました"); }} className="w-11 h-11 rounded-full grid place-items-center bg-accent text-ground disabled:bg-raised disabled:text-muted shrink-0"><Icon d={ICONS.send} /></button>
           </div>
         </div>
       </>)}
@@ -1252,12 +1323,12 @@ function Phone() {
         <div className="flex-1 overflow-auto px-4 pb-4 text-[15px] leading-6">
           <H>修正方針</H><p>予約の作成時に在庫を引き当てる。期限は 30 分。</p>
           <H>AI が確かめたい点</H><p className="font-bold">期限切れの引き当ては、1 分ごとの定期処理で戻します。これでよいですか?</p><p className="text-[13px] text-muted">承認すると、この内容で進みます。変えたいときは、指摘を書いて差し戻します。</p>
-          <H>設計書の差分</H><Diff file="docs/design/features/stock.md" rows={["- 在庫は出荷時に減らす。", "+ 在庫は予約の作成時に引き当て、出荷時に減らす。", "+ 引き当ては 30 分で期限切れになる。"]} />
+          <H>設計書の差分</H><Diff file="docs/design/features/stock.md" rows={["12 - 在庫は出荷時に減らす。", "12 + 在庫は予約の作成時に引き当て、出荷時に減らす。", "13 + 引き当ては 30 分で期限切れになる。"]} />
           <button className="mt-3 h-11 text-[14px] text-accent font-bold" onClick={() => say("プロトタイプでは設計書の全文を省略しています")}>設計書の全文を開く</button>
         </div>
         <Foot>
           <button className="flex-1 h-12 rounded-lg border border-line font-bold" onClick={() => { setNote(""); setSheet("reject"); }}>指摘を書いて差し戻す</button>
-          <button className="flex-1 h-12 rounded-lg bg-accent text-ground font-bold" onClick={() => { say("承認しました。5 秒後に実装を始めます", () => say("承認を取り消しました")); pop(); }}>承認する</button>
+          <button className="flex-1 h-12 rounded-lg bg-accent text-ground font-bold" onClick={() => { const k = goKey(s.x.go); setMoved((m) => ({ ...m, [k]: "実装待ち" })); say("承認しました。8 秒後に実装を始めます", () => { setMoved((m) => { const n = { ...m }; delete n[k]; return n; }); say("承認を取り消しました"); }); pop(); }}>承認する</button>
         </Foot>
       </>)}
       {s.p === "pr" && (<>
@@ -1265,26 +1336,27 @@ function Phone() {
         <div className="flex-1 overflow-auto px-4 pb-4 text-[15px] leading-6">
           <H>PR #128</H><p>予約カレンダーに祝日を表示する</p>
           <H>CI</H><p>test 成功 · lint 成功 · <span className="text-doing font-bold">e2e 実行中</span></p>
-          <H>差分</H><Diff file="src/calendar/holiday.ts" rows={["- const days = fetchHolidays()", "+ const days = await fetchHolidays(year)", "+ return days.filter((d) => d.month === month)"]} />
+          <H>差分</H><Diff file="src/calendar/holiday.ts" rows={["18 - const days = fetchHolidays()", "18 + const days = await fetchHolidays(year)", "19 + return days.filter((d) => d.month === month)"]} />
+          <div className="flex gap-4"><button className="h-11 text-[14px] text-accent font-bold" onClick={() => say("プロトタイプでは、ほかのファイルを省略しています")}>変更したファイル 3 件を見る</button><button className="h-11 text-[14px] text-accent font-bold" onClick={() => say("プロトタイプでは、PR の本文を省略しています")}>PR の本文を開く</button></div>
         </div>
         <Foot>
           <button className="flex-1 h-12 rounded-lg border border-line font-bold" onClick={() => { setNote(""); setSheet("reject"); }}>指摘を書いて戻す</button>
-          <button className="flex-1 h-12 rounded-lg bg-accent text-ground font-bold" onClick={() => { say("merge を許可しました。CI が通ると merge します", () => say("許可を取り消しました")); pop(); }}>merge を許可する</button>
+          <button className="flex-1 h-12 rounded-lg bg-accent text-ground font-bold" onClick={() => { const k = goKey(s.x.go); setMoved((m) => ({ ...m, [k]: "CI を待って merge" })); say("merge を許可しました。CI が通ると merge します", () => { setMoved((m) => { const n = { ...m }; delete n[k]; return n; }); say("許可を取り消しました"); }); pop(); }}>merge を許可する</button>
         </Foot>
       </>)}
       {s.p === "stopped" && (<>
         <Bar title={s.x.title} sub={`${s.x.project} · 止まっています · ${s.x.ago}`} />
         <div className="flex-1 overflow-auto px-4 pb-4 text-[15px] leading-6">
-          <H>止まった理由</H><p className="text-wait font-bold">利用枠を使い切りました</p><p>枠は 15:00 に戻ります。戻ると自動で再開します。</p>
+          <H>止まった理由</H><p className="text-wait font-bold">利用枠を使い切りました</p><p>枠は 15:00 に戻り、自動で再開します。待たずに始めるときは「いま再開する」を押します。</p>
           <H>止まる前にしていたこと</H><p>部分返金を許すかどうかを調べていました。</p>
         </div>
         <Foot><button className="flex-1 h-12 rounded-lg border border-line font-bold" onClick={() => go({ p: "chat", x: s.x })}>会話を開く</button><button className="flex-1 h-12 rounded-lg bg-accent text-ground font-bold" onClick={() => { say("再開しました"); pop(); }}>いま再開する</button></Foot>
       </>)}
       {s.p === "agent" && (<>
-        <Bar title={s.x.title} sub={`${s.x.project} · AI が作業中 · ${s.x.why.split(" · ")[0]}`} right={<button className="h-9 px-3 rounded-lg border border-wait text-wait text-[13px] font-bold shrink-0" onClick={() => say("AI を止めました。作業は保存され、指示待ちになります", () => say("再開しました"))}>止める</button>} />
+        <Bar title={s.x.title} sub={`${s.x.project} · AI が作業中 · ${s.x.why.split(" · ")[0]}`} right={<button className="h-11 px-3 ml-2 rounded-lg border border-wait text-wait text-[13px] font-bold shrink-0" onClick={() => say("AI を止めました。作業は保存され、指示待ちになります", () => say("再開しました"))}>止める</button>} />
         <div className="flex-1 overflow-auto px-4 pb-4 text-[15px] leading-6">
           <H>工程</H>
-          <div className="flex flex-wrap items-center gap-x-2 text-[13px] text-muted">{[["done", "精査"], ["done", "設計"], ["doing", "実装 11分"], ["todo", "レビュー"], ["todo", "PR"], ["todo", "merge"]].map(([st, t], n) => <React.Fragment key={t}>{n > 0 && <span aria-hidden="true">›</span>}<span className={st === "doing" ? "font-bold text-ink" : st === "done" ? "text-ink" : ""}><span className={ST[st][1]}>{ST[st][0]}</span> {t}</span></React.Fragment>)}</div>
+          <div className="flex flex-wrap items-center gap-x-1.5 text-[12px] text-muted">{[["done", "精査"], ["done", "設計"], ["doing", "実装 11分"], ["todo", "レビュー"], ["todo", "PR"], ["todo", "merge"]].map(([st, t], n) => <React.Fragment key={t}>{n > 0 && <span aria-hidden="true">›</span>}<span className={st === "doing" ? "font-bold text-ink" : st === "done" ? "text-ink" : ""}><span className={ST[st][1]}>{ST[st][0]}</span> {t}</span></React.Fragment>)}</div>
           <H>エージェント</H>
           {[["doing", 0, "/dev-impl (親)", "実行中 18分", "実装を依頼して、結果を待っている"], ["doing", 1, "dev-impl-implementer", "実行中 11分", "Bash npm test -- csv"], ["todo", 1, "review-impl", "待機中", "実装が終わると始まる"]].map(([st, d, name, state, doing]) => (
             <button key={name} onClick={() => go({ p: "chat", x: { ...s.x, title: name } })} className="block w-full text-left min-h-[44px] py-1.5 border-b border-line active:bg-raised" style={{ paddingLeft: d * 16 }}>
@@ -1295,38 +1367,70 @@ function Phone() {
         </div>
         <Foot><button className="flex-1 h-12 rounded-lg border border-line font-bold" onClick={() => go({ p: "chat", x: s.x })}>issue の会話を開く</button></Foot>
       </>)}
+      {s.p === "read" && (<>
+        <Bar title={{ toc: "目次", decisions: "決まったこと", timeline: "タイムライン", files: "ファイル" }[s.kind]} sub={s.x.title} />
+        <div className="flex-1 overflow-auto">
+          {s.kind === "toc" && CHAPTERS.map((c, n) => <button key={c.id} onClick={() => { pop(); say(`「${c.t}」へ移りました`); }} className="block w-full min-h-[48px] px-4 py-1.5 text-left border-b border-line active:bg-raised"><span className="block text-[14px] font-medium">{n + 1} {c.t}{c.now && <span className="ml-2 text-[12px] text-accent font-bold">いまここ</span>}</span>{c.dec.map((d) => <span key={d} className="block text-[12px] text-muted">決定: {d}</span>)}</button>)}
+          {s.kind === "decisions" && DECISIONS.map((d) => <button key={d.t} onClick={() => { pop(); say("根拠の発言へ移りました"); }} className="flex items-baseline gap-2 w-full min-h-[48px] px-4 py-1.5 text-left border-b border-line active:bg-raised"><span className={`w-24 shrink-0 text-[12px] font-bold ${d.k === "保留" ? "text-wait" : "text-muted"}`}>{d.k}</span><span className="text-[14px]">{d.t}</span></button>)}
+          {s.kind === "timeline" && TASK_TREE.filter((l) => l.k === "task").map((l) => <div key={l.cols[0]} className="min-h-[44px] pr-4 flex items-center gap-2 border-b border-line text-[14px]" style={{ paddingLeft: 16 + l.d * 16 }}><span className={ST[l.st][1]}>{ST[l.st][0]}</span><span className="flex-1 truncate">{l.cols[0].trim().slice(2)}</span><span className={`text-[12px] font-bold ${ST[l.st][1]}`}>{l.cols[1]}</span><span className="w-10 text-right font-mono text-[12px] text-muted">{l.cols[2]}</span></div>)}
+          {s.kind === "files" && FILES.map((f) => <button key={f.t} disabled={f.k === "dir"} className="block w-full min-h-[44px] px-4 text-left border-b border-line font-mono text-[13px] whitespace-pre disabled:text-muted" onClick={() => say("プロトタイプでは、ファイルの中身を省略しています")}>{f.t}</button>)}
+        </div>
+      </>)}
+      {s.p === "newconv" && (<>
+        <Bar title="会話を始める" sub="送ると、AI が作業を始めます" />
+        <div className="flex-1 overflow-auto px-4 py-3 space-y-3 text-[16px]">
+          <label className="block"><span className="block text-[12px] font-bold text-muted mb-1">プロジェクト</span><select aria-label="プロジェクト" defaultValue={s.id || "shop-api"} className="w-full h-11 rounded-lg border border-line bg-surface px-3">{PROJECTS.map((p) => <option key={p.id}>{p.id}</option>)}</select></label>
+          <label className="block"><span className="block text-[12px] font-bold text-muted mb-1">作業する場所</span><select aria-label="作業する場所" className="w-full h-11 rounded-lg border border-line bg-surface px-3"><option>プロジェクトのディレクトリ</option><option>新しい worktree</option><option>既存の worktree: try-cache</option></select></label>
+          <label className="block"><span className="block text-[12px] font-bold text-muted mb-1">最初の指示</span><textarea aria-label="最初の指示" rows={5} value={first} onChange={(e) => setFirst(e.target.value)} className="w-full rounded-lg border border-line bg-surface px-3 py-2" /></label>
+        </div>
+        <Foot><button disabled={!first.trim()} className="flex-1 h-12 rounded-lg bg-accent text-ground font-bold disabled:bg-raised disabled:text-muted" onClick={() => { const why = first.trim(); setFirst(""); setStack((st) => [...st.slice(0, -1), { p: "chat", x: { title: "会話: 新しい会話", project: s.id || "shop-api", why, ago: "いま", sect: "作業中", go: { s: "conv", project: s.id || "shop-api", conv: 99 } } }]); say("会話を始めました"); }}>{first.trim() ? "送って始める" : "最初の指示を書くと始められる"}</button></Foot>
+      </>)}
       {s.p === "new" && (<>
         <Bar title="issue を作る" sub="確定すると、AI が精査を始めます" />
         <div className="flex-1 overflow-auto px-4 py-3 space-y-3 text-[16px]">
           {[["プロジェクト", <select aria-label="プロジェクト" className="w-full h-11 rounded-lg border border-line bg-surface px-3">{PROJECTS.map((p) => <option key={p.id}>{p.id}</option>)}</select>],
-            ["題名", <input aria-label="題名" className="w-full h-11 rounded-lg border border-line bg-surface px-3" />],
+            ["題名", <input aria-label="題名" value={title} onChange={(e) => setTitle(e.target.value)} className="w-full h-11 rounded-lg border border-line bg-surface px-3" />],
             ["本文", <textarea aria-label="本文" rows={5} className="w-full rounded-lg border border-line bg-surface px-3 py-2" />]].map(([l, el]) => <label key={l} className="block"><span className="block text-[12px] font-bold text-muted mb-1">{l}</span>{el}</label>)}
           <details className="text-[14px]"><summary className="h-11 flex items-center text-accent font-bold">詳細 (優先度・依存・merge 前の確認)</summary>
-            {[["優先度", ["高", "中", "低"]], ["依存", ["なし", "#42", "#43"]], ["merge 前の確認", ["しない", "する"]]].map(([l, os]) => <label key={l} className="flex items-center justify-between h-11 border-b border-line"><span>{l}</span><select aria-label={l} className="h-9 rounded-lg border border-line bg-surface px-2">{os.map((o) => <option key={o}>{o}</option>)}</select></label>)}
+            {[["優先度", ["高", "中", "低"]], ["依存", ["なし", "#42", "#43"]], ["merge 前の確認", ["しない", "する"]]].map(([l, os]) => <label key={l} className="flex items-center justify-between h-11 border-b border-line"><span>{l}</span><select aria-label={l} className="h-11 rounded-lg border border-line bg-surface px-2">{os.map((o) => <option key={o}>{o}</option>)}</select></label>)}
           </details>
         </div>
-        <Foot><button className="flex-1 h-12 rounded-lg border border-line font-bold" onClick={() => { say("下書きを保存しました"); pop(); }}>下書きとして保存</button><button className="flex-1 h-12 rounded-lg bg-accent text-ground font-bold" onClick={() => { say("確定しました。AI が精査を始めます"); pop(); }}>確定する</button></Foot>
+        <Foot><button className="flex-1 h-12 rounded-lg border border-line font-bold" onClick={() => { say("下書きを保存しました"); pop(); }}>下書きとして保存</button><button disabled={!title.trim()} className="flex-1 h-12 rounded-lg bg-accent text-ground font-bold disabled:bg-raised disabled:text-muted" onClick={() => { say("確定しました。AI が精査を始めます"); setTitle(""); pop(); }}>{title.trim() ? "確定する" : "題名を書くと確定できる"}</button></Foot>
       </>)}
       {sheet === "more" && <PSheet onClose={closeSheet} title="この会話">
-        <Item a="目次" b="3 章" onClick={() => { setSheet(null); say("プロトタイプでは目次を省略しています"); }} /><Item a="決まったこと" b="決定 2 · 保留 1" onClick={() => { setSheet(null); say("プロトタイプでは決まったことを省略しています"); }} />
-        <Item a="ストック" b={`${stock.length} 件`} onClick={() => setSheet("stock")} /><Item a="タイムライン" b="" onClick={() => setSheet(null)} /><Item a="ファイル" b="" onClick={() => setSheet(null)} /><Item a="会話を締めくくる" b="" onClick={() => setSheet(null)} />
+        {[["toc", "目次", "3 章"], ["decisions", "決まったこと", "決定 2 · 保留 1"], ["timeline", "タイムライン", "50%"], ["files", "ファイル", ""]].map(([kind, a, b]) => <Item key={kind} a={a} b={b} onClick={() => { setSheet(null); go({ p: "read", kind, x: s.x }); }} />)}
+        <Item a="ストック" b={`${stock.length} 件`} onClick={() => setSheet("stock")} /><Item a="スレッド" b={`${threads.length} 件`} onClick={() => setSheet("threads")} /><Item a="会話を締めくくる" b="" onClick={() => setSheet("close")} />
       </PSheet>}
-      {sheet === "stock" && <PSheet onClose={closeSheet} title={`ストック ${stock.length} 件`}>
-        {stock.length ? stock.map((x) => <div key={x.id} className="py-2 border-b border-line text-[14px]"><p className="text-[12px] text-muted truncate">&gt; {P_AI.find((p) => p[0] === x.id)[1]}</p><p><span className="font-bold mr-2">{x.kind}</span>{x.text}</p></div>) : <p className="text-[14px] text-muted py-2">ストックはありません。AI の文を押して、質問か指示を書きます。</p>}
-        <button disabled={!stock.length} className="mt-3 w-full h-12 rounded-lg bg-accent text-ground font-bold disabled:opacity-40" onClick={() => { say(`${stock.length} 件を送りました`); setStock([]); setSheet(null); }}>全部送る</button>
+      {sheet === "threads" && <PSheet onClose={closeSheet} title={`スレッド ${threads.length} 件`}>
+        {threads.length ? threads.map((t) => <div key={t.id} className="py-2 border-b border-line text-[14px]">
+          <p className="text-[12px] text-muted truncate">&gt; {P_AI.find((x) => x[0] === t.id)[1]}</p><p className="font-bold">{t.text}</p>
+          <p className="border-l-2 border-line pl-2 my-1"><span className="text-[12px] font-bold mr-2">AI</span>調べた結果を、ここに答えます。</p>
+          <div className="flex gap-2"><button className="flex-1 h-11 rounded-lg border border-line font-bold text-[13px]" onClick={() => { setStock((x) => [...x.filter((y) => y.id !== t.id), { id: t.id, kind: "指示", text: "(確定事項) " + t.text }]); setThreads((x) => x.filter((y) => y.id !== t.id)); say("確定事項を指示としてストックに入れ、スレッドを終えました"); }}>確定事項をストックに入れて終える</button><button className="h-11 px-3 rounded-lg border border-line font-bold text-[13px]" onClick={() => { setThreads((x) => x.filter((y) => y.id !== t.id)); say("スレッドを閉じました"); }}>閉じるだけ</button></div>
+        </div>) : <p className="text-[14px] text-muted py-2">スレッドはありません。質問をストックして送ると、質問ごとに始まります。</p>}
+      </PSheet>}
+      {sheet === "close" && <PSheet onClose={closeSheet} title="会話を締めくくる">
+        <p className="text-[12px] font-bold text-muted">できたもの</p><p className="text-[14px] mb-2">設計書の変更 1 件 (docs/design/features/stock.md)</p>
+        <p className="text-[12px] font-bold text-muted">残っているもの</p><p className="text-[14px] mb-3">ストック {stock.length} 件 · スレッド {threads.length} 件 · 答えていない質問 2 件</p>
+        <button className="w-full h-12 rounded-lg bg-accent text-ground font-bold" onClick={() => { setSheet(null); setStack([{ p: "inbox" }]); say("会話を閉じました。検索から開き直せます"); }}>この会話を閉じる</button>
+      </PSheet>}
+      {sheet === "stock" && <PSheet onClose={closeSheet} title={`ストック ${stock.length} 件 · 送り先: ${s.x?.title || "会話"}`}>
+        {stock.length ? stock.map((x) => <div key={x.id} className="py-1 border-b border-line text-[14px] flex items-center gap-1"><div className="flex-1 min-w-0"><p className="text-[12px] text-muted truncate">&gt; {P_AI.find((p) => p[0] === x.id)[1]}</p><p className="truncate"><span className="font-bold mr-2">{x.kind}</span>{x.text}</p></div>
+          <button className="h-11 px-2 text-[13px] font-bold text-accent" onClick={() => { setSel(x.id); setNote(x.text); setSheet(x.kind); }}>直す</button><button className="h-11 px-2 text-[13px] font-bold text-muted" onClick={() => { setStock((y) => y.filter((z) => z.id !== x.id)); say("取り消しました"); }}>取り消す</button></div>) : <p className="text-[14px] text-muted py-2">ストックはありません。AI の文を押して、質問か指示を書きます。</p>}
+        {(() => { const send = (kinds, label) => { const out = stock.filter((x) => kinds.includes(x.kind)); if (!out.length) return say(`送る${label}がありません`); setThreads((t) => [...t, ...out.filter((x) => x.kind === "質問")]); setStock((x) => x.filter((y) => !kinds.includes(y.kind))); setSheet(null); say(`${out.length} 件を送りました。質問はスレッドで答えが返ります`); }; return (
+          <div className="mt-3 flex gap-2"><button disabled={!stock.length} className="flex-1 h-12 rounded-lg border border-line font-bold text-[13px] disabled:bg-raised disabled:text-muted" onClick={() => send(["質問"], "質問")}>質問だけ</button><button disabled={!stock.length} className="flex-1 h-12 rounded-lg border border-line font-bold text-[13px] disabled:bg-raised disabled:text-muted" onClick={() => send(["指示"], "指示")}>指示だけ</button><button disabled={!stock.length} className="flex-1 h-12 rounded-lg bg-accent text-ground font-bold disabled:bg-raised disabled:text-muted" onClick={() => send(["質問", "指示"], "もの")}>全部送る</button></div>); })()}
       </PSheet>}
       {(sheet === "質問" || sheet === "指示" || sheet === "reject") && <PSheet onClose={closeSheet} title={sheet === "reject" ? "差し戻す指摘" : `${sheet}を書く`}>
         {sel && sheet !== "reject" && <p className="text-[12px] text-muted border-l-2 border-line pl-2 mb-2">{P_AI.find((x) => x[0] === sel)[1]}</p>}
         <textarea autoFocus aria-label="内容" rows={3} value={note} onChange={(e) => setNote(e.target.value)} placeholder={sheet === "reject" ? "直してほしい点を書く (必須)" : "この文について書く"} className="w-full rounded-lg border border-line bg-ground px-3 py-2 text-[16px] leading-6" />
-        <button disabled={!note.trim()} className="mt-2 w-full h-12 rounded-lg bg-accent text-ground font-bold disabled:opacity-40" onClick={() => {
+        <button disabled={!note.trim()} className="mt-2 w-full h-12 rounded-lg bg-accent text-ground font-bold disabled:bg-raised disabled:text-muted" onClick={() => {
           if (sheet === "reject") { say("差し戻しました。AI が直します"); pop(); }
           else { setStock((x) => [...x.filter((y) => y.id !== sel), { id: sel, kind: sheet, text: note.trim() }]); say(`${sheet}をストックしました。続けて別の文にも書けます`); setSel(null); }
           setNote(""); setSheet(null);
         }}>{sheet === "reject" ? "差し戻す" : "ストックする"}</button>
       </PSheet>}
       {sheet === "attach" && <PSheet onClose={closeSheet} title="足す"><Item a="画像" b="写真・スクリーンショット" onClick={() => setSheet(null)} /><Item a="スキル" b="/dev-spec など" onClick={() => { setDraft("/dev-spec "); setSheet(null); }} /></PSheet>}
-      {sheet === "new" && <PSheet onClose={closeSheet} title="作る"><Item a="会話を始める" b="プロジェクトを選ぶ" onClick={() => { setSheet(null); go({ p: "projects" }); }} /><Item a="issue を作る" b="" onClick={() => { setSheet(null); go({ p: "new" }); }} /></PSheet>}
-      {msg && <div role="status" className={`absolute left-3 right-3 z-30 ${sheet ? "top-16" : "bottom-24"} rounded-lg bg-ink text-ground px-3 py-2 text-[14px] shadow-float flex items-center gap-2`}><span className="flex-1">{msg.t}</span>{msg.undo && <button className="font-bold underline h-8 px-2" onClick={() => { const u = msg.undo; setMsg(null); u(); }}>取り消す</button>}</div>}
+      {sheet === "new" && <PSheet onClose={closeSheet} title="作る"><Item a="会話を始める" b="" onClick={() => { setSheet(null); go({ p: "newconv" }); }} /><Item a="issue を作る" b="" onClick={() => { setSheet(null); go({ p: "new" }); }} /></PSheet>}
+      {msg && <div role="status" className={`absolute left-3 right-3 z-30 ${sheet ? "top-16" : "bottom-24"} rounded-lg bg-ink text-ground px-3 py-2 text-[14px] shadow-float flex items-center gap-2`}><span className="flex-1">{msg.t}</span>{msg.undo && <button className="font-bold underline h-11 px-3" onClick={() => { const u = msg.undo; setMsg(null); u(); }}>取り消す</button>}</div>}
       {["inbox", "projects", "search"].includes(s.p) && (
         <nav className="h-14 border-t border-line bg-surface grid grid-cols-3 shrink-0">
           {tabs.map(([id, label, d]) => (
@@ -1348,24 +1452,24 @@ const SCREENS = [
   ["PC", "プロジェクト", "issue を状況別に縦に並べる。会話と worktree の一覧", "US-003, 018, 064, 065"],
   ["PC", "issue", "会話・設計・差分・エージェント・情報を切り替える", "US-009, 014〜016, 063"],
   ["PC", "issue の作成・編集", "下書きと確定、親子・依存・優先度、merge 前の確認の指定", "US-004〜007"],
-  ["PC", "会話", "issue にしない壁打ち。`/dev-spec` を起動する", "US-018, 064"],
+  ["PC", "会話", "issue にしない壁打ち。/dev-spec を起動する", "US-018, 064"],
   ["PC", "直近 / 目次 / 決まったこと", "会話の状況を思い出すための入口 (右のウィンドウ)", "UC-003"],
   ["PC", "ストック / スレッド", "質問と指示の一覧、質問ごとのやりとり (右のウィンドウ)", "UC-004"],
   ["PC", "タイムライン", "タスクの木、詳細、履歴、報告 (右のウィンドウ)", "US-069〜072"],
   ["PC", "ファイル / 検索結果 / ターミナル", "ファイルツリー、rg の結果、コマンドの実行", "US-066〜068"],
-  ["PC", "検索 / ヘルプ / 設定 / 会話とスレッドの一覧", "issue と会話の検索、`:h`、プロジェクトの設定", "US-026, 027"],
+  ["PC", "検索 / ヘルプ / 設定 / 会話とスレッドの一覧", "issue と会話の検索、:h、プロジェクトの設定", "US-026, 027"],
   ["PC", "エラー", "本人以外の拒否、404、接続切れ、ウィンドウの例外", "US-030"],
-  ["スマホ", "受信箱 / プロジェクト / 検索", "判断待ち・指示待ち・作業中の一覧、プロジェクトごとの会話と issue、issue と会話の検索", "US-028"],
+  ["スマホ", "一覧 / プロジェクト / 検索", "判断待ち・指示待ち・作業中の一覧、プロジェクトごとの会話と issue、issue と会話の検索", "US-028"],
   ["スマホ", "会話", "判断することの帯、会話、選択肢で答える、文を押して質問・指示をストックする", "US-029"],
   ["スマホ", "PR の確認 / 止まった issue / エージェントの出力", "merge の許可、再開、AI を止める", "US-029"],
   ["スマホ", "設計レビュー", "差分を見て承認か差し戻し", "US-029"],
-  ["スマホ", "issue の作成", "下書きと確定", ""],
+  ["スマホ", "issue の作成", "下書きと確定", "US-004"],
 ];
 const FLOWS = [
   { t: "壁打ちから実装まで", d: "会話で壁打ちし、/dev-spec で設計を固める。作られた issue は精査を通ると実装待ちになり、実装が自動で始まる。", us: "US-018, 008, 010, 063", s: ["会話", "/dev-spec", "issue が作られる", "精査", "実装待ち", "実装", "エージェントの出力で確認", "完了"] },
-  { t: "issue から設計レビューまで", d: "issue を確定すると精査と設計が始まる。設計ができるとホームの自分待ちに並ぶ。差し戻すと設計に戻る。", us: "US-004, 008〜010", s: ["issue の作成", "精査・設計", "ホーム (自分待ち)", "設計レビュー", "承認", "実装", "merge", "完了"] },
+  { t: "issue から設計レビューまで", d: "issue を確定すると精査と設計が始まる。設計ができると一覧の判断待ちに並ぶ。差し戻すと設計に戻る。", us: "US-004, 008〜010", s: ["issue の作成", "精査・設計", "一覧 (判断待ち)", "設計レビュー", "承認", "実装", "merge", "完了"] },
   { t: "質問と指示", d: "回答や成果物を選び、質問か指示をストックする。見直してから送る。質問はスレッドになり、確定事項は指示としてストックへ戻る。", us: "US-019〜023", s: ["回答を読む", "選択", "質問・指示", "ストック", "送信", "スレッド", "確定事項をストックへ", "指示を送信"] },
-  { t: "スマホで返事と承認", d: "通知から受信箱を開き、質問に返事をするか、設計を承認・差し戻しする。", us: "US-028, 029, 034", s: ["通知", "受信箱", "会話 / 設計レビュー", "返事・承認・差し戻し"] },
+  { t: "スマホで返事と承認", d: "通知から一覧を開き、質問に返事をするか、設計を承認・差し戻しする。", us: "US-028, 029, 034", s: ["通知", "一覧", "会話 / 設計レビュー", "返事・承認・差し戻し"] },
   { t: "調べる", d: "ファイルの中身を検索して開き、必要ならターミナルでコマンドを実行する。開いたファイルにも質問と指示ができる。", us: "US-066〜068, 023", s: ["Space /", "検索結果", "ファイル", "選択", "質問・指示"] },
 ];
 const SHELL = [
@@ -1417,24 +1521,126 @@ const POLICY = [
   ["一覧の行", "題名・状況・プロジェクト・経過の 4 桁を 1 行 (26px) に収め、ウィンドウの見出しに列の見出しを置く。未読は左端の点と題名の太字で示す"],
   ["組の書き方", "キーと動作、項目と値は、1 行に 1 組だけ書いて列を揃える (ヘルプ、情報、設定、issue の作成・編集、タスク)。ステータス行のキーは等幅の濃い色、説明は薄い色にする"],
   ["発言の区別", "発言者の小さな札 (あなたは強調色の地、AI は灰色の地) を発言の先頭に置く。発言の全行の左に帯を引き、あなたの発言は強調色の帯と地の色、AI の発言は灰色の帯で示す"],
-  ["スマホ", "受信箱を起点にし、全幅の行 (56px) を区切り線で分ける。タップ領域は 44px 以上。自分の発言は選択色の吹き出し、AI の発言は左に帯。選択肢は選んでから「答える」で送り、承認などは 5 秒のあいだ取り消せる"],
+  ["スマホ", "一覧を起点にし、全幅の行 (56px) を区切り線で分ける。タップ領域は 44px 以上。自分の発言は選択色の吹き出し、AI の発言は左に帯。選択肢は選んでから「答える」で送り、承認などは 5 秒のあいだ取り消せる"],
 ];
 const PAGES = {
-  "PC": () => <><p className="text-[12px] text-muted mb-2">ツリー・主・右のすべてのウィンドウが Vim のバッファとして動く。Space で続けて押せるキー、:h でキーの一覧。:404 :offline :loading :crash でエラーと読み込みの表示を確かめられる。</p><PC /></>,
+  "PC": () => <><p className="text-[12px] text-muted mb-2">ツリー・主・右のすべてのウィンドウが Vim のバッファとして動く。Space で続けて押せるキー、:h でキーの一覧。:404 :offline :loading :crash でエラー・接続切れ・読み込みの表示を確かめられる。</p><PC /></>,
   "スマホ": () => <Phone />,
-  "画面一覧": () => <Table head={["端末", "画面", "内容", "関連 US"]} rows={SCREENS} />,
+  "画面一覧": () => <Table head={["端末", "画面", "内容", "関連 US / UC"]} rows={SCREENS} />,
   "ユーザーフロー": () => <div className="space-y-8">{FLOWS.map((f) => <div key={f.t}><h3 className="font-bold text-lg">{f.t}</h3><p className="my-1">{f.d}</p><p className="text-[12px] text-muted mb-3">関連: {f.us}</p><div className="flex flex-wrap items-center gap-2 text-sm">{f.s.map((x, n) => <React.Fragment key={n}><span className="border border-line px-3 py-2">{x}</span>{n < f.s.length - 1 && <span aria-hidden="true">→</span>}</React.Fragment>)}</div></div>)}</div>,
   "操作": () => <Table head={["トリガー", "アクション", "結果"]} rows={INTERACTIONS} />,
   "デザイン方針": () => <Table head={["項目", "決定"]} rows={POLICY} />,
   "アプリシェル": () => <div className="space-y-6"><Table head={["項目", "決定"]} rows={SHELL} /><Denied /></div>,
 };
+/* ------------------------------------------------------------------ *
+ * 画面を URL から直接開く口。`#screen=<画面 ID>` で開くと、その画面と状態を最初から描く。
+ * 画面を移るたびに hash を書き換えるので、再読み込みしても見ていた画面に戻る。
+ * 全画面の ID は window.SKETCH_SCREENS に出す (全画面の撮影がこれを読む)。
+ * ------------------------------------------------------------------ */
+const once = (k) => { const v = load("once." + k, null); try { sessionStorage.removeItem("sketch:once." + k); } catch { /* 無ければ何もしない */ } return v; };
+const CONV_V = { s: "conv", project: "shop-api", conv: 0, tab: 0 };
+const issueV = (project, issue, tab) => ({ s: "issue", project, issue, tab });
+const pc = (v, right, extra) => ({ page: "PC", width: 1440, hist: v.s === "home" ? [v] : [{ s: "home" }, v], right: right || null, ...extra });
+const phone = (stack, extra) => ({ page: "スマホ", width: 480, stack: [{ p: "inbox" }, ...stack].slice(stack[0]?.p === "inbox" || ["projects", "search"].includes(stack[0]?.p) ? 1 : 0), ...extra });
+const STOCK_DEMO = [
+  { id: 1, kind: "指示", text: "期限は設定値から読むようにして", quote: [CONV[at("limit")].t], key: "conv-shop-api--0--0-", line: at("limit"), line2: at("limit"), ckey: "shop-api--0-conv-" },
+  { id: 2, kind: "質問", text: "定期処理の負荷は問題ない?", quote: [CONV[at("q1") + 1].t], key: "conv-shop-api--0--0-", line: at("q1") + 1, line2: at("q1") + 1, ckey: "shop-api--0-conv-" },
+];
+const SKETCH_VIEWS = {
+  "pc-home": pc({ s: "home" }),
+  "pc-home--whichkey": pc({ s: "home" }, null, { once: { "pc.leader": " " } }),
+  "pc-home--switch": pc({ s: "home" }, "switch"),
+  "pc-conv--recent": pc(CONV_V, "recent"),
+  "pc-conv--toc": pc(CONV_V, "toc"),
+  "pc-conv--decisions": pc(CONV_V, "decisions"),
+  "pc-conv--stock": pc(CONV_V, "stock", { keep: { "pc.stock": STOCK_DEMO } }),
+  "pc-conv--thread": pc(CONV_V, "thread", { keep: { "pc.threads": [{ ...STOCK_DEMO[1], done: false }] } }),
+  "pc-conv--input": pc(CONV_V, null, { once: { "pc.input": { uid: 1, kind: "プロンプト", text: "" } } }),
+  "pc-conv--worktree": pc(CONV_V, "worktree"),
+  "pc-conv--close": pc(CONV_V, "close"),
+  "pc-convs": pc({ s: "convs", tab: 0 }),
+  "pc-conv-other": pc({ s: "conv", project: "shop-api", conv: 1, tab: 0 }),
+  "pc-issue-working": pc(issueV("shop-api", 43, 0)),
+  "pc-issue-working--timeline": pc(issueV("shop-api", 43, 0), "timeline"),
+  "pc-issue-working--task": pc(issueV("shop-api", 43, 0), "task"),
+  "pc-issue-design": pc(issueV("shop-api", 42, 1)),
+  "pc-issue-design--confirm": pc(issueV("shop-api", 42, 1), null, { once: { "pc.confirm": { a: "approve", t: CONFIRM.approve } } }),
+  "pc-issue-diff": pc(issueV("booking-web", 8, 2)),
+  "pc-issue-agents": pc(issueV("shop-api", 43, 3)),
+  "pc-issue-info": pc(issueV("shop-api", 42, 4)),
+  "pc-agentconv": pc({ s: "agentconv", project: "shop-api", issue: 43, agent: "dev-impl-implementer", tab: 0 }),
+  "pc-project": pc({ s: "project", project: "shop-api", tab: 0 }),
+  "pc-issueform": pc({ s: "issueForm", project: "shop-api", tab: 0 }),
+  "pc-file": pc({ s: "file", project: "shop-api", file: "src/order/confirm.ts", tab: 0 }, "files"),
+  "pc-grep": pc({ s: "grep", tab: 0 }, null, { keep: { "pc.query": "reserve" } }),
+  "pc-search": pc({ s: "search", tab: 0 }, null, { keep: { "pc.query": "在庫" } }),
+  "pc-terminal": pc({ s: "terminal", tab: 0 }),
+  "pc-help": pc({ s: "help", tab: 0 }),
+  "pc-settings": pc({ s: "settings", tab: 0 }),
+  "pc-404": pc({ s: "404", tab: 0 }),
+  "pc-offline": pc({ s: "home" }, null, { keep: { "pc.offline": true } }),
+  "pc-loading": pc({ s: "loading", tab: 0 }),
+  "phone-inbox": phone([{ p: "inbox" }]),
+  "phone-projects": phone([{ p: "projects" }]),
+  "phone-project": phone([{ p: "projects" }, { p: "project", id: "shop-api" }]),
+  "phone-search": phone([{ p: "search" }]),
+  "phone-chat": phone([{ p: "chat", x: LIST[1] }]),
+  "phone-chat--more": phone([{ p: "chat", x: LIST[1] }], { once: { "phone.sheet": "more" } }),
+  "phone-chat--offline": phone([{ p: "chat", x: LIST[1] }], { once: { "phone.offline": true } }),
+  "phone-chat--stock": phone([{ p: "chat", x: LIST[1] }], { keep: { "phone.stock": [{ id: "p2", kind: "指示", text: "期限は設定で変えられるようにして" }, { id: "p1", kind: "質問", text: "在庫が足りないときの応答は?" }] }, once: { "phone.sheet": "stock" } }),
+  "phone-chat--threads": phone([{ p: "chat", x: LIST[1] }], { keep: { "phone.threads": [{ id: "p1", kind: "質問", text: "在庫が足りないときの応答は?" }] }, once: { "phone.sheet": "threads" } }),
+  "phone-chat--close": phone([{ p: "chat", x: LIST[1] }], { once: { "phone.sheet": "close" } }),
+  "phone-chat-working": phone([{ p: "chat", x: LIST[6] }], { keep: { "phone.queue": ["BOM 付きのときも確かめて"] } }),
+  "phone-read-toc": phone([{ p: "chat", x: LIST[1] }, { p: "read", kind: "toc", x: LIST[1] }]),
+  "phone-read-timeline": phone([{ p: "chat", x: LIST[1] }, { p: "read", kind: "timeline", x: LIST[1] }]),
+  "phone-newconv": phone([{ p: "projects" }, { p: "newconv", id: "shop-api" }]),
+  "phone-review": phone([{ p: "review", x: LIST[0] }]),
+  "phone-review--reject": phone([{ p: "review", x: LIST[0] }], { once: { "phone.sheet": "reject" } }),
+  "phone-pr": phone([{ p: "pr", x: LIST[2] }]),
+  "phone-stopped": phone([{ p: "stopped", x: LIST[3] }]),
+  "phone-agent": phone([{ p: "agent", x: LIST[6] }]),
+  "phone-new": phone([{ p: "new" }]),
+  "phone-inbox--new": phone([{ p: "inbox" }], { once: { "phone.sheet": "new" } }),
+  "doc-screens": { page: "画面一覧" }, "doc-flows": { page: "ユーザーフロー" }, "doc-ops": { page: "操作" }, "doc-policy": { page: "デザイン方針" }, "doc-shell": { page: "アプリシェル" },
+};
+/* いまの画面を 1 つの文字列にする。画面 ID との照合に使う */
+const V_KEYS = { project: ["project"], conv: ["project", "conv"], issue: ["project", "issue", "tab"], file: ["file"], agentconv: ["issue", "agent"] };
+const sigOf = (page, v, right, top) => (page === "PC" ? ["PC", v.s, ...(V_KEYS[v.s] || []).map((k) => v[k] ?? 0), right || ""].join("|") : page === "スマホ" ? ["SP", top.p, top.id || "", top.kind || "", top.x?.title || ""].join("|") : page);
+const defSig = (d) => sigOf(d.page, d.hist?.[d.hist.length - 1], d.right, d.stack?.[d.stack.length - 1]);
+const curSig = () => sigOf(load("page", "PC"), load("pc.hist", [{ s: "home" }]).slice(-1)[0], load("pc.right", null), load("phone.stack", [{ p: "inbox" }]).slice(-1)[0]);
+const idOf = (sig) => Object.keys(SKETCH_VIEWS).find((id) => !SKETCH_VIEWS[id].once && defSig(SKETCH_VIEWS[id]) === sig) || "custom";
+function applyScreen(id) {
+  const d = SKETCH_VIEWS[id];
+  try { Object.keys(sessionStorage).filter((k) => k.startsWith("sketch:")).forEach((k) => sessionStorage.removeItem(k)); } catch { /* 保存できない環境では何もしない */ }
+  save("page", d.page);
+  if (d.hist) { save("pc.hist", d.hist); save("pc.right", d.right); save("pc.seen", d.hist.filter((v) => v.s !== "home").map(goKey)); }
+  if (d.stack) save("phone.stack", d.stack);
+  Object.entries(d.keep || {}).forEach(([k, v]) => save(k, v));
+  Object.entries(d.once || {}).forEach(([k, v]) => save("once." + k, v));
+  save("screen", id);
+}
+/* 同じ画面 ID のまま再読み込みしたときは、覚えている状態 (カーソルやストック) をそのまま使う */
+const wanted = new URLSearchParams(location.hash.slice(1)).get("screen");
+if (wanted && SKETCH_VIEWS[wanted] && load("screen", null) !== wanted) applyScreen(wanted);
+let lastSig = curSig();
+let shownId = wanted && SKETCH_VIEWS[wanted] && load("screen", null) === wanted ? wanted : idOf(lastSig);
+window.SKETCH_SCREENS = Object.keys(SKETCH_VIEWS).map((id) => (SKETCH_VIEWS[id].width ? { id, width: SKETCH_VIEWS[id].width } : id));
+function syncScreen() {
+  const sig = curSig();
+  if (sig === lastSig) return;
+  lastSig = sig; shownId = idOf(sig);
+  save("screen", shownId === "custom" ? null : shownId);
+  history.replaceState(null, "", shownId === "custom" ? location.pathname + location.search : "#screen=" + shownId);
+  document.querySelector("[data-sketch-screen]")?.setAttribute("data-sketch-screen", shownId);
+}
 function App() {
   const [p, setP] = useKept("page", "PC");
   const [theme, setTheme] = useKept("theme", "OS");
+  useEffect(() => { syncScreen(); }, [p]);
   useEffect(() => { if (theme === "OS") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = theme === "ダーク" ? "dark" : "light"; }, [theme]);
   const Page = PAGES[p];
   return (
-    <main className="px-4 py-3 max-w-[1560px] mx-auto">
+    <main data-sketch-screen={shownId} className="px-4 py-3 max-w-[1560px] mx-auto">
       <nav className="flex flex-wrap gap-4 mb-2 text-[13px] border-b border-line pb-2">{Object.keys(PAGES).map((x) => <button key={x} onClick={() => setP(x)} className={p === x ? "font-bold underline decoration-accent decoration-2 underline-offset-4" : "text-muted"}>{x}</button>)}<span className="ml-auto text-muted">表示の確認</span>{["OS", "ダーク", "ライト"].map((x) => <button key={x} onClick={() => setTheme(x)} className={theme === x ? "font-bold" : "text-muted"}>{x}</button>)}</nav>
       <Boundary scope="アプリ"><Page /></Boundary>
     </main>
