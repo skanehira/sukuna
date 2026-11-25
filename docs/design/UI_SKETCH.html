@@ -435,7 +435,7 @@ const numGutter = (lines) => gutter({ class: "app-num", lineMarkerChange: (u) =>
 const signGutter = (lines, marks) => gutter({ class: "app-sign", renderEmptyElements: true, lineMarker: (v, b) => { const n = v.state.doc.lineAt(b.from).number - 1, m = marks?.[n]; return m ? new Sign(m, PAD[lines[n]?.k] || 0) : null; } });
 const BAR = ["text-done", "text-doing", "text-wait", "text-line"];
 const END = new Set(["sep", "head", "queued", "sect", "row", "note"]);
-const MAIN_ACT = new Set(["senda", "approve", "submit", "merge"]);
+const MAIN_ACT = new Set(["sendanswers", "senda", "approve", "submit", "merge"]);
 const colsOf = (l) => l.cols.map((c) => c || "—");
 const textOf = (l) => l.cols ? colsOf(l).join("  ") : l.k === "flow" ? l.parts.map(([st, t]) => `${ST[st][0]} ${t}`).join("  ›  ") : l.k === "bar" ? "━".repeat(l.parts.reduce((a, b) => a + b)) : (l.t || "");
 /* 桁の幅。ウィンドウが狭いときは、同じ比率のまま縮める (列の見出しも同じ式を使う) */
@@ -446,15 +446,15 @@ const ACT_DESC = { approve: "設計書を反映して、実装を始める", rej
   submit: "AI が精査を始める", draft: "AI は動かない", pause: "全プロジェクトに効く", restore: "確認のうえ復元する", import: "下書きとして入る", unregister: "確認のうえ解除する", newconv: "プロジェクトのディレクトリで始める", newconvwt: "新しい worktree で始める",
   newworktree: "名前を付けて作る", continue: "残りのタスクを進める", answer: "入力欄が開く", reload: "もう一度読み込む" };
 const DANGER = new Set(["halt", "unregister"]);
-function menuize(lines, answered) {
+function menuize(lines, sent) {
   let n = 0;
   return lines.map((l, i) => {
     if (l.k !== "action" && l.k !== "choice") return l;
     const is = (x) => x && (x.k === "action" || x.k === "choice"), name = (l.act || "").split(":")[0];
-    const label = l.k === "choice" ? l.t.replace(/^\[[ x]\] /, "") : l.t, done = l.k === "choice" && answered === l.choice;
+    const label = l.k === "choice" ? l.t.replace(/^\[[ x]\] /, "") : l.t, done = l.k === "choice" && !!l.picked;
     n += 1;
     return { ...l, k: "act", num: n, first: !is(lines[i - 1]), last: !is(lines[i + 1]), main: MAIN_ACT.has(l.act), danger: DANGER.has(name), done,
-      cols: [String(n), label, l.k === "choice" ? (done ? "✓ この回答を送った" : "この選択肢で答える") : ACT_DESC[name] || (l.go ? "開く" : "")] };
+      cols: [String(n), label, l.d || (l.k === "choice" ? (done ? (sent ? "✓ 送った回答" : "✓ 選んだ (まだ送っていない)") : "この選択肢を選ぶ") : ACT_DESC[name] || (l.go ? "開く" : ""))] };
   });
 }
 function decorate(lines, doc) {
@@ -666,7 +666,7 @@ const Hint = ({ items }) => <span className="truncate min-w-0">{items.map(([k, d
  * ------------------------------------------------------------------ */
 const DRAFT = {};
 const CONFIRM = { approve: "設計を承認して、実装へ進めますか?", merge: "merge を許可しますか?", close: "issue を取り下げて閉じますか?", rmworktree: "この worktree を消しますか?", restore: "バックアップから復元しますか?", unregister: "このプロジェクトの登録を解除しますか?" };
-const KIND = { プロンプト: "会話に送る", 質問: "質問", 指示: "指示", 確定事項: "確定事項", 差し戻し: "差し戻しの指摘", 預けた指示の編集: "預けた指示を直す", スレッドへの返信: "スレッドへの返信", 項目: "項目を書く" };
+const KIND = { プロンプト: "会話に送る", 質問: "質問", 指示: "指示", 確定事項: "確定事項", 差し戻し: "差し戻しの指摘", 預けた指示の編集: "預けた指示を直す", スレッドへの返信: "スレッドへの返信", 項目: "項目を書く", 回答: "Q2 への回答" };
 const TABLES = new Set(["convs", "project", "help", "settings", "issueForm", "search", "grep", "404", "offline", "loading"]);
 const issueOf = (v) => (v.s === "issue" ? ISSUES.find((i) => i.id === v.issue && i.project === v.project) : null);
 function PC() {
@@ -686,7 +686,9 @@ function PC() {
   const [cmd, setCmd] = useState("");
   const [term, setTerm] = useState(["$ "]);
   const [msg, setMsg] = useState(null);
-  const [answered, setAnswered] = useKept("pc.answered", null);
+  /* AI の質問への回答。選んだだけ・書いただけでは送らず、「回答をまとめて送る」で 1 通にして送る */
+  const [answers, setAnswers] = useKept("pc.answers", {});
+  const [ansSent, setAnsSent] = useKept("pc.ansSent", false);
   const [crash, setCrash] = useState(false);
   const [paused, setPaused] = useKept("pc.paused", false);
   const [wt, setWt] = useKept("pc.wt", "main");
@@ -755,9 +757,11 @@ function PC() {
     : v.s === "terminal" ? term.map((t) => ({ k: "code", t }))
     : stopped ? STOPPED
     : working ? [...WORKING, ...queue.map((q) => ({ k: "queued", t: `届く前の指示: ${q.text}`, queued: q.id }))]
-    : rich ? CONV.map((l) => (l.choice && answered === l.choice ? { ...l, t: l.t.replace("[ ]", "[x]") } : l))
+    : rich ? [...CONV.flatMap((l) => (l.id === "q2" ? [l, ...(answers.q2 ? [{ k: "text", t: `→ あなたの回答${ansSent ? "" : " (まだ送っていない)"}: ${answers.q2}` }] : [])]
+        : l.act === "answer" ? (ansSent ? [] : [{ ...l, t: answers.q2 ? "Q2 の回答を書き直す" : l.t }])
+        : [l.choice ? { ...l, picked: answers.q1 === l.choice } : l])),
+      ...(ansSent ? [] : [{ k: "action", t: `回答をまとめて送る  (${(answers.q1 ? 1 : 0) + (answers.q2 ? 1 : 0)} / 2 件)`, act: "sendanswers", d: answers.q1 && answers.q2 ? "1 通にまとめて AI に届く" : `答えていない質問が ${2 - (answers.q1 ? 1 : 0) - (answers.q2 ? 1 : 0)} 件ある` }])]
     : linesOf(v, { form, query, paused, conf, project, hidden, closed, gone, threads });
-  if (rich && answered) mainLines = [...mainLines, { k: "you", t: "あなた" }, { k: "text", t: `Q1 は ${answered} で進めてください。` }];
   const mine = sent.filter((x) => x.key === key);
   if (mine.length) mainLines = [...mainLines, ...mine.flatMap((x) => [{ k: "you", t: "あなた" }, ...x.text.split("\n").map((t) => ({ k: "text", t })), ...(x.images ? [{ k: "tool", t: `画像 ${x.images} 件` }] : [])]), { k: "sep", t: "──── AI が応答を作成中 ────" }];
   const marks = {};
@@ -803,7 +807,7 @@ function PC() {
     : [];
   const wtNow = v.s === "issue" && v.issue ? `issue-${v.issue}` : wt;
   const rightMarks = right === "worktree" ? Object.fromEntries(proj.worktrees.map(([w], n) => [n, w === wtNow ? "●" : ""]).filter((x) => x[1])) : undefined;
-  const mainMenu = menuize(mainLines, answered), rightMenu = menuize(rightLines, answered);
+  const mainMenu = menuize(mainLines, ansSent), rightMenu = menuize(rightLines, ansSent);
   const linesFor = { tree: treeLines, main: mainMenu, right: rightMenu };
 
   const ask = (kind, extra) => { uid.current += 1; setInput({ uid: uid.current, kind, text: "", ...extra }); setFocus("prompt"); };
@@ -828,6 +832,13 @@ function PC() {
     if (!a) return;
     const [name, arg] = a.split(":");
     if (CONFIRM[a] && !sure) return setConfirm({ a, t: CONFIRM[a] });
+    if (a === "sendanswers") {
+      const n = (answers.q1 ? 1 : 0) + (answers.q2 ? 1 : 0);
+      if (!n) return toast("回答がまだありません。選択肢を選ぶか、文章で答えてください");
+      if (n < 2 && !sure) return setConfirm({ a, t: `答えていない質問が ${2 - n} 件あります。このまま送りますか?` });
+      setSent((x) => [...x, { key, text: [answers.q1 && `Q1: ${answers.q1}`, answers.q2 && `Q2: ${answers.q2}`].filter(Boolean).join("\n"), images: 0 }]);
+      setAnsSent(true); return toast(`回答 ${n} 件を 1 通にまとめて送りました`, "ok");
+    }
     if (a === "approve") { toast("承認しました。設計書を反映し、実装を始めます", "ok"); open({ tab: 0 }, true); }
     else if (a === "reject") ask("差し戻し");
     else if (a === "merge") toast("merge を許可しました", "ok");
@@ -884,6 +895,7 @@ function PC() {
       setStock((s) => [...s, { id: Date.now(), kind: "指示", text: body, quote: ["スレッドの確定事項"], key: t?.key ?? key, line: t?.line ?? 0, line2: t?.line ?? 0, ckey }]);
       setThreads((ts) => ts.map((x) => (x.id === i.thread ? { ...x, done: true } : x))); setRight("stock"); toast("確定事項を指示としてストックに入れ、スレッドを終えました", "ok");
     } else if (i.kind === "預けた指示の編集") { setQueue((q) => q.map((x) => (x.id === i.id ? { ...x, text: body } : x))); toast("預けた指示を直しました", "ok"); }
+    else if (i.kind === "回答") { setAnswers((a) => ({ ...a, [i.q]: body })); toast("回答を書きました。「回答をまとめて送る」で送ります", "ok"); }
     else if (i.kind === "項目") { (i.store === "conf" ? setConf : setForm)((f) => ({ ...f, [i.field]: body })); toast(`${i.field}を書き換えました`, "ok"); }
     else if (i.kind === "差し戻し") toast("差し戻しました。設計した会話の続きで直します", "ok");
     else if (i.kind === "スレッドへの返信") toast("スレッドに送りました", "ok");
@@ -906,8 +918,8 @@ function PC() {
       const w = views.current[where]; w.dispatch({ selection: { anchor: w.state.doc.line(at + 1).from }, scrollIntoView: true });
     }
     const l = linesFor[where][at]; if (!l) return;
-    if (l.act === "answer") return ask("プロンプト", { text: DRAFT[key] || "" });
-    if (l.choice) { removed.current = { answer: true }; setAnswered(l.choice); toast(`${l.choice} で答えました。u で取り消せます`, "ok"); return; }
+    if (l.act === "answer") return ask("回答", { q: "q2", text: answers.q2 || "" });
+    if (l.choice) { if (ansSent) return toast("この質問には、回答を送ってあります"); setAnswers((a) => ({ ...a, q1: a.q1 === l.choice ? undefined : l.choice })); return; }
     if (l.jump !== undefined) return jump(l.jump);
     if (l.detail !== undefined) { setRight("task"); return; }
     if (l.stock) { const s = stock.find((x) => x.id === l.stock); if (s && s.key === key) jump(s.line); return; }
@@ -956,7 +968,7 @@ function PC() {
         const q = where === "main" ? queue.find((x) => x.id === mainLines[lineNo("main")]?.queued) : null, s = where === "right" && right === "stock" ? stock.find((y) => y.id === cur()?.stock) : where === "main" ? stockAt(lineNo("main")) : null;
         if (q) ask("預けた指示の編集", { text: q.text, id: q.id }); else if (s) ask(s.kind, { ...s, from: where });
       },
-      undo: () => { const r = removed.current; if (!r) return; removed.current = null; if (r.answer) setAnswered(null); if (r.stock) setStock((s) => [...s, r.stock]); if (r.queue) setQueue((q) => [...q, r.queue]); toast("取り消しを戻しました", "ok"); },
+      undo: () => { const r = removed.current; if (!r) return; removed.current = null; if (r.stock) setStock((s) => [...s, r.stock]); if (r.queue) setQueue((q) => [...q, r.queue]); toast("取り消しを戻しました", "ok"); },
       question: () => (where === "tree" ? toast("ツリーには質問を付けられません") : startStock(where, "質問")),
       instruct: () => (where === "tree" ? toast("ツリーには指示を付けられません") : startStock(where, "指示")),
       sendq: () => send("q"), sendc: () => send("c"), senda: () => send("a"),
@@ -1039,7 +1051,7 @@ function PC() {
     : focus === "prompt" ? [["Ctrl+w k", "会話へ移る (入力欄は開いたまま)"]]
     : /^VISUAL/.test(mode) ? [["Space q", "選んだ箇所に質問"], ["Space c", "選んだ箇所に指示"], ["y", "コピー"], ["Esc", "やめる"]]
     : hereStock ? [["cc", `この${hereStock.kind}を直す`], ["dd", "取り消す"], ["Space l", "ストックの一覧"], ["Space s a", "全部送る"]]
-    : here?.choice ? [["Enter", "この選択肢で答える"], ["番号 Enter", "番号で選ぶ"], ["i", "文章で答える"]]
+    : here?.choice ? [["Enter", "この選択肢を選ぶ (もう一度で外す)"], ["番号 Enter", "番号で選ぶ"], ["i", "入力"]]
     : here?.num ? [["Enter", "実行する"], ["番号 Enter", "番号の操作を実行する"], ["j k", "選ぶ"]]
     : here?.queued ? [["cc", "直す"], ["dd", "取り消す (届く前だけ)"]]
     : here?.field ? [["i", `${here.field}を書く`], ["-", "戻る"]]
@@ -1165,6 +1177,7 @@ function Phone() {
   const [seen, setSeen] = useState(new Set());
   const [pick, setPick] = useState(null);
   const [ans, setAns] = useState(null);
+  const [a2, setA2] = useKept("phone.a2", "");
   const [draft, setDraft] = useKept("phone.draft", "");
   const [reply, setReply] = useState(null);
   const [sheet, setSheet] = useState(() => once("phone.sheet"));
@@ -1271,13 +1284,18 @@ function Phone() {
             <div id="pq1" className="rounded-lg bg-surface border border-line p-3">
               <p className="font-bold">{CONV[at("q1")].t}</p>
               {[["A", "1 分ごとの定期処理で戻す", "推奨"], ["B", "次の引き当てのときに戻す", ""]].map(([k, t, tag]) => (
-                <button key={k} disabled={!!ans} onClick={() => setPick(k)} aria-pressed={pick === k} className={`mt-2 w-full min-h-[44px] rounded-lg border px-3 text-left text-[14px] flex items-center gap-2 ${pick === k ? "border-accent bg-sel" : "border-line active:bg-raised"}`}>
-                  <span className="font-bold">{k}</span><span className="flex-1">{t}</span>{tag && <span className="text-[12px] text-accent font-bold">{tag}</span>}
+                <button key={k} disabled={!!ans} onClick={() => setPick(pick === k ? null : k)} aria-pressed={pick === k} className={`mt-2 w-full min-h-[44px] rounded-lg border px-3 text-left text-[14px] flex items-center gap-2 ${pick === k ? "border-accent bg-sel" : "border-line active:bg-raised"}`}>
+                  <span className="font-bold">{k}</span><span className="flex-1">{t}</span>{pick === k ? <span className="text-[12px] text-accent font-bold">{ans ? "送った回答" : "選んだ"}</span> : tag && <span className="text-[12px] text-muted font-bold">{tag}</span>}
                 </button>))}
-              {ans ? <p className="mt-2 text-[13px] text-done font-bold">{ans} で答えました</p>
-                : <button disabled={!pick} onClick={() => { const k = pick; setAns(k); say(`${k} で答えました`, () => setAns(null)); }} className="mt-2 w-full h-11 rounded-lg bg-accent text-ground font-bold disabled:bg-raised disabled:text-muted">{pick ? `${pick} で答える` : "選んでから答える"}</button>}
             </div>
-            <div id="pq2" className="rounded-lg bg-surface border border-line p-3"><p className="font-bold">{CONV[at("q2")].t}</p><button onClick={() => setReply("Q2")} className="mt-2 w-full h-11 rounded-lg border border-line font-bold text-[14px]">Q2 に文章で答える</button></div>
+            <div id="pq2" className="rounded-lg bg-surface border border-line p-3"><p className="font-bold">{CONV[at("q2")].t}</p>
+              {ans ? <p className="mt-2 text-[14px]">{a2 || "(答えていない)"}</p> : <textarea aria-label="Q2 への回答" rows={2} value={a2} onChange={(e) => setA2(e.target.value)} placeholder="文章で答える" className="mt-2 w-full rounded-lg border border-line bg-ground px-3 py-2 text-[16px] leading-6" />}
+            </div>
+            {ans ? <p className="text-[13px] text-done font-bold">回答をまとめて送りました</p> : (
+              <div>
+                <button disabled={!pick && !a2.trim()} onClick={() => { setAns(true); say("回答を 1 通にまとめて送りました", () => setAns(null)); }} className="w-full h-12 rounded-lg bg-accent text-ground font-bold disabled:bg-raised disabled:text-muted">回答をまとめて送る ({(pick ? 1 : 0) + (a2.trim() ? 1 : 0)} / 2 件)</button>
+                {(pick || a2.trim()) && !(pick && a2.trim()) && <p className="mt-1 text-[12px] text-wait">答えていない質問が 1 件あります。このまま送ることもできます。</p>}
+              </div>)}
           </div>
         </div>
         </>) : (
@@ -1519,6 +1537,7 @@ const SKETCH_VIEWS = {
   "pc-home--whichkey": pc({ s: "home" }, null, { once: { "pc.leader": " " } }),
   "pc-home--switch": pc({ s: "home" }, "switch"),
   "pc-conv--recent": pc(CONV_V, "recent"),
+  "pc-conv--answers": pc(CONV_V, null, { keep: { "pc.answers": { q1: "A", q2: "変えられるようにして。既定は 30 分" } } }),
   "pc-conv--toc": pc(CONV_V, "toc"),
   "pc-conv--decisions": pc(CONV_V, "decisions"),
   "pc-conv--stock": pc(CONV_V, "stock", { keep: { "pc.stock": STOCK_DEMO } }),
