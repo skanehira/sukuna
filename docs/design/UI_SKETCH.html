@@ -35,8 +35,6 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap">
 <style>
 :root { --ground:#f4f5f7; --surface:#ffffff; --raised:#eceef2; --line:#e1e4ea; --ink:#1a1d24; --muted:#646c7c; --sel:#dde1ff; --accent:#4753d6; --done:#1c8650; --doing:#946200; --wait:#b8264c; --add:#e0f4e7; --del:#fde4e9; color-scheme:light; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme=light]) { --ground:#0e1014; --surface:#15181e; --raised:#242a36; --line:#333949; --ink:#e7e9ee; --muted:#a2a9b8; --sel:#2c3566; --accent:#8b9bff; --done:#57c785; --doing:#e2b04a; --wait:#ff7d93; --add:#12301f; --del:#3a1a22; color-scheme:dark; } }
-:root[data-theme=dark] { --ground:#0e1014; --surface:#15181e; --raised:#242a36; --line:#333949; --ink:#e7e9ee; --muted:#a2a9b8; --sel:#2c3566; --accent:#8b9bff; --done:#57c785; --doing:#e2b04a; --wait:#ff7d93; --add:#12301f; --del:#3a1a22; color-scheme:dark; }
 body { background:var(--ground); color:var(--ink); font-family:"Zen Kaku Gothic New","Hiragino Sans",sans-serif; -webkit-font-smoothing:antialiased; word-break:auto-phrase; }
 @keyframes pulse { 50% { opacity:.5; } }
 ::selection { background:var(--sel); }
@@ -58,7 +56,7 @@ tailwind.config = { theme: { extend: {
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { createRoot } from "react-dom/client";
 import { EditorState, RangeSetBuilder, Prec } from "@codemirror/state";
-import { EditorView, Decoration, drawSelection, highlightActiveLine, gutter, GutterMarker, WidgetType } from "@codemirror/view";
+import { EditorView, Decoration, drawSelection, highlightActiveLine, gutter, GutterMarker } from "@codemirror/view";
 import { vim, Vim, getCM } from "@replit/codemirror-vim";
 
 /* ------------------------------------------------------------------ *
@@ -157,11 +155,11 @@ const LIST = [
   { sect: "判断待ち", project: "shop-api", title: "#42 在庫の引き当てを追加する", why: "設計の承認", ago: "12分前", unread: true, go: { s: "issue", project: "shop-api", issue: 42, tab: 1 } },
   { sect: "判断待ち", project: "shop-api", title: "会話: 予約 API の壁打ち", why: "質問 2 件: 期限切れの戻し方 ほか", ago: "5分前", unread: true, go: { s: "conv", project: "shop-api", conv: 0 } },
   { sect: "判断待ち", project: "booking-web", title: "#8 カレンダーの祝日表示", why: "merge 前の確認", ago: "25分前", go: { s: "issue", project: "booking-web", issue: 8, tab: 2 } },
-  { sect: "判断待ち", project: "shop-api", title: "#44 返金の扱いを決める", why: "利用枠切れで停止", ago: "3時間前", go: { s: "issue", project: "shop-api", issue: 44, tab: 4 } },
+  { sect: "判断待ち", project: "shop-api", title: "#44 返金の扱いを決める", why: "利用枠切れで停止", ago: "3時間前", go: { s: "issue", project: "shop-api", issue: 44, tab: 0 } },
   { sect: "指示待ち", project: "notes-cli", title: "会話: README の見直し", why: "構成の案を 3 つ出しました", ago: "8分前", unread: true, go: { s: "conv", project: "notes-cli", conv: 0 } },
   { sect: "指示待ち", project: "shop-api", title: "会話: エラー処理の調査", why: "原因は再試行の上限でした", ago: "2時間前", go: { s: "conv", project: "shop-api", conv: 1 } },
-  { sect: "作業中", project: "shop-api", title: "#43 注文 CSV の文字化けを直す", why: "実装 11分 · Bash(npm test -- csv)", ago: "1分前", go: { s: "issue", project: "shop-api", issue: 43, tab: 3 } },
-  { sect: "作業中", project: "booking-web", title: "#7 予約の変更画面を作る", why: "設計 4分 · Read(docs/design/DESIGN.md)", ago: "30秒前", go: { s: "issue", project: "booking-web", issue: 7, tab: 3 } },
+  { sect: "作業中", project: "shop-api", title: "#43 注文 CSV の文字化けを直す", why: "実装 11分 · Bash(npm test -- csv)", ago: "1分前", go: { s: "issue", project: "shop-api", issue: 43, tab: 0 } },
+  { sect: "作業中", project: "booking-web", title: "#7 予約の変更画面を作る", why: "設計 4分 · Read(docs/design/DESIGN.md)", ago: "30秒前", go: { s: "issue", project: "booking-web", issue: 7, tab: 0 } },
 ];
 const SECTIONS = [["判断待ち", "判断しないと作業が進まないもの"], ["指示待ち", "作業が一区切りし、次の指示を待つもの"], ["作業中", "AI が作業しているもの"]];
 const goKey = (g) => `${g.s}-${g.project}-${g.issue ?? ""}-${g.conv ?? ""}`;
@@ -199,49 +197,16 @@ const prOf = (v) => v.issue === 8 ? [
   { k: "action", t: "指摘を書いて実装に戻す", act: "reject" },
 ] : [{ k: "note", t: "PR はまだありません。実装が終わると、ここに差分と CI の結果が出ます。" }];
 const ST = { done: ["●", "text-done", "完了"], doing: ["◐", "text-doing", "進行中"], todo: ["○", "text-muted", "未着手"], block: ["✕", "text-wait", "停止"] };
-/* エージェントの表示の行。工程の流れ、エージェントの表、直近の操作の 3 つで状況を示す */
-const flow = (parts) => ({ k: "flow", parts });
-const agent = (st, d, name, state, ago, doing) => ({ k: "agent", st, d, go: { s: "agentconv", agent: name }, cols: [`${"    ".repeat(d)}${ST[st][0]} ${name}`, state, ago, doing] });
-/* エージェントごとの会話。エージェントの行を選ぶと開き、そのエージェントと会話できる */
-const AGENT_CONV = {
-  "/dev-impl (親)": [["ai", "/dev-impl (親)"], ["text", "着手順を決めました。#43 は依存が無いので、すぐ実装を依頼します。"], ["tool", "● Agent(dev-impl-implementer)  実行中 11分"], ["text", "実装が終わったら、review-impl にレビューを依頼します。"]],
-  "dev-impl-implementer": [["ai", "/dev-impl (親)"], ["text", "#43 を実装してください。設計は docs/design/features/csv.md にあります。"], ["ai", "dev-impl-implementer"], ["text", "CSV の文字コードの判定から直します。"], ["tool", "● Read(src/export/csv.ts)  120 行"], ["tool", "● Update(src/export/csv.ts)  追加 6 行、削除 3 行"],
-    ["del", "  41 - const text = buffer.toString()"], ["add", "  41 + const text = decode(buffer, detectEncoding(buffer))"], ["tool", "● Bash(npm test -- csv)  実行中"], ["text", "文字コードの判定を追加しています。"]],
-  "review-impl": [["note", "まだ始まっていません。実装が終わると始まります。"]],
-  "/dev-feat-spec (親)": [["ai", "/dev-feat-spec (親)"], ["text", "予約の変更に関わる画面と API を洗い出しています。"], ["tool", "● Read(docs/design/USECASES.md)  812 行"], ["tool", "● Read(docs/design/DESIGN.md)  実行中"]],
-};
-const agentConv = (v) => mk(AGENT_CONV[v.agent] || [["note", "このエージェントの会話はありません。"]]);
-const agentsOf = (v) => v.issue === 43 ? [
-  { k: "head", t: "工程" },
-  flow([["done", "精査"], ["done", "設計"], ["doing", "実装 11分"], ["todo", "レビュー"], ["todo", "PR"], ["todo", "merge"]]),
-  { k: "head", t: "エージェント" },
-  { k: "ahead", of: "agent", cols: ["名前", "状態", "経過", "いましていること"] },
-  agent("doing", 0, "/dev-impl (親)", "実行中", "18分", "実装を依頼して、結果を待っている"),
-  agent("doing", 1, "dev-impl-implementer", "実行中", "11分", "Bash npm test -- csv"),
-  agent("todo", 1, "review-impl", "待機中", "—", "実装が終わると始まる"),
-  { k: "note", t: "エージェントの行で Enter を押すと、そのエージェントの会話が開き、指示を送れます。" },
-  { k: "head", t: "操作" },
-  { k: "action", t: "#43 のエージェントを止める", act: "stop" },
-] : v.issue === 7 ? [
-  { k: "head", t: "工程" },
-  flow([["done", "精査"], ["doing", "設計 4分"], ["todo", "設計レビュー"], ["todo", "実装"], ["todo", "レビュー"], ["todo", "PR"], ["todo", "merge"]]),
-  { k: "head", t: "エージェント" },
-  { k: "ahead", of: "agent", cols: ["名前", "状態", "経過", "いましていること"] },
-  agent("doing", 0, "/dev-feat-spec (親)", "実行中", "4分", "Read docs/design/DESIGN.md"),
-  { k: "note", t: "エージェントの行で Enter を押すと、そのエージェントの会話が開き、指示を送れます。" },
-  { k: "head", t: "操作" },
-  { k: "action", t: "#7 のエージェントを止める", act: "stop" },
-] : [{ k: "note", t: "いま動いているエージェントはありません。" }];
-const infoOf = (v) => {
-  const i = ISSUES.find((x) => x.id === v.issue && x.project === v.project) || ISSUES[0];
-  return [
-    kv("状態", i.state), kv("状況", i.why || "なし"), kv("優先度", "高"), kv("worktree", `issue-${i.id}`), kv("親", "#40 在庫管理"), kv("依存", "なし"), kv("merge 前の確認", "しない"),
-    { k: "head", t: "操作" },
-    { k: "action", t: "編集する", go: { s: "issueForm" } },
-    ...(i.why === "利用枠切れで停止" ? [{ k: "action", t: "再開する", act: "resume" }] : []),
-    { k: "action", t: "取り下げて閉じる", act: "close" },
-  ];
-};
+/* 利用枠切れで止まった issue の会話。止まった理由と、再開の操作を末尾に出す */
+const STOPPED = mk([
+  ["you", "あなた"],
+  ["text", "#44 の方針を決めたい。部分返金を許すかどうかを調べて。"],
+  ["ai", "AI"],
+  ["text", "決済の仕様と、過去の返金の件数を調べています。"],
+  ["tool", "● Read(docs/payment.md)  210 行"],
+  ["sep", "──── 止まっています: 利用枠を使い切りました。15:00 に戻り、自動で再開します ────"],
+  ["action", "いま再開する", { act: "resume" }],
+]);
 const FILES = [
   { k: "dir", t: "▾ docs" },
   { k: "file", t: "    DESIGN.md", go: { s: "file", file: "docs/DESIGN.md" } },
@@ -262,15 +227,15 @@ const grepOf = (q) => [
 const rkv = (a, b) => ({ k: "rkv", cols: [a, b] });
 const task = (st, d, t, pct, detail) => ({ k: "task", st, d, detail, cols: [`${"    ".repeat(d)}${ST[st][0]} ${t}`, ST[st][2], pct] });
 const TASK_TREE = [
-  rkv("進み", "50%  (末端のタスク 2 / 4)"), rkv("内訳", "完了 2 · 停止 1 · 未着手 1"), rkv("経過", "18分"),
+  rkv("進み", "50.00%  (末端のタスク 2 / 4)"), rkv("内訳", "完了 2 · 停止 1 · 未着手 1"), rkv("経過", "18分"),
   { k: "bar", parts: [10, 0, 5, 5] },
   { k: "head", t: "タスク" },
   { k: "ahead", of: "task", cols: ["タスク", "状態", "進み"] },
-  task("done", 0, "文字コードの判定", "100%", 0),
-  task("doing", 0, "CSV の書き出し", "50%", 1),
-  task("done", 1, "正常系", "100%", 1),
-  task("todo", 1, "BOM 付きのとき", "0%", 1),
-  task("block", 0, "Excel での確認", "0%", 2),
+  task("done", 0, "文字コードの判定", "100.00%", 0),
+  task("doing", 0, "CSV の書き出し", "50.00%", 1),
+  task("done", 1, "正常系", "100.00%", 1),
+  task("todo", 1, "BOM 付きのとき", "0.00%", 1),
+  task("block", 0, "Excel での確認", "0.00%", 2),
   { k: "head", t: "報告 (3 分ごと)" },
   rkv("13:42", "文字コードの判定が終わり、書き出しの正常系を実装した。"),
   rkv("13:39", "文字コードの判定を始めた。"),
@@ -282,14 +247,14 @@ const TASK_DETAIL = [
   { k: "head", t: "コメント" },
   rkv("13:40", "あなた: BOM 付きのときの扱いも決めてください"),
   { k: "head", t: "履歴" },
-  rkv("13:42", "0% → 50%  正常系が完了"),
+  rkv("13:42", "0.00% → 50.00%  正常系が完了"),
   rkv("13:39", "着手"),
 ];
 const hk = (a, b, c) => ({ k: "key", cols: [a, b, c || "どこでも"] });
 const HELP = [
   { k: "note", t: "Ctrl を使うキーは macOS のブラウザを前提にしています。Windows と Linux では、ブラウザのショートカットと重なるものがあります。" },
   { k: "head", t: "開く・戻る" },
-  hk("Enter", "開く・選ぶ"), hk("-", "1 つ前の画面へ戻る"), hk("Ctrl+l / Ctrl+h", "issue の中の次 / 前の表示へ", "issue (主のウィンドウ)"),
+  hk("Enter", "開く・選ぶ"), hk("番号 + Enter", "その番号の操作を実行する (例: 2 Enter)", "操作の一覧がある画面"), hk("-", "1 つ前の画面へ戻る"), hk("Ctrl+l / Ctrl+h", "issue の中の次 / 前の表示へ", "issue (主のウィンドウ)"),
   hk("Ctrl+o", "飛ぶ前の位置へ戻る", "会話"), hk("Space h", "一覧を開く"), hk("Space p", "ツリーへ移る"), hk("Space n", "会話を始める・切り替える"), hk("Space b", "会話とスレッドの一覧 (閉じたものを含む)"), hk("Space z", "会話を締めくくる", "会話"),
   { k: "head", t: "ウィンドウ" },
   hk("Ctrl+w h / l", "左 / 右のウィンドウへ"), hk("Ctrl+w j / k", "入力欄へ / 会話へ", "入力欄を開いているとき"), hk("Ctrl+h", "1 つ前の表示へ戻る", "右のウィンドウ"), hk("q", "閉じる", "右のウィンドウ"),
@@ -331,7 +296,7 @@ const settingsOf = (paused, conf) => {
 /* ------------------------------------------------------------------ *
  * 画面の中身 (どの画面も「行の並び」= バッファとして作る)
  * ------------------------------------------------------------------ */
-const issueGo = (i) => (i.state === "下書き" ? { s: "issueForm", project: i.project } : { s: "issue", project: i.project, issue: i.id, tab: i.state === "設計レビュー" ? 1 : i.why === "merge 前の確認" ? 2 : i.why === "利用枠切れで停止" ? 4 : 0 });
+const issueGo = (i) => (i.state === "下書き" ? { s: "issueForm", project: i.project } : { s: "issue", project: i.project, issue: i.id, tab: i.state === "設計レビュー" ? 1 : i.why === "merge 前の確認" ? 2 : 0 });
 const issueRow = (i, withProject) => ({ k: withProject ? "row" : "irow", cols: withProject ? [`#${i.id} ${i.title}`, i.why || i.state, i.project, i.ago] : [`#${i.id} ${i.title}`, i.why || "—", i.ago], sect: i.wait ? "判断待ち" : "", go: issueGo(i) });
 function linesOf(v, ctx) {
   switch (v.s) {
@@ -348,9 +313,8 @@ function linesOf(v, ctx) {
         { k: "action", t: "会話を始める", act: "newconv:" + p.id },
       ];
     }
-    case "issue": return [CONV, designOf(v), prOf(v), agentsOf(v), infoOf(v)][v.tab || 0];
+    case "issue": return [CONV, designOf(v), prOf(v)][v.tab || 0];
     case "conv": return v.project === "shop-api" && !v.conv ? CONV : otherConv(convNameOf(v));
-    case "agentconv": return agentConv(v);
     case "file": return fileBody(v.file);
     case "grep": return grepOf(ctx.query || "reserve");
     case "search": return [
@@ -383,13 +347,13 @@ function linesOf(v, ctx) {
     default: return [{ k: "text", t: "" }];
   }
 }
-const TABS = ["会話", "設計", "差分", "エージェント", "情報"];
+const TABS = ["会話", "設計", "差分"];
 function convNameOf(v) { return (PROJECTS.find((p) => p.id === v.project)?.convs[v.conv || 0]) || "新しい会話"; }
 const convName = (v) => (PROJECTS.find((p) => p.id === v.project)?.convs[v.conv || 0]) || "新しい会話";
 const issueName = (v) => { const i = ISSUES.find((x) => x.id === v.issue && x.project === v.project); return i ? `#${i.id} ${i.title}` : `#${v.issue}`; };
 const titleOf = (v) => ({
   home: "一覧", project: `プロジェクト ${v.project}`, issue: `${v.project} / ${issueName(v)}`,
-  conv: `${v.project} / 会話: ${convName(v)}`, agentconv: `${v.project} / ${issueName(v)} / ${v.agent}`, file: v.file, grep: "ファイルの中身を検索", search: "issue と会話を検索", convs: "会話とスレッドの一覧", help: "ヘルプ", settings: "設定",
+  conv: `${v.project} / 会話: ${convName(v)}`, file: v.file, grep: "ファイルの中身を検索", search: "issue と会話を検索", convs: "会話とスレッドの一覧", help: "ヘルプ", settings: "設定",
   issueForm: "issue の作成・編集 (下書き)", terminal: "ターミナル", 404: "見つかりません", offline: "サーバーにつながりません", loading: "読み込み中",
 }[v.s] || v.s);
 
@@ -401,12 +365,13 @@ const LINE = {
   head: "text-[13px] font-bold text-ink app-head", you: "!leading-5", ai: "!leading-5", text: "", ask: "font-bold", tool: "font-mono text-[12px] text-muted", note: "text-[13px] text-muted",
   choice: "", action: "", item: "", wait: "text-wait", add: "font-mono text-[12px] bg-add", del: "font-mono text-[12px] bg-del", code: "font-mono text-[13px] whitespace-pre", tree: "font-mono text-[13px] whitespace-pre",
   dir: "font-mono text-[12px] text-muted whitespace-pre", file: "font-mono text-[13px] whitespace-pre", task: "whitespace-pre", bar: "", sep: "text-accent text-[12px] font-medium", sect: "whitespace-pre app-head", row: "whitespace-pre", irow: "whitespace-pre",
-  kv: "", rkv: "app-hang", key: "", agent: "whitespace-pre", ahead: "whitespace-pre app-colhead", step: "whitespace-pre", flow: "whitespace-pre text-[13px] text-muted", wt: "whitespace-pre", queued: "text-doing", skeleton: "app-skel",
+  act: "app-act whitespace-pre", kv: "", rkv: "app-hang", key: "", agent: "whitespace-pre", ahead: "whitespace-pre app-colhead", step: "whitespace-pre", flow: "whitespace-pre text-[13px] text-muted", wt: "whitespace-pre", queued: "text-doing", skeleton: "app-skel",
 };
 const PAD = { head: 14, you: 4, ai: 4, sect: 8 };
 /* 桁の幅 (rem)。バッファの行と、ウィンドウの見出しに置く列の見出しの両方が、この値を使う */
-const W = { row: [26, 16, 8, 4.5], irow: [26, 16, 4.5], kv: [9, 0], rkv: [4, 0], key: [11, 24, 0], task: [13.5, 3.5, 2.5], agent: [17, 4, 3.5, 0], ahead: [17, 4, 3.5, 0], step: [4.5, 3.5, 16, 0], wt: [8, 7, 0] };
+const W = { act: [0, 17, 13], row: [26, 16, 8, 4.5], irow: [26, 16, 4.5], kv: [9, 0], rkv: [4, 0], key: [11, 24, 0], task: [12.5, 3.5, 3.5], agent: [17, 4, 3.5, 0], ahead: [17, 4, 3.5, 0], step: [4.5, 3.5, 16, 0], wt: [8, 7, 0] };
 const COLC = {
+  act: ["app-cap inline-block w-[1.4rem] text-center font-mono text-[11px] text-muted", "text-[13px] font-medium", "text-[12px] text-muted"],
   sect: ["text-[13px] font-bold", "text-[12px] font-mono text-muted"],
   row: ["", "text-[13px]", "font-mono text-[12px] text-muted", "text-right text-[12px] text-muted"],
   irow: ["", "text-[13px]", "text-right text-[12px] text-muted"],
@@ -470,24 +435,28 @@ const numGutter = (lines) => gutter({ class: "app-num", lineMarkerChange: (u) =>
 const signGutter = (lines, marks) => gutter({ class: "app-sign", renderEmptyElements: true, lineMarker: (v, b) => { const n = v.state.doc.lineAt(b.from).number - 1, m = marks?.[n]; return m ? new Sign(m, PAD[lines[n]?.k] || 0) : null; } });
 const BAR = ["text-done", "text-doing", "text-wait", "text-line"];
 const END = new Set(["sep", "head", "queued", "sect", "row", "note"]);
-const PILL = "inline-block rounded-md border px-3 text-[13px] leading-[20px]";
 const MAIN_ACT = new Set(["senda", "approve", "submit", "merge"]);
 const colsOf = (l) => l.cols.map((c) => c || "—");
 const textOf = (l) => l.cols ? colsOf(l).join("  ") : l.k === "flow" ? l.parts.map(([st, t]) => `${ST[st][0]} ${t}`).join("  ›  ") : l.k === "bar" ? "━".repeat(l.parts.reduce((a, b) => a + b)) : (l.t || "");
-/* 選択肢の先頭の [ ] と [x] は、文字はそのまま残し、チェックボックスとして描く */
-class Check extends WidgetType {
-  constructor(on) { super(); this.on = on; }
-  eq(o) { return o.on === this.on; }
-  toDOM() {
-    const e = document.createElement("span");
-    e.setAttribute("role", "checkbox"); e.setAttribute("aria-checked", String(this.on));
-    e.className = "inline-block w-[14px] h-[14px] rounded-[3px] border align-[-2px] mr-1 " + (this.on ? "bg-accent border-accent" : "bg-surface border-muted");
-    if (this.on) e.innerHTML = '<svg viewBox="0 0 14 14" width="12" height="12" fill="none" stroke="var(--surface)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M3 7.5l2.5 2.5L11 4.5"/></svg>';
-    return e;
-  }
-}
 /* 桁の幅。ウィンドウが狭いときは、同じ比率のまま縮める (列の見出しも同じ式を使う) */
-const colW = (kind, m) => { const ws = W[kind] || [], w = ws[m]; if (!w) return null; return `min(${w}rem, ${((w / ws.reduce((a, b) => a + b, 0)) * (ws.includes(0) ? 55 : 86)).toFixed(1)}cqw)`; };
+const colW = (kind, m) => { const ws = W[kind] || [], w = ws[m]; if (!w) return null; return `min(${w}rem, ${((w / ws.reduce((a, b) => a + b, 0)) * (kind === "act" ? 76 : ws.includes(0) ? 55 : 86)).toFixed(1)}cqw)`; };
+/* 操作と選択肢の行を、番号・名前・結果の説明の 3 桁を持つメニューの行に変える */
+const ACT_DESC = { approve: "設計書を反映して、実装を始める", reject: "指摘を書く入力欄が開く", merge: "CI が通ると merge する", senda: "質問はスレッドに、指示は 1 通で届く", sendq: "質問ごとにスレッドが始まる", sendc: "1 通にまとめて届く",
+  finish: "指示としてストックに入る", close: "後で印から開ける", halt: "このスレッドだけ", reopen: "続きを書ける", closeconv: "一覧から外れる。後で開き直せる", backconv: "閉じずに続ける", resume: "止まった段階から続ける",
+  submit: "AI が精査を始める", draft: "AI は動かない", pause: "全プロジェクトに効く", restore: "確認のうえ復元する", import: "下書きとして入る", unregister: "確認のうえ解除する", newconv: "プロジェクトのディレクトリで始める", newconvwt: "新しい worktree で始める",
+  newworktree: "名前を付けて作る", continue: "残りのタスクを進める", answer: "入力欄が開く", reload: "もう一度読み込む" };
+const DANGER = new Set(["halt", "unregister"]);
+function menuize(lines, answered) {
+  let n = 0;
+  return lines.map((l, i) => {
+    if (l.k !== "action" && l.k !== "choice") return l;
+    const is = (x) => x && (x.k === "action" || x.k === "choice"), name = (l.act || "").split(":")[0];
+    const label = l.k === "choice" ? l.t.replace(/^\[[ x]\] /, "") : l.t, done = l.k === "choice" && answered === l.choice;
+    n += 1;
+    return { ...l, k: "act", num: n, first: !is(lines[i - 1]), last: !is(lines[i + 1]), main: MAIN_ACT.has(l.act), danger: DANGER.has(name), done,
+      cols: [String(n), label, l.k === "choice" ? (done ? "✓ この回答を送った" : "この選択肢で答える") : ACT_DESC[name] || (l.go ? "開く" : "")] };
+  });
+}
 function decorate(lines, doc) {
   const b = new RangeSetBuilder();
   let mine = false;
@@ -495,19 +464,17 @@ function decorate(lines, doc) {
     const line = doc.line(n + 1);
     /* 発言の持ち主を、次の発言者の行まで引き継ぐ。持ち主ごとに左の帯と地の色を変える */
     if (l.k === "you" || l.k === "ai") mine = l.k; else if (END.has(l.k)) mine = false;
-    const body = (x) => x && !END.has(x.k) && x.k !== "you" && x.k !== "ai";
+    const body = (x) => x && !END.has(x.k) && x.k !== "you" && x.k !== "ai" && x.k !== "act";
     const own = mine && body(l) ? ` app-${mine}` + (!body(lines[n - 1]) ? " app-turn-a" : "") + (!body(lines[n + 1]) ? " app-turn-z" : "") : "";
-    b.add(line.from, line.from, Decoration.line({ class: (LINE[l.k] || "") + own, ...(PAD[l.k] ? { attributes: { style: `padding-top:${PAD[l.k]}px` } } : {}) }));
+    b.add(line.from, line.from, Decoration.line({ class: (LINE[l.k] || "") + (l.k === "act" ? (l.first ? " app-act-a" : "") + (l.last ? " app-act-z" : "") : "") + own, ...(PAD[l.k] ? { attributes: { style: `padding-top:${PAD[l.k]}px` } } : {}) }));
     if ((l.k === "you" || l.k === "ai") && line.length) b.add(line.from, line.to, Decoration.mark({ class: "inline-block rounded px-1.5 leading-4 text-[12px] font-bold " + (l.k === "you" ? "bg-accent text-surface" : "bg-raised text-ink") }));
-    if (l.choice && /^\[[ x]\]/.test(l.t)) b.add(line.from, line.from + 3, Decoration.replace({ widget: new Check(l.t[1] === "x") }));
-    if (l.k === "action" && line.length) b.add(line.from, line.to, Decoration.mark({ class: PILL + (MAIN_ACT.has(l.act) || (l.act || "").startsWith("finish") ? " border-accent bg-accent text-surface font-bold" : l.k === "action" ? " border-line bg-surface font-medium" : " border-line bg-surface") }));
     if (l.k === "bar") { let p = line.from; l.parts.forEach((w, m) => { if (w) b.add(p, p + w, Decoration.mark({ class: BAR[m] })); p += w; }); }
     else if (l.k === "flow") { let p = line.from; l.parts.forEach(([st, t]) => { b.add(p, p + t.length + 2, Decoration.mark({ class: st === "doing" ? "text-ink font-bold" : st === "done" ? "text-ink" : "" })); b.add(p, p + 1, Decoration.mark({ class: ST[st][1] })); p += t.length + 2 + 5; }); }
     else if (l.cols) {
       let p = line.from;
       colsOf(l).forEach((c, m) => {
         const w = colW(l.of || l.k, m);
-        const extra = (l.k === "row" || l.k === "irow") && m === 0 ? (l.unread ? " font-bold" : "") : (l.k === "row" || l.k === "irow") && m === 1 ? (l.sect === "判断待ち" ? " text-wait" : " text-muted") : (l.k === "task" || l.k === "agent") && m === 1 ? " " + ST[l.st][1] : "";
+        const extra = l.k === "act" ? (m === 0 && l.main ? " app-cap-main" : m === 1 ? (l.main ? " font-bold" : l.danger ? " text-wait" : "") + (l.done ? " text-accent" : "") : "") : (l.k === "row" || l.k === "irow") && m === 0 ? (l.unread ? " font-bold" : "") : (l.k === "row" || l.k === "irow") && m === 1 ? (l.sect === "判断待ち" ? " text-wait" : " text-muted") : (l.k === "task" || l.k === "agent") && m === 1 ? " " + ST[l.st][1] : "";
         b.add(p, p + c.length, Decoration.mark({ class: (w ? "inline-block align-bottom whitespace-pre overflow-hidden text-ellipsis " : "") + (COLC[l.k]?.[m] || "") + extra, ...(w ? { attributes: { style: `width:${w}` } } : {}) }));
         if (l.st && m === 0) b.add(p + l.d * 4, p + l.d * 4 + 1, Decoration.mark({ class: ST[l.st][1] }));
         p += c.length + 2;
@@ -530,6 +497,11 @@ const THEME = (side) => EditorView.theme({
   ".cm-line.bg-add, .cm-line.bg-del": { borderRadius: "0" },
   /* 見出しは、濃い太字と下の線で中身と分ける。列の見出しは、薄い地の帯にする。ツリーのプロジェクト名は線を引かない */
   ...(side === "tree" ? { ".cm-line.app-head": { color: "var(--muted)", fontSize: "12px" } } : { ".cm-line.app-head": { borderBottom: "1px solid var(--line)", borderRadius: "0", paddingBottom: "2px" } }),
+  /* 操作の一覧。枠で囲んだメニューの行として描く。番号 + Enter か、行で Enter で実行する */
+  ".cm-line.app-act": { marginLeft: "8px", marginRight: "16px", padding: "0 8px", borderLeft: "1px solid var(--line)", borderRight: "1px solid var(--line)", borderTop: "1px solid var(--line)", borderRadius: "0", backgroundColor: "var(--surface)", overflow: "hidden", textOverflow: "ellipsis" },
+  ".cm-line.app-act-a": { borderTopLeftRadius: "6px", borderTopRightRadius: "6px" }, ".cm-line.app-act-z": { borderBottom: "1px solid var(--line)", borderBottomLeftRadius: "6px", borderBottomRightRadius: "6px" },
+  "&.cm-focused .cm-activeLine.app-act": { backgroundColor: "var(--sel)" },
+  ".app-cap": { border: "1px solid var(--line)", borderRadius: "4px", lineHeight: "16px", backgroundColor: "var(--surface)" }, ".app-cap-main": { borderColor: "var(--accent)", color: "var(--accent)" },
   ".cm-line.app-colhead": { borderBottom: "1px solid var(--line)", borderRadius: "0" },
   /* 項目と値の行が折り返したら、2 行目も値の位置から始める */
   ".cm-line.app-hang": { paddingLeft: "calc(4rem + 12px)", textIndent: "calc(-4rem - 8px)" }, ".cm-line.app-hang > span": { textIndent: "0" },
@@ -721,6 +693,7 @@ function PC() {
   const [leader, setLeader] = useState(() => once("pc.leader") ?? "");
   const [confirm, setConfirm] = useState(() => once("pc.confirm"));
   const [query, setQuery] = useKept("pc.query", "");
+  const [pick, setPick] = useState(0);
   const [offline, setOffline] = useKept("pc.offline", false);
   const [closed, setClosed] = useKept("pc.closed", CLOSED0);
   const [gone, setGone] = useKept("pc.gone", []);
@@ -736,13 +709,13 @@ function PC() {
     setMsg({ id, t, kind, at: Date.now() });
     if (kind !== "error") setTimeout(() => setMsg((m) => (m && m.id === id ? null : m)), 4000);
   }, []);
-  const isChat = (x) => x.s === "conv" || x.s === "agentconv" || (x.s === "issue" && (x.tab || 0) === 0);
+  const isChat = (x) => x.s === "conv" || (x.s === "issue" && (x.tab || 0) === 0);
   const isWorking = (x) => x.s === "issue" && x.issue === 43 && (x.tab || 0) === 0;
   const hasUnread = (x) => isChat(x) && !isWorking(x) && !seen.has(goKey(x)) && (x.s === "issue" || (x.s === "conv" && x.project === "shop-api" && !x.conv));
   /* 画面を開く。replace のときは履歴に積まない (issue の中の表示の切り替え) */
   const open = useCallback((g, replace) => {
     setHist((h) => {
-      const cur = h[h.length - 1], n = { ...(g.s ? { project: cur.project, ...(g.s === "file" || g.s === "issueForm" || g.s === "agentconv" ? { issue: cur.issue, conv: cur.conv, from: cur.s } : {}) } : cur), ...g };
+      const cur = h[h.length - 1], n = { ...(g.s ? { project: cur.project, ...(g.s === "file" || g.s === "issueForm" ? { issue: cur.issue, conv: cur.conv, from: cur.s } : {}) } : cur), ...g };
       if (!("tab" in g) && g.s) n.tab = 0;
       return replace ? [...h.slice(0, -1), n] : [...h, n];
     });
@@ -759,14 +732,15 @@ function PC() {
   const project = v.project || "shop-api";
   const chat = isChat(v), working = isWorking(v);
   /* 見本の会話 (目次や判断することを持つ) を開いているか */
-  const rich = chat && !working && (v.s === "issue" || (v.s === "conv" && v.project === "shop-api" && !v.conv));
+  const stopped = v.s === "issue" && (v.tab || 0) === 0 && issueOf(v)?.why === "利用枠切れで停止";
+  const rich = chat && !working && !stopped && (v.s === "issue" || (v.s === "conv" && v.project === "shop-api" && !v.conv));
   /* 質問と指示の送り先。会話か issue を開いていればそれ、ファイルなどを開いていれば、開く前の会話 */
-  const chatV = [...hist].reverse().find((x) => x.s === "conv" || x.s === "issue" || x.s === "agentconv");
-  const dest = chatV && (v.s === "conv" || v.s === "issue" || v.s === "file" || v.s === "agentconv") ? (chatV.s === "conv" ? `会話: ${convName(chatV)}` : chatV.s === "agentconv" ? `${chatV.agent} (#${chatV.issue})` : issueName(chatV)) : "";
+  const chatV = [...hist].reverse().find((x) => x.s === "conv" || x.s === "issue");
+  const dest = chatV && (v.s === "conv" || v.s === "issue" || v.s === "file") ? (chatV.s === "conv" ? `会話: ${convName(chatV)}` : issueName(chatV)) : "";
   const ckey = dest ? `${chatV.project}-${chatV.issue ?? ""}-${chatV.conv ?? ""}-${chatV.s}-${chatV.agent ?? ""}` : "";
   const stockHere = stock.filter((s) => s.ckey === ckey).sort((a, b) => a.line - b.line);
   const threadsHere = threads.filter((t) => t.ckey === ckey);
-  const side = v.s === "home" ? "list" : v.s === "issue" && (v.tab === 4 || v.tab === 3) ? "table" : TABLES.has(v.s) ? "table" : "main";
+  const side = v.s === "home" ? "list" : TABLES.has(v.s) ? "table" : "main";
   const treeLines = [
     { k: "item", t: "一覧", go: { s: "home" } },
     ...PROJECTS.flatMap((p) => [
@@ -779,6 +753,7 @@ function PC() {
   ];
   let mainLines = v.s === "home" ? listLines(seen, hidden)
     : v.s === "terminal" ? term.map((t) => ({ k: "code", t }))
+    : stopped ? STOPPED
     : working ? [...WORKING, ...queue.map((q) => ({ k: "queued", t: `届く前の指示: ${q.text}`, queued: q.id }))]
     : rich ? CONV.map((l) => (l.choice && answered === l.choice ? { ...l, t: l.t.replace("[ ]", "[x]") } : l))
     : linesOf(v, { form, query, paused, conf, project, hidden, closed, gone, threads });
@@ -790,7 +765,7 @@ function PC() {
   threadsHere.filter((t) => t.key === key).forEach((t) => { marks[t.line] = t.done ? "✓" : "?"; });
   if (input && input.key === key && input.line !== undefined && !input.id) for (let n = input.line; n <= input.line2; n++) marks[n] = "›";
   const stockAt = (n) => stockHere.find((s) => s.key === key && n >= s.line && n <= s.line2);
-  const treeMarks = {}; treeLines.forEach((l, n) => { if (l.go && (l.go.s === "home" || l.go.s === "settings" || l.go.s === "help" ? v.s === l.go.s : l.go.s === "project" ? v.s === "project" && v.project === l.go.project : chatV && (v.s === "conv" || v.s === "issue" || v.s === "file" || v.s === "agentconv") && goKey(l.go) === goKey(chatV.s === "agentconv" ? { ...chatV, s: "issue" } : chatV))) treeMarks[n] = "›"; });
+  const treeMarks = {}; treeLines.forEach((l, n) => { if (l.go && (l.go.s === "home" || l.go.s === "settings" || l.go.s === "help" ? v.s === l.go.s : l.go.s === "project" ? v.s === "project" && v.project === l.go.project : chatV && (v.s === "conv" || v.s === "issue" || v.s === "file") && goKey(l.go) === goKey(chatV))) treeMarks[n] = "›"; });
   const proj = PROJECTS.find((p) => p.id === project) || PROJECTS[0];
   const live = threadsHere.filter((t) => !t.done);
   const span = (s) => `${s.line + 1}${s.line2 > s.line ? "-" + (s.line2 + 1) : ""}`;
@@ -826,9 +801,10 @@ function PC() {
     : right === "switch" ? PROJECTS.flatMap((p) => [{ k: "head", t: p.id }, ...p.convs.map((c, n) => ({ k: "item", t: `会話: ${c}`, go: { s: "conv", project: p.id, conv: n } })).filter((x) => !hidden.includes(goKey(x.go))), ...ISSUES.filter((i) => i.project === p.id && !["下書き", "完了", "取り下げ"].includes(i.state)).map((i) => ({ k: "item", t: `#${i.id} ${i.title}`, go: issueGo(i) })), { k: "action", t: `${p.id} で会話を始める`, act: "newconv:" + p.id }, ...(p.id === project ? [{ k: "action", t: "worktree を作って会話を始める", act: "newconvwt" }] : [])])
     : right === "worktree" ? [...proj.worktrees.map(([w, br, use]) => ({ k: "wt", cols: [w, br, use], act: "worktree:" + w, wt: w })), { k: "text", t: "" }, { k: "action", t: "worktree を作る", act: "newworktree" }, { k: "note", t: "● は、いま開いている会話か issue が動いている場所です。" }, { k: "note", t: "main はプロジェクトのディレクトリで、worktree を作らない会話はここで動きます。" }]
     : [];
-  const wtNow = (v.s === "issue" || v.s === "agentconv") && v.issue ? `issue-${v.issue}` : wt;
+  const wtNow = v.s === "issue" && v.issue ? `issue-${v.issue}` : wt;
   const rightMarks = right === "worktree" ? Object.fromEntries(proj.worktrees.map(([w], n) => [n, w === wtNow ? "●" : ""]).filter((x) => x[1])) : undefined;
-  const linesFor = { tree: treeLines, main: mainLines, right: rightLines };
+  const mainMenu = menuize(mainLines, answered), rightMenu = menuize(rightLines, answered);
+  const linesFor = { tree: treeLines, main: mainMenu, right: rightMenu };
 
   const ask = (kind, extra) => { uid.current += 1; setInput({ uid: uid.current, kind, text: "", ...extra }); setFocus("prompt"); };
   const jump = (n) => {
@@ -852,10 +828,10 @@ function PC() {
     if (!a) return;
     const [name, arg] = a.split(":");
     if (CONFIRM[a] && !sure) return setConfirm({ a, t: CONFIRM[a] });
-    if (a === "approve") { toast("承認しました。設計書を反映し、実装を始めます", "ok"); open({ tab: 3 }, true); }
+    if (a === "approve") { toast("承認しました。設計書を反映し、実装を始めます", "ok"); open({ tab: 0 }, true); }
     else if (a === "reject") ask("差し戻し");
     else if (a === "merge") toast("merge を許可しました", "ok");
-    else if (a === "stop") toast(working || v.tab === 3 ? `${dest} の AI を止めました。作業は保存され、指示待ちになります` : "止める AI がありません");
+    else if (a === "stop") toast(working ? `${dest} の AI を止めました。作業は保存され、指示待ちになります` : "止める AI がありません");
     else if (a === "resume") toast("再開しました", "ok");
     else if (a === "continue") toast("続きを依頼しました", "ok");
     else if (a === "draft") toast("下書きを保存しました", "ok");
@@ -921,8 +897,15 @@ function PC() {
     else if (text.trim()) toast(`${KIND[input.kind]}の入力をやめました`);
     setFocus(input?.from || "main"); setInput(null); setMode("NORMAL");
   };
-  const enter = (where) => {
-    const l = linesFor[where][lineNo(where)]; if (!l) return;
+  const enter = (where, args) => {
+    let at = lineNo(where);
+    /* 番号 + Enter は、その番号の操作を実行する (Vim の回数指定と同じ形) */
+    if (args?.repeatIsExplicit) {
+      at = linesFor[where].findIndex((x) => x.num === args.repeat);
+      if (at < 0) return toast(`${args.repeat} 番の操作は、この画面にありません`);
+      const w = views.current[where]; w.dispatch({ selection: { anchor: w.state.doc.line(at + 1).from }, scrollIntoView: true });
+    }
+    const l = linesFor[where][at]; if (!l) return;
     if (l.act === "answer") return ask("プロンプト", { text: DRAFT[key] || "" });
     if (l.choice) { removed.current = { answer: true }; setAnswered(l.choice); toast(`${l.choice} で答えました。u で取り消せます`, "ok"); return; }
     if (l.jump !== undefined) return jump(l.jump);
@@ -940,7 +923,7 @@ function PC() {
     const t = d > 0 ? ms.find((x) => x > c) : ms.filter((x) => x < c).pop();
     if (t !== undefined) jump(t); else toast(ms.length ? "これより先に印はありません" : "この画面に質問・指示の印はありません");
   };
-  const tabTo = (n) => { if (v.s === "issue") open({ tab: ((n % 5) + 5) % 5 }, true); else toast("表示の切り替えは、issue を開いているときに使えます"); };
+  const tabTo = (n) => { if (v.s === "issue") open({ tab: ((n % TABS.length) + TABS.length) % TABS.length }, true); else toast("表示の切り替えは、issue を開いているときに使えます"); };
   const onAct = (where) => (name, args) => {
     const cur = () => rightLines[lineNo("right")];
     const M = {
@@ -952,7 +935,7 @@ function PC() {
         if (!chat) return toast("ここには送り先の会話がありません。会話を開いてから i を押してください");
         ask("プロンプト", { text: DRAFT[key] || "" });
       },
-      enter: () => enter(where),
+      enter: () => enter(where, args),
       back: () => { if (where === "right") backRight(); else back(); },
       /* Ctrl+h は、右のウィンドウでは 1 つ前の表示へ戻り、issue の主のウィンドウでは前の表示へ切り替える */
       rback: () => { if (where === "right") backRight(); else if (v.s === "issue") tabTo((v.tab || 0) - 1); },
@@ -964,6 +947,7 @@ function PC() {
       drop: () => {
         const q = where === "main" ? mainLines[lineNo("main")]?.queued : null, s = where === "right" && right === "stock" ? stock.find((x) => x.id === cur()?.stock) : where === "main" ? stockAt(lineNo("main")) : null;
         if (where === "right" && right === "worktree" && cur()?.wt) return act("rmworktree");
+        if (where === "main" && v.s === "project") { const l = mainLines[lineNo("main")]; if (l?.go?.s === "issue") setConfirm({ a: "close", t: `${l.cols[0]} を取り下げて閉じますか?` }); return; }
         if (where === "main" && v.s === "convs") { const l = mainLines[lineNo("main")]; if (l?.conv) setConfirm({ a: "rmconv:" + l.conv, t: `「${l.cols[0]}」とそのスレッドを削除しますか? 取り消せません` }); return; }
         if (q) { removed.current = { queue: queue.find((y) => y.id === q) }; setQueue((x) => x.filter((y) => y.id !== q)); toast("預けた指示を取り消しました。u で戻せます"); }
         else if (s) { removed.current = { stock: s }; setStock((x) => x.filter((y) => y.id !== s.id)); toast(`${s.kind}を取り消しました。u で戻せます`); }
@@ -979,7 +963,7 @@ function PC() {
       recent: () => (rich ? openRight("recent") : toast(chat ? "プロトタイプでは、この会話の直近を用意していません" : "直近は、会話の表示で使えます")),
       toc: () => (rich ? openRight("toc") : toast(chat ? "プロトタイプでは、この会話の目次を用意していません" : "目次は、会話の表示で使えます")),
       decisions: () => (rich ? openRight("decisions") : toast(chat ? "プロトタイプでは、この会話の決まったことを用意していません" : "決まったことは、会話の表示で使えます")),
-      convs: () => open({ s: "convs" }), closeconv: () => (v.s === "conv" ? openRight("close") : toast("締めくくれるのは会話です。issue は、情報の表示で取り下げます")),
+      convs: () => open({ s: "convs" }), closeconv: () => (v.s === "conv" ? openRight("close") : toast("締めくくれるのは会話です。issue は、プロジェクトの画面で dd を押して取り下げます")),
       home: () => open({ s: "home" }), tree: () => setFocus("tree"), issueForm: () => open({ s: "issueForm" }), terminal: () => open({ s: "terminal" }),
       grep: () => { setCmd("rg "); setMode("COMMAND"); }, search: () => { setCmd("find "); setMode("COMMAND"); }, stop: () => act("stop"),
     };
@@ -1023,7 +1007,7 @@ function PC() {
     if (msg?.kind === "error" && isEsc(e)) setMsg(null);
   };
   /* Space に続くキーの候補を出すために、押されたキーを見る */
-  const onKeys = (k, idle) => { const n = lead.current === "" ? (k === " " && idle ? " " : "") : lead.current === " " && (k === "s" || k === "w") ? " " + k : ""; if (n !== lead.current) { lead.current = n; setLeader(n); } };
+  const onKeys = (k, idle) => { setPick((p) => (idle && /^[1-9]$/.test(k) ? Number(k) : p ? 0 : p)); const n = lead.current === "" ? (k === " " && idle ? " " : "") : lead.current === " " && (k === "s" || k === "w") ? " " + k : ""; if (n !== lead.current) { lead.current = n; setLeader(n); } };
   /* 入力欄とコマンド欄は自分でフォーカスを取る。それ以外は、操作中のウィンドウへ戻す */
   useEffect(() => {
     if (mode === "COMMAND") return;
@@ -1043,21 +1027,21 @@ function PC() {
   const onMode = (where) => (m) => { if (focus === where || m !== "NORMAL") setMode((x) => (x === "COMMAND" || x === "TERMINAL" ? x : m)); };
   const bufProps = (where) => ({ act: onAct(where), onKeys, onMode: onMode(where), onView: (w) => { views.current[where] = w; }, onFocus: () => setFocus(where), onLine: (n) => setAt2((x) => (x[where] === n ? x : { ...x, [where]: n })) });
   const issue = v.s === "issue" ? ISSUES.find((i) => i.id === v.issue && i.project === v.project) : null;
-  const tabMark = (n) => !issue ? null : n === 1 && issue.state === "設計レビュー" ? ["●", "text-wait", "判断待ち"] : n === 2 && issue.why === "merge 前の確認" ? ["●", "text-wait", "判断待ち"] : n === 3 && [43, 7].includes(issue.id) ? ["◐", "text-doing", "作業中"] : n === 4 && issue.why === "利用枠切れで停止" ? ["●", "text-wait", "判断待ち"] : null;
+  const tabMark = (n) => !issue ? null : n === 1 && issue.state === "設計レビュー" ? ["●", "text-wait", "判断待ち"] : n === 2 && issue.why === "merge 前の確認" ? ["●", "text-wait", "判断待ち"] : n === 0 && [43, 7].includes(issue.id) ? ["◐", "text-doing", "作業中"] : n === 0 && issue.why === "利用枠切れで停止" ? ["●", "text-wait", "判断待ち"] : null;
   const mainTitle = v.s === "terminal" ? `ターミナル  ${project} / ${wt === "main" ? "プロジェクトのディレクトリ" : "worktree: " + wt}` : v.s === "file" && dest ? `${chatV.project} / ${dest} / ${v.file}` : titleOf(v);
-  const WIN = { tree: "ツリー", main: v.s === "issue" ? `${issueName(v)} / ${TABS[v.tab || 0]}` : v.s === "agentconv" ? v.agent : v.s === "conv" ? `会話: ${convName(v)}` : mainTitle, right: RIGHT[right] || "", prompt: KIND[input?.kind] || "" };
+  const WIN = { tree: "ツリー", main: v.s === "issue" ? `${issueName(v)} / ${TABS[v.tab || 0]}` : v.s === "conv" ? `会話: ${convName(v)}` : mainTitle, right: RIGHT[right] || "", prompt: KIND[input?.kind] || "" };
   const here = focus === "prompt" ? null : linesFor[focus]?.[at2[focus] ?? 0];
   const hereStock = focus === "main" ? stockAt(at2.main ?? 0) : null;
   const backHint = rstack.length || right === "task" ? [["Ctrl+h", "前の表示へ"]] : [];
-  const tabHint = v.s === "issue" ? [["Ctrl+l", `${TABS[((v.tab || 0) + 1) % 5]}へ`], ["Ctrl+h", `${TABS[((v.tab || 0) + 4) % 5]}へ`]] : [];
+  const tabHint = v.s === "issue" ? [["Ctrl+l", `${TABS[((v.tab || 0) + 1) % TABS.length]}へ`], ["Ctrl+h", `${TABS[((v.tab || 0) + TABS.length - 1) % TABS.length]}へ`]] : [];
   const hints = confirm ? [["y", "実行する"], ["n", "やめる"]]
     : mode === "TERMINAL" ? [["Ctrl+]", "Normal へ"]]
     : focus === "prompt" ? [["Ctrl+w k", "会話へ移る (入力欄は開いたまま)"]]
     : /^VISUAL/.test(mode) ? [["Space q", "選んだ箇所に質問"], ["Space c", "選んだ箇所に指示"], ["y", "コピー"], ["Esc", "やめる"]]
     : hereStock ? [["cc", `この${hereStock.kind}を直す`], ["dd", "取り消す"], ["Space l", "ストックの一覧"], ["Space s a", "全部送る"]]
-    : here?.choice ? [["Enter", "この選択肢で答える"], ["i", "文章で答える"]]
+    : here?.choice ? [["Enter", "この選択肢で答える"], ["番号 Enter", "番号で選ぶ"], ["i", "文章で答える"]]
+    : here?.num ? [["Enter", "実行する"], ["番号 Enter", "番号の操作を実行する"], ["j k", "選ぶ"]]
     : here?.queued ? [["cc", "直す"], ["dd", "取り消す (届く前だけ)"]]
-    : here?.go?.s === "agentconv" ? [["Enter", "このエージェントの会話を開く"], ["Ctrl+l", "情報へ"], ["Ctrl+h", "差分へ"], ["-", "戻る"]]
     : here?.field ? [["i", `${here.field}を書く`], ["-", "戻る"]]
     : here?.wt ? [["Enter", "この worktree に切り替える"], ["dd", "消す"], ["q", "閉じる"]]
     : here?.stock && focus === "right" ? [["Enter", "引用した箇所へ"], ["cc", "直す"], ["dd", "取り消す"], ["Space s a", "全部送る"], ...backHint, ["q", "閉じる"]]
@@ -1065,10 +1049,10 @@ function PC() {
     : focus === "right" ? [...(right === "thread" && live.length ? [["i", "返信"]] : []), ["Enter", "選ぶ"], ...backHint, ["q", "閉じる"], ["Ctrl+w h", "左のウィンドウへ"]]
     : focus === "tree" ? [["Enter", "開く"], ["Ctrl+w l", "主のウィンドウへ"]]
     : v.s === "home" ? [["●", "未読"], ["Enter", "開く"], ["/", "検索"], ["Space n", "会話を始める・切り替える"], ["Space o", "issue を作る"], ["Space", "ほかのキー"]]
+    : v.s === "project" ? [["Enter", "開く"], ["dd", "issue を取り下げる"], ["Space o", "issue を作る"], ["-", "戻る"]]
     : v.s === "convs" ? [["Enter", here?.cols?.[1] === "閉じた" ? "再開して開く" : "開く"], ["dd", "削除する"], ["-", "戻る"]]
     : v.s === "terminal" ? [["i", "入力へ戻る"], ["-", "戻る"]]
     : working ? [["i", "指示を預ける"], ["Space x", "AI を止める"], ...tabHint, ["Space t", "タイムライン"], ["-", "戻る"]]
-    : v.s === "agentconv" ? [["i", `${v.agent} に指示を送る`], ["Space q", "質問"], ["Space c", "指示"], ["-", "エージェントの一覧へ戻る"]]
     : chat ? [...(right ? [["Ctrl+w l", "右へ"]] : []), ["i", "入力"], ["Space q", "質問"], ["Space c", "指示"], ["Space i", "直近"], ["Space m", "目次"], ...tabHint.slice(0, 1), ["-", "戻る"], ["Space", "ほかのキー"]]
     : v.s === "issue" ? [...tabHint, ["Space q", "質問"], ["Space c", "指示"], ["Enter", "選ぶ"], ["-", "戻る"]]
     : v.s === "file" ? [["Space q", "質問"], ["Space c", "指示"], ["Space e", "ファイルツリー"], ["-", "戻る"]]
@@ -1095,12 +1079,12 @@ function PC() {
           <Boundary scope="ウィンドウ" onReset={() => setCrash(false)} onHome={() => { setCrash(false); open({ s: "home" }); }}>
             {v.s === "terminal" && mode === "TERMINAL"
               ? <pre className="flex-1 overflow-auto px-3 py-1 text-[13px] leading-5 font-mono">{term.join("\n")}█</pre>
-              : <Buffer key={key} side={side} posKey={key} lines={mainLines} marks={v.s === "home" ? listMarks(mainLines) : marks} crash={crash} startLine={hasUnread(v) ? at("unread") : working ? WORKING.length - 1 : 0} {...bufProps("main")} />}
+              : <Buffer key={key} side={side} posKey={key} lines={mainMenu} marks={v.s === "home" ? listMarks(mainLines) : marks} crash={crash} startLine={hasUnread(v) ? at("unread") : working ? WORKING.length - 1 : 0} {...bufProps("main")} />}
           </Boundary>
         </Frame>
         {right && (
           <Frame edge title={right === "stock" || right === "thread" ? `${RIGHT[right]}: ${dest || "送り先なし"}` : RIGHT[right]} focused={focus === "right"} sub={right === "worktree" ? <ColHead kind="wt" side="right" /> : null} right={<span className="flex items-center shrink-0 text-[12px] font-normal">{(rstack.length > 0 || right === "task") && <button tabIndex={-1} onClick={backRight} className="rounded px-1.5 py-0.5 hover:bg-raised"><span className="font-mono text-ink">Ctrl+h</span><span className="text-muted ml-1">戻る</span></button>}<button tabIndex={-1} onClick={closeRight} className="rounded px-1.5 py-0.5 hover:bg-raised"><span className="font-mono text-ink">q</span><span className="text-muted ml-1">閉じる</span></button></span>}>
-            <Boundary scope="ウィンドウ"><Buffer key={right} side="right" posKey={right} lines={rightLines} marks={rightMarks} {...bufProps("right")} /></Boundary>
+            <Boundary scope="ウィンドウ"><Buffer key={right} side="right" posKey={right} lines={rightMenu} marks={rightMarks} {...bufProps("right")} /></Boundary>
           </Frame>
         )}
       </div>
@@ -1127,7 +1111,7 @@ function PC() {
       <div className="h-7 shrink-0 text-[12px] flex gap-3 border-t border-line bg-ground items-center px-2 overflow-hidden whitespace-nowrap">
         <span className={`rounded px-1.5 text-[12px] leading-5 font-mono font-bold text-ground ${/^VISUAL/.test(mode) ? "bg-accent" : { INSERT: "bg-done", REPLACE: "bg-done", TERMINAL: "bg-doing", COMMAND: "bg-ink" }[mode] || "bg-muted"}`}>{mode}</span>
         {offline && <span className="text-wait font-bold shrink-0" role="status">✕ オフライン (13:42 時点の表示。AI は動き続けています)</span>}
-        <span className="text-ink font-medium truncate max-w-[20rem]">{WIN[focus]}</span><Hint items={hints} />
+        <span className="text-ink font-medium truncate max-w-[20rem]">{WIN[focus]}</span><Hint items={pick && focus !== "prompt" && (linesFor[focus] || []).some((l) => l.num === pick) ? [[`${pick} Enter`, `「${linesFor[focus].find((l) => l.num === pick).cols[1]}」を実行する`], ["Esc", "やめる"]] : !here?.num && !confirm && focus !== "prompt" && (linesFor[focus] || []).some((l) => l.num) ? [...hints, ["番号 Enter", "操作を実行"]] : hints} />
         <span className="ml-auto text-wait shrink-0">判断待ち {count("判断待ち")}</span><span className="text-muted shrink-0">指示待ち {count("指示待ち")}</span><span className="text-muted shrink-0">作業中 {count("作業中")}</span>
         {dest && <span className={`shrink-0 ${stockHere.length ? "text-accent font-bold" : "text-muted"}`}>ストック 指示 {nc} / 質問 {nq}</span>}{paused && <span className="text-wait shrink-0">自動フロー停止中</span>}<span className="shrink-0"><Hint items={[[":h", "ヘルプ"]]} /></span>
       </div>
@@ -1201,7 +1185,7 @@ function Phone() {
   const say = (t, undo) => { clearTimeout(timer.current); setMsg({ t, undo }); timer.current = setTimeout(() => setMsg(null), undo ? 8000 : 3000); };
   const openRow = (x) => {
     setSeen((v) => new Set(v).add(goKey(x.go)));
-    go({ p: x.why === "設計の承認" ? "review" : x.why === "merge 前の確認" ? "pr" : x.why === "利用枠切れで停止" ? "stopped" : x.sect === "作業中" ? "agent" : "chat", x });
+    go({ p: x.why === "設計の承認" ? "review" : x.why === "merge 前の確認" ? "pr" : x.why === "利用枠切れで停止" ? "stopped" : "chat", x });
   };
   const Row = ({ x, bare }) => {
     const unread = x.unread && !seen.has(goKey(x.go));
@@ -1269,7 +1253,7 @@ function Phone() {
         <div className="flex-1 overflow-auto">{q.trim() ? (PROJECTS.flatMap((p) => rowsOf(p.id)).filter((x) => x.title.includes(q.trim())).map((x) => <Row key={x.project + x.title} x={x} />).concat(PROJECTS.flatMap((p) => rowsOf(p.id)).some((x) => x.title.includes(q.trim())) ? [] : [<p key="none" className="px-4 py-3 text-[13px] text-muted">「{q.trim()}」を含む issue と会話はありません</p>])) : <p className="px-4 py-3 text-[13px] text-muted">題名と会話の中身から探します</p>}</div>
       </>)}
       {s.p === "chat" && (<>
-        <Bar title={s.x.title} sub={`${s.x.project} · ${s.x.sect === "作業中" ? "AI が作業中 · " + s.x.why.split(" · ")[0] : "返事を待っています"}`} right={<IconBtn label="目次やストックを開く" d={ICONS.more} onClick={() => setSheet("more")} />} />
+        <Bar title={s.x.title} sub={`${s.x.project} · ${s.x.sect === "作業中" ? "AI が作業中 · " + s.x.why.split(" · ")[0] : "返事を待っています"}`} right={<>{s.x.sect === "作業中" && <button className="h-11 px-3 rounded-lg border border-wait text-wait text-[13px] font-bold shrink-0" onClick={() => say("AI を止めました。作業は保存され、指示待ちになります", () => say("再開しました"))}>止める</button>}<IconBtn label="目次やストックを開く" d={ICONS.more} onClick={() => setSheet("more")} /></>} />
         {offline && <div className="shrink-0 px-4 py-2 bg-del text-[13px] font-bold" role="status">接続が切れています。書いた内容は残っています</div>}
         {s.x.title === LIST[1].title ? (<>
         <div className="shrink-0 border-b border-line bg-surface text-[13px]">
@@ -1352,21 +1336,6 @@ function Phone() {
         </div>
         <Foot><button className="flex-1 h-12 rounded-lg border border-line font-bold" onClick={() => go({ p: "chat", x: s.x })}>会話を開く</button><button className="flex-1 h-12 rounded-lg bg-accent text-ground font-bold" onClick={() => { say("再開しました"); pop(); }}>いま再開する</button></Foot>
       </>)}
-      {s.p === "agent" && (<>
-        <Bar title={s.x.title} sub={`${s.x.project} · AI が作業中 · ${s.x.why.split(" · ")[0]}`} right={<button className="h-11 px-3 ml-2 rounded-lg border border-wait text-wait text-[13px] font-bold shrink-0" onClick={() => say("AI を止めました。作業は保存され、指示待ちになります", () => say("再開しました"))}>止める</button>} />
-        <div className="flex-1 overflow-auto px-4 pb-4 text-[15px] leading-6">
-          <H>工程</H>
-          <div className="flex flex-wrap items-center gap-x-1.5 text-[12px] text-muted">{[["done", "精査"], ["done", "設計"], ["doing", "実装 11分"], ["todo", "レビュー"], ["todo", "PR"], ["todo", "merge"]].map(([st, t], n) => <React.Fragment key={t}>{n > 0 && <span aria-hidden="true">›</span>}<span className={st === "doing" ? "font-bold text-ink" : st === "done" ? "text-ink" : ""}><span className={ST[st][1]}>{ST[st][0]}</span> {t}</span></React.Fragment>)}</div>
-          <H>エージェント</H>
-          {[["doing", 0, "/dev-impl (親)", "実行中 18分", "実装を依頼して、結果を待っている"], ["doing", 1, "dev-impl-implementer", "実行中 11分", "Bash npm test -- csv"], ["todo", 1, "review-impl", "待機中", "実装が終わると始まる"]].map(([st, d, name, state, doing]) => (
-            <button key={name} onClick={() => go({ p: "chat", x: { ...s.x, title: name } })} className="block w-full text-left min-h-[44px] py-1.5 border-b border-line active:bg-raised" style={{ paddingLeft: d * 16 }}>
-              <div className="flex items-baseline gap-2 text-[14px]"><span className={ST[st][1]}>{ST[st][0]}</span><span className="flex-1 truncate font-medium">{name}</span><span className={`text-[12px] font-bold ${ST[st][1]}`}>{state}</span></div>
-              <div className="text-[12px] text-muted truncate pl-5">{doing}</div>
-            </button>))}
-          <p className="text-[12px] text-muted mt-1">エージェントを押すと、その会話が開きます。</p>
-        </div>
-        <Foot><button className="flex-1 h-12 rounded-lg border border-line font-bold" onClick={() => go({ p: "chat", x: s.x })}>issue の会話を開く</button></Foot>
-      </>)}
       {s.p === "read" && (<>
         <Bar title={{ toc: "目次", decisions: "決まったこと", timeline: "タイムライン", files: "ファイル" }[s.kind]} sub={s.x.title} />
         <div className="flex-1 overflow-auto">
@@ -1398,7 +1367,7 @@ function Phone() {
         <Foot><button className="flex-1 h-12 rounded-lg border border-line font-bold" onClick={() => { say("下書きを保存しました"); pop(); }}>下書きとして保存</button><button disabled={!title.trim()} className="flex-1 h-12 rounded-lg bg-accent text-ground font-bold disabled:bg-raised disabled:text-muted" onClick={() => { say("確定しました。AI が精査を始めます"); setTitle(""); pop(); }}>{title.trim() ? "確定する" : "題名を書くと確定できる"}</button></Foot>
       </>)}
       {sheet === "more" && <PSheet onClose={closeSheet} title="この会話">
-        {[["toc", "目次", "3 章"], ["decisions", "決まったこと", "決定 2 · 保留 1"], ["timeline", "タイムライン", "50%"], ["files", "ファイル", ""]].map(([kind, a, b]) => <Item key={kind} a={a} b={b} onClick={() => { setSheet(null); go({ p: "read", kind, x: s.x }); }} />)}
+        {[["toc", "目次", "3 章"], ["decisions", "決まったこと", "決定 2 · 保留 1"], ["timeline", "タイムライン", "50.00%"], ["files", "ファイル", ""]].map(([kind, a, b]) => <Item key={kind} a={a} b={b} onClick={() => { setSheet(null); go({ p: "read", kind, x: s.x }); }} />)}
         <Item a="ストック" b={`${stock.length} 件`} onClick={() => setSheet("stock")} /><Item a="スレッド" b={`${threads.length} 件`} onClick={() => setSheet("threads")} /><Item a="会話を締めくくる" b="" onClick={() => setSheet("close")} />
       </PSheet>}
       {sheet === "threads" && <PSheet onClose={closeSheet} title={`スレッド ${threads.length} 件`}>
@@ -1450,7 +1419,7 @@ function Phone() {
 const SCREENS = [
   ["PC", "一覧", "全プロジェクトの会話と issue を、判断待ち・指示待ち・作業中のセクションに分けて表示", "UC-001"],
   ["PC", "プロジェクト", "issue を状況別に縦に並べる。会話と worktree の一覧", "US-003, 018, 064, 065"],
-  ["PC", "issue", "会話・設計・差分・エージェント・情報を切り替える", "US-009, 014〜016, 063"],
+  ["PC", "issue", "会話・設計・差分を切り替える", "US-009, 014〜016, 063"],
   ["PC", "issue の作成・編集", "下書きと確定、親子・依存・優先度、merge 前の確認の指定", "US-004〜007"],
   ["PC", "会話", "issue にしない壁打ち。/dev-spec を起動する", "US-018, 064"],
   ["PC", "直近 / 目次 / 決まったこと", "会話の状況を思い出すための入口 (右のウィンドウ)", "UC-003"],
@@ -1461,12 +1430,12 @@ const SCREENS = [
   ["PC", "エラー", "本人以外の拒否、404、接続切れ、ウィンドウの例外", "US-030"],
   ["スマホ", "一覧 / プロジェクト / 検索", "判断待ち・指示待ち・作業中の一覧、プロジェクトごとの会話と issue、issue と会話の検索", "US-028"],
   ["スマホ", "会話", "判断することの帯、会話、選択肢で答える、文を押して質問・指示をストックする", "US-029"],
-  ["スマホ", "PR の確認 / 止まった issue / エージェントの出力", "merge の許可、再開、AI を止める", "US-029"],
+  ["スマホ", "PR の確認 / 止まった issue", "merge の許可、再開", "US-029"],
   ["スマホ", "設計レビュー", "差分を見て承認か差し戻し", "US-029"],
   ["スマホ", "issue の作成", "下書きと確定", "US-004"],
 ];
 const FLOWS = [
-  { t: "壁打ちから実装まで", d: "会話で壁打ちし、/dev-spec で設計を固める。作られた issue は精査を通ると実装待ちになり、実装が自動で始まる。", us: "US-018, 008, 010, 063", s: ["会話", "/dev-spec", "issue が作られる", "精査", "実装待ち", "実装", "エージェントの出力で確認", "完了"] },
+  { t: "壁打ちから実装まで", d: "会話で壁打ちし、/dev-spec で設計を固める。作られた issue は精査を通ると実装待ちになり、実装が自動で始まる。", us: "US-018, 008, 010, 063", s: ["会話", "/dev-spec", "issue が作られる", "精査", "実装待ち", "実装", "会話で確認", "完了"] },
   { t: "issue から設計レビューまで", d: "issue を確定すると精査と設計が始まる。設計ができると一覧の判断待ちに並ぶ。差し戻すと設計に戻る。", us: "US-004, 008〜010", s: ["issue の作成", "精査・設計", "一覧 (判断待ち)", "設計レビュー", "承認", "実装", "merge", "完了"] },
   { t: "質問と指示", d: "回答や成果物を選び、質問か指示をストックする。見直してから送る。質問はスレッドになり、確定事項は指示としてストックへ戻る。", us: "US-019〜023", s: ["回答を読む", "選択", "質問・指示", "ストック", "送信", "スレッド", "確定事項をストックへ", "指示を送信"] },
   { t: "スマホで返事と承認", d: "通知から一覧を開き、質問に返事をするか、設計を承認・差し戻しする。", us: "US-028, 029, 034", s: ["通知", "一覧", "会話 / 設計レビュー", "返事・承認・差し戻し"] },
@@ -1508,18 +1477,17 @@ function Table({ head, rows }) {
 }
 const POLICY = [
   ["トーン", "シンプルでモダン。余白と文字の強弱で構造を示し、線と色は最小限にする"],
-  ["明るさ", "ダークとライト。OS の設定に合わせて切り替える"],
+  ["明るさ", "ライトだけ。ダークは作らない"],
   ["書体", "画面の文字は Zen Kaku Gothic New。等幅 (Cica、無ければ JetBrains Mono) はコード・キー・プロジェクト名にだけ使う"],
-  ["ダークの配色", "ground #0e1014 / surface #15181e / raised #242a36 / line #333949 / ink #e7e9ee / muted #a2a9b8"],
-  ["ライトの配色", "ground #f4f5f7 / surface #ffffff / raised #eceef2 / line #e1e4ea / ink #1a1d24 / muted #646c7c"],
+  ["配色", "ground #f4f5f7 / surface #ffffff / raised #eceef2 / line #e1e4ea / ink #1a1d24 / muted #646c7c"],
   ["状態の色", "強調と選択は accent (青紫)、完了は done (緑)、作業中は doing (黄)、判断待ちと失敗は wait (赤)。差分は add と del。それ以外は ink と muted だけ"],
   ["寸法の段", "詰めた配置にする。文字は 12 / 13 / 14 / 15px、余白は 4 / 8 / 12 / 16px だけを使う。会話の本文は 15px・行の高さ 24px・幅 46rem まで。一覧と表の形の画面は 14px・26px、右のウィンドウは 13px・22px、ツリーは 13px・26px"],
-  ["影", "2 段だけ。入力欄とトーストは float、スマホの外枠は overlay。ダークでは、浮いた部品の地を 1 段明るくする"],
-  ["主の操作", "1 つの画面で塗りのボタンは 1 つ (全部送る、承認する、確定する)。ほかは枠だけにする"],
+  ["影", "2 段だけ。入力欄とトーストは float、スマホの外枠は overlay"],
+  ["操作の一覧", "操作と選択肢は、枠で囲んだメニューの行に並べる。1 行に、番号・操作の名前・実行すると起きることを書く。主の操作は名前を太字にし、番号の枠を強調色にする。行で Enter を押すか、番号を押してから Enter で実行する"],
   ["形", "外枠は角丸 12px、入力欄は 8px、行とボタンは 6px。影は浮いている部品 (入力欄・トースト) にだけ付ける"],
   ["バッファ", "ツリー・主・右のすべてのウィンドウを、読み取り専用の Vim のバッファとして扱う。文字は本物のテキストのまま、桁と強弱は CSS で付ける"],
   ["一覧の行", "題名・状況・プロジェクト・経過の 4 桁を 1 行 (26px) に収め、ウィンドウの見出しに列の見出しを置く。未読は左端の点と題名の太字で示す"],
-  ["組の書き方", "キーと動作、項目と値は、1 行に 1 組だけ書いて列を揃える (ヘルプ、情報、設定、issue の作成・編集、タスク)。ステータス行のキーは等幅の濃い色、説明は薄い色にする"],
+  ["組の書き方", "キーと動作、項目と値は、1 行に 1 組だけ書いて列を揃える (ヘルプ、設定、issue の作成・編集、タスク)。ステータス行のキーは等幅の濃い色、説明は薄い色にする"],
   ["発言の区別", "発言者の小さな札 (あなたは強調色の地、AI は灰色の地) を発言の先頭に置く。発言の全行の左に帯を引き、あなたの発言は強調色の帯と地の色、AI の発言は灰色の帯で示す"],
   ["スマホ", "一覧を起点にし、全幅の行 (56px) を区切り線で分ける。タップ領域は 44px 以上。自分の発言は選択色の吹き出し、AI の発言は左に帯。選択肢は選んでから「答える」で送り、承認などは 5 秒のあいだ取り消せる"],
 ];
@@ -1566,9 +1534,7 @@ const SKETCH_VIEWS = {
   "pc-issue-design": pc(issueV("shop-api", 42, 1)),
   "pc-issue-design--confirm": pc(issueV("shop-api", 42, 1), null, { once: { "pc.confirm": { a: "approve", t: CONFIRM.approve } } }),
   "pc-issue-diff": pc(issueV("booking-web", 8, 2)),
-  "pc-issue-agents": pc(issueV("shop-api", 43, 3)),
-  "pc-issue-info": pc(issueV("shop-api", 42, 4)),
-  "pc-agentconv": pc({ s: "agentconv", project: "shop-api", issue: 43, agent: "dev-impl-implementer", tab: 0 }),
+  "pc-issue-stopped": pc(issueV("shop-api", 44, 0)),
   "pc-project": pc({ s: "project", project: "shop-api", tab: 0 }),
   "pc-issueform": pc({ s: "issueForm", project: "shop-api", tab: 0 }),
   "pc-file": pc({ s: "file", project: "shop-api", file: "src/order/confirm.ts", tab: 0 }, "files"),
@@ -1598,13 +1564,12 @@ const SKETCH_VIEWS = {
   "phone-review--reject": phone([{ p: "review", x: LIST[0] }], { once: { "phone.sheet": "reject" } }),
   "phone-pr": phone([{ p: "pr", x: LIST[2] }]),
   "phone-stopped": phone([{ p: "stopped", x: LIST[3] }]),
-  "phone-agent": phone([{ p: "agent", x: LIST[6] }]),
   "phone-new": phone([{ p: "new" }]),
   "phone-inbox--new": phone([{ p: "inbox" }], { once: { "phone.sheet": "new" } }),
   "doc-screens": { page: "画面一覧" }, "doc-flows": { page: "ユーザーフロー" }, "doc-ops": { page: "操作" }, "doc-policy": { page: "デザイン方針" }, "doc-shell": { page: "アプリシェル" },
 };
 /* いまの画面を 1 つの文字列にする。画面 ID との照合に使う */
-const V_KEYS = { project: ["project"], conv: ["project", "conv"], issue: ["project", "issue", "tab"], file: ["file"], agentconv: ["issue", "agent"] };
+const V_KEYS = { project: ["project"], conv: ["project", "conv"], issue: ["project", "issue", "tab"], file: ["file"] };
 const sigOf = (page, v, right, top) => (page === "PC" ? ["PC", v.s, ...(V_KEYS[v.s] || []).map((k) => v[k] ?? 0), right || ""].join("|") : page === "スマホ" ? ["SP", top.p, top.id || "", top.kind || "", top.x?.title || ""].join("|") : page);
 const defSig = (d) => sigOf(d.page, d.hist?.[d.hist.length - 1], d.right, d.stack?.[d.stack.length - 1]);
 const curSig = () => sigOf(load("page", "PC"), load("pc.hist", [{ s: "home" }]).slice(-1)[0], load("pc.right", null), load("phone.stack", [{ p: "inbox" }]).slice(-1)[0]);
@@ -1635,13 +1600,11 @@ function syncScreen() {
 }
 function App() {
   const [p, setP] = useKept("page", "PC");
-  const [theme, setTheme] = useKept("theme", "OS");
   useEffect(() => { syncScreen(); }, [p]);
-  useEffect(() => { if (theme === "OS") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = theme === "ダーク" ? "dark" : "light"; }, [theme]);
   const Page = PAGES[p];
   return (
     <main data-sketch-screen={shownId} className="px-4 py-3 max-w-[1560px] mx-auto">
-      <nav className="flex flex-wrap gap-4 mb-2 text-[13px] border-b border-line pb-2">{Object.keys(PAGES).map((x) => <button key={x} onClick={() => setP(x)} className={p === x ? "font-bold underline decoration-accent decoration-2 underline-offset-4" : "text-muted"}>{x}</button>)}<span className="ml-auto text-muted">表示の確認</span>{["OS", "ダーク", "ライト"].map((x) => <button key={x} onClick={() => setTheme(x)} className={theme === x ? "font-bold" : "text-muted"}>{x}</button>)}</nav>
+      <nav className="flex flex-wrap gap-4 mb-2 text-[13px] border-b border-line pb-2">{Object.keys(PAGES).map((x) => <button key={x} onClick={() => setP(x)} className={p === x ? "font-bold underline decoration-accent decoration-2 underline-offset-4" : "text-muted"}>{x}</button>)}</nav>
       <Boundary scope="アプリ"><Page /></Boundary>
     </main>
   );
