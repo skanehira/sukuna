@@ -1,0 +1,328 @@
+# 設計レビュー
+
+- 種別: 機能設計書
+- 対象 UC: UC-009 (docs/design/USECASES.md)
+
+## 何を作るか
+
+設計の AI が作った修正方針と設計書の変更を開発者が読み、承認して実装へ進めるか、指摘を付けて差し戻す機能である。
+
+**使う人**: 開発者 (承認できるのは開発者だけで、AI は承認しない)
+
+**流れ**:
+
+1. 一覧の判断待ちから、設計レビューの issue を開く。最初に「設計」の表示が開く
+2. 修正方針、AI が確かめたい点、設計書の差分を読み、気になる箇所に質問か指示をストックする
+3. 問題が無ければ承認し、y / n の確認に y で答える
+4. アプリが設計書の変更を既定ブランチへ反映し、issue は実装待ちになる
+5. 直してほしいときは、ストックした指示を送るか、理由を書いて差し戻す。issue は設計待ちに戻り、設計の AI が同じ会話の続きで直すと設計レビューに戻る
+
+**主な決まり**:
+
+- 設計の AI は、issue ごとに作る worktree とブランチの中で設計書を書く。プロジェクトのディレクトリには書かない
+- 承認するのは、画面に表示した版の設計である。表示した後に設計が変わっていれば、承認は通らず、読み直しを求める
+- 反映のしかたはプロジェクトの設定で決める (BR-047)
+
+  | 設定 | 承認したときに起きること |
+  | --- | --- |
+  | 直接入れる | アプリが既定ブランチへ設計書の変更を入れ、issue を実装待ちにする |
+  | PR で入れる | アプリが設計書の PR を作り、設計の AI が CI の通過を待って merge する。merge できたら実装待ちになる。merge できなければ停止中になる |
+  | (設計書の変更が無い) | 何も反映せずに実装待ちにする |
+
+- 反映に失敗したら、理由を設計の表示の先頭に出し、issue は設計レビューのまま残す
+- 差し戻しの指摘は、設計した会話の続きで AI に届ける (BR-046)
+- 設計レビュー中に設計の会話で発言を送ったときも、差し戻しとして扱う。状態を変えずに尋ねたいときは、質問をスレッドで送る (BR-098)
+- 承認しても、送っていないストックの指示は消えずに残る
+
+## 入出力と振る舞い
+
+### この機能の前提
+
+- issue の状態の移り変わりの表は `features/issue-flow.md` が正本である。本書は、設計レビューから出る移り変わりの条件と、そのときにする作業を書く
+- 状態を移すのはランナーの自動フロー (`flow`) だけとする (DESIGN.md「横断規約 > 自動フローと既存のスキル」)。画面のサーバーは、承認と差し戻しをランナーへ渡す。渡し方は `features/runtime.md` に従う
+- 承認は開発者の操作だけで行う (BR-045)。AI に渡すアプリのツールに、承認の操作は入れない
+- ストックの持ち方・送り方・スレッドは `features/stock-thread.md` の仕組みを使う。設計の表示で作ったストックは、その issue の設計の会話 (`conversations.kind = design`) に属する
+- 設計の差分からの引用 (`design_diff`。パスと行) の形は、`features/stock-thread.md`「引用の持ち方」が正本である
+- 画面の部品 (バッファ、メニューの行、y / n の確認、入力欄) は `features/buffer-ui.md` に従う
+
+### 設計の作業場所
+
+プロジェクトのディレクトリで設計書を書かせると、同時に動く設計の AI どうしや開発者の作業と、変更が混ざる。そのため、設計の AI には次の規則で用意した worktree の中で書かせ、コミットさせる。
+
+- 作るのは `flow` で、指示を送らずに設計の会話を作った後、最初の指示を送る前に作る (`features/issue-flow.md`「段階の AI を始める」)。作り方は `features/worktree-terminal.md`「作る場所と名前」の規則に従う
+- 名前は `design-<issue 番号>`、ブランチは `sukuna/design-<issue 番号>` とする。同じ名前の worktree かブランチがすでにあれば、`-<k>` を付ける。付け方は `features/implementation-flow.md`「worktree を作る」の名前と同じにする
+- `worktrees` に `origin = flow`、`issue_id` を付けて記録し、`branch_created` を真にする
+- その issue の設計の worktree (`origin = flow`、名前が `design-` で始まる) で片付けていないものがあれば、新しく作らずに使う。差し戻しで再開したときも同じ worktree で続ける
+- 元にするのは、既定ブランチの最新である。GitHub を使うプロジェクトは `git fetch origin <既定ブランチ>` のあと `origin/<既定ブランチ>` から作り、使わないプロジェクトは手元の既定ブランチから作る。取得に失敗したら手元の既定ブランチから作る
+- 作れなければ、issue を停止中 (`failed`、`cause` は `worktree_failed`) にし、設計の会話に止まった記録 (`error`) を書く。会話の末尾に「再開する」が出る
+- 開発者が再開を選ぶか指示を送ると、`flow` が worktree を作り直す。設計の最初の指示と開発者の指示を 1 通で届ける (`features/issue-flow.md`「停止中から戻る」の `retryStageWorktree`)
+- 設計の会話の作業ディレクトリ (`conversations.cwd`) と `worktree_id` は、この worktree にする
+- 設計の AI への最初の指示に、この worktree で設計書を書き、終えたらコミットしてから `report_design` で報告することを含める (`features/issue-flow.md`「設計の AI」)
+- 反映が終わるか、設計書の変更が無いまま承認したら、`flow` が worktree とブランチを片付ける。issue を取り下げたときも片付ける。片付けの規則は `features/implementation-flow.md`「worktree の片付け」と同じにする
+- 片付けた後は、設計の会話の作業ディレクトリをプロジェクトのディレクトリに変える。承認後の設計の会話は読めるが、指示は送れない (`features/issue.md`「担当の会話」)
+
+### 設計の完了の記録
+
+設計の AI が `report_design` で報告すると、`flow` が `issue_events` に種類 `design_submitted` の行を足し、issue を設計レビューにする。`report_design` の引数は `features/issue.md`「AI に渡すツール」に従う。payload は次の形とする。
+
+| 項目 | 形 | 中身 |
+| --- | --- | --- |
+| `policy` | 文字列 (Markdown) | 修正方針。AI の報告から写す |
+| `checks` | 文字列の配列 | AI が確かめたい点。0 件でもよい |
+| `branch` | 文字列 | 設計のブランチ名 |
+| `baseCommit` | コミットの ID | 差分の起点。報告を受けた時点で、ブランチと元のブランチ (`origin/<既定ブランチ>` か手元の既定ブランチ) の merge-base を `flow` が求める |
+| `headCommit` | コミットの ID | 報告を受けた時点のブランチの先頭 |
+
+- 設計書の変更の有無は、AI の申告ではなく、`baseCommit` から `headCommit` までの差分が空かどうかで決める
+- 報告に未コミットの変更が残っていても、記録するのはコミット済みの分だけである。設計の表示にはその旨を出さない (AI への最初の指示でコミットを求めているため)
+
+ほかに、この機能は `issue_events` に次の種類を足す。
+
+| 種類 | 足すとき | payload |
+| --- | --- | --- |
+| `design_approved` | 承認を受け付けたとき | `{ "headCommit": "...", "mode": "direct" \| "pr" \| "none" }` |
+| `design_reflected` | 反映が終わったとき | `{ "mode": "direct" \| "pr" \| "none", "commit": "<既定ブランチに入った先頭>" \| null, "prUrl": "..." \| null }` |
+| `design_reflect_failed` | 反映に失敗したとき | `{ "message": "<開発者に見せる文>" }` |
+| `design_pr_created` | 設計書の PR を作ったとき | `{ "prUrl": "..." }` |
+| `design_rejected` | 差し戻したとき | `{ "via": "reject" \| "message" \| "stock" }` |
+
+- `design_reflected` の `commit` は、直接入れたときは既定ブランチに入った先頭、PR で入れたときは PR の merge のコミットとし、設計書の変更が無いときは `null` とする。`prUrl` は PR で入れたときだけ入れる
+
+### 画面
+
+issue の中の「設計」の表示である (UI_SKETCH.html の `pc-issue-design` と `pc-issue-design--confirm`、`designOf`)。issue を設計レビューの状態で開くと、最初にこの表示が開く。Ctrl+l / Ctrl+h で会話・設計・差分の表示を切り替える。
+
+表示は上から次の順に並べる。どれも読み取り専用のバッファの行で、Vim の移動・検索・選択がそのまま使える。
+
+1. 反映の状況の行 (反映中か、失敗したときだけ)。例: 「設計書を既定ブランチへ反映しています」「反映できませんでした: 既定ブランチへ push できません。保護されたブランチです。反映のしかたを PR にすると入れられます」
+2. 見出し「修正方針」と、その本文
+3. 見出し「AI が確かめたい点  n 件」と、1 件 1 行の質問の行。0 件なら「ありません」
+4. 設計書の差分。ファイルごとに見出し「設計書の差分  <パス>」を置き、行番号付きで削除と追加を色分けする。長い差分の畳み方は会話の差分と同じにする (`features/conversation.md`)。設計書の変更が無いときは「設計書の変更はありません。承認すると、何も反映せずに実装待ちになります」の 1 行を出す
+5. メニューの行「操作」。設計レビューの状態のときだけ出す
+
+| 操作 | 画面に起きること |
+| --- | --- |
+| 行を選んで Space q / Space c | 選んだ箇所を引用にして質問 / 指示を書き、設計の会話のストックに入る。行の左に印が付く (`features/stock-thread.md`) |
+| メニュー「1 承認して実装へ進める」で Enter (か番号 + Enter) | 確認「設計を承認して、実装へ進めますか? (y / n)」を出す。送っていない指示があれば「送っていない指示が n 件あります。承認しても送られずに残ります」を添える |
+| 確認で y | 承認を送る。表示の先頭に反映中の行が出る。終わると「設計書を反映しました。実装待ちになりました」のお知らせが出て、会話の表示へ移る |
+| 確認で y 以外 | 何もせず「やめました」のお知らせを出す |
+| メニュー「2 指摘を書いて差し戻す」で Enter | 入力欄を開く。入力欄の見出しに「差し戻し」と、一緒に届くストックの指示の件数を出す |
+| 差し戻しの入力欄で、Normal モードの Enter | 差し戻しを送る。issue が設計待ちになり、表示は会話へ移る。AI の作業が続きに出る |
+| Space s c / Space s a (設計の会話のストックから指示を送る) | 差し戻しとして扱う。ストックの指示だけが 1 通にまとまって届く |
+| Space s q (質問だけを送る) | 質問ごとにスレッドが始まる。issue の状態は変えない |
+
+状態ごとの「設計」の表示:
+
+| issue の状態 | 表示 |
+| --- | --- |
+| 設計レビュー | 最新の `design_submitted` の内容と、操作のメニュー |
+| 設計待ち (差し戻しの後) | 前回の内容を残し、先頭に「設計を直しています」を出す。操作は出さない |
+| 設計待ち (PR で反映中) | 先頭に「承認済み。設計書の PR <URL> の CI を待って、AI が merge します」を出す。操作は出さない |
+| 停止中 (設計書の PR を merge できなかった) | 先頭に「設計書の PR <URL> を merge できませんでした: <detail>。設計の会話で指示を送ると、AI が merge を続けます」を出す。操作は出さない |
+| 実装待ちより後 | 承認した内容を残し、先頭に「承認済み (反映したコミット <短い ID>)」を出す。PR で入れたときは「承認済み (PR <URL> で反映したコミット <短い ID>)」、設計書の変更が無いときは「承認済み (設計書の変更はありません)」とする。<短い ID> は `design_reflected` の `commit` の先頭 7 字である |
+| 設計の記録が無い | 「設計はまだありません。設計の AI が作ると、ここに出ます」の 1 行 |
+
+### 承認と反映
+
+承認の要求には、画面に表示した `headCommit` を付ける。サーバーは次を確かめてから、ランナーへ渡す。
+
+1. issue が設計レビューである。違えば `conflict`
+2. 反映中ではない (最新の `design_approved` の後に `design_reflected` も `design_reflect_failed` も無い状態ではない)。反映中なら `conflict`
+3. 付いてきた `headCommit` が、最新の `design_submitted` の `headCommit` と同じで、設計のブランチの先頭とも同じである。違えば `conflict` で「表示した後に設計が変わりました。読み直してから承認してください」を返す
+
+ランナーの `flow` は `design_approved` を記録し、反映のしかたに応じて次を行う。どれも 1 つの issue について同時に 1 つだけ動かす。
+
+**設計書の変更が無いとき** (`baseCommit` から `headCommit` の差分が空):
+
+1. `design_reflected` を記録し、issue を実装待ちにする
+2. worktree とブランチを片付ける
+
+**直接入れる** (`projects.design_merge_mode = direct`):
+
+1. GitHub を使うプロジェクト: 設計の worktree で `git fetch origin` のあと `origin/<既定ブランチ>` へ rebase し、`git push origin HEAD:<既定ブランチ>` で入れる
+2. GitHub を使わないプロジェクト: 手元の既定ブランチへ rebase してから、既定ブランチを fast-forward で進める。既定ブランチがどこかの worktree (ふつうはプロジェクトのディレクトリ) で開かれていれば、その worktree で `git merge --ff-only <設計のブランチ>` を実行する。開かれていなければ、ブランチの参照だけを進める
+3. 成功したら `design_reflected` を記録し、issue を実装待ちにし、worktree とブランチを片付ける
+4. どこかで失敗したら、rebase の途中なら中止して元に戻す。`design_reflect_failed` を記録し、issue は設計レビューのまま残す
+
+**PR で入れる** (`projects.design_merge_mode = pr`。GitHub を使うプロジェクトだけで選べる):
+
+1. 設計のブランチを `origin` へ push し、`gh pr create` で既定ブランチ向けの PR を作る。題名は「設計: #<issue 番号> <issue の題名>」、本文は修正方針と AI が確かめたい点とする
+2. `design_pr_created` を記録し、issue を設計待ちにする。設計待ちのあいだは、AI が作業中として一覧に出る
+3. 設計の会話の続きに次の指示を、`origin` を `flow` として送り、`ai_started` (`reason` は `design_pr_merge`) を足す。会話には、開発者の発言ではなく「自動フローが指示を送りました」の区切りの行で出す。「設計書の PR <URL> は承認済みです。CI が通るのを待ち、リポジトリで許された方法で merge してください。設計書の中身は変えないでください。merge できないときは理由を書いて終えてください」
+4. AI の番が正常に終わったら (`turn_end` の `subtype` が `success` で、止まった記録が続かない)、`flow` が `gh pr view` で PR の状態と merge のコミットを確かめる。merge 済みなら `design_reflected` を記録して実装待ちにし、worktree とブランチを片付ける
+5. merge されていなければ、issue を停止中 (`failed`) にする。`cause` は `design_pr_not_merged`、`detail` は AI の最後の発言の 1 行目とする。開発者が指示を送ると、AI が merge の続きを行い、番の終わりに手順 4 から確かめる
+6. 手順 1 で失敗したら、`design_reflect_failed` を記録し、issue は設計レビューのまま残す
+
+- 手順 4 で番が正常に終わらなかったときは、`features/issue-flow.md`「AI が止まったとき」に従う。開発者の停止は状態を変えず、失敗は停止中 (`failed`)、利用枠切れは停止中 (`usage_limit`) にする
+- 割り込みで終わった番では確かめない。割り込みの発言で始まる番の終わりに、手順 4 から確かめる
+- 手順 3 の指示は、一時停止のあいだと、自動で処理する段階に設計が無いときは送らない。一時停止が解けるか段階を戻したときに、評価が記録の並びから merge 待ちと判定し、この指示を送る。設計の最初の指示は送らない (`features/issue-flow.md`「段階の AI を始める」)
+- どの反映のしかたでも、実装待ちに移すときに子があれば、実装待ち (親) にする (`features/issue-flow.md`「設計済みの issue と親の issue」)
+
+失敗の文 (`design_reflect_failed` の `message`) は、git か `gh` の出力のうち最初のエラーの 1 行と、次にできることを組み合わせる。
+
+| 失敗 | 文の例 |
+| --- | --- |
+| rebase がぶつかった | 「既定ブランチの変更と設計書の変更がぶつかりました (docs/design/features/stock.md)。差し戻して、AI に既定ブランチを取り込ませてください」 |
+| push を拒まれた | 「既定ブランチへ push できませんでした: <git の 1 行>。反映のしかたを PR にすると入れられます」 |
+| 開いている worktree の変更とぶつかった | 「プロジェクトのディレクトリに、設計書と同じファイルの未コミットの変更があります。片付けてから、もう一度承認してください」 |
+| GitHub につながらない | 「GitHub につながりませんでした。時間をおいて、もう一度承認してください」 |
+
+### 差し戻し
+
+差し戻しは、次の 3 つの入口のどれから入っても、同じ処理 (`rejectDesign`) を通る。
+
+| 入口 | 届く文 |
+| --- | --- |
+| メニュー「指摘を書いて差し戻す」(`POST /api/issues/:id/design/reject`) | 設計の会話のストックの指示すべてと、書いた文 |
+| 設計の会話のストックから指示を送る (`features/stock-thread.md` の送信) | 送ると選んだストックの指示 |
+| 設計の会話で発言を送る (`features/conversation.md` の送信) | 書いた発言 |
+
+処理は次のとおりである。
+
+1. issue が設計レビューで、反映中でないことを確かめる。違えば、差し戻しとして扱わない (入口が会話かストックなら、ふつうの指示として届ける)
+2. `design_rejected` を記録し、issue を設計待ちにする
+3. 設計の会話の続きとして、AI に 1 通で届ける。先頭に「設計レビューで差し戻されました。次の指摘に沿って設計を直し、コミットしてから report_design で報告してください」を付け、その後に指摘を続ける。引用の付け方は `features/stock-thread.md` のストックの指示と同じにする
+4. 届ける指示の `origin` は、メニューと会話の発言からは `developer`、ストックからは `stock` とする。会話には、前置きを含めて開発者の発言として出す。届けたストックの指示は送った印になる
+5. AI が `report_design` で報告すると、新しい `design_submitted` が記録され、issue は設計レビューに戻る。一覧と通知に出るかは `features/inbox.md` に従う
+
+- メニューからの差し戻しで、書いた文が空で、ストックの指示も 0 件のときは送らない。「指摘を書くか、指示をストックしてから差し戻してください」のお知らせを出し、入力欄は開いたまま残す
+- ストックの質問は、差し戻しでは送らない。ストックに残る
+- 会話から送った差し戻しも、メニューからの差し戻しと同じく、書きかけの入力 (`drafts`) を送った時点で消す
+- 前に設計で分けた子の直し方は、`features/issue-flow.md`「設計の AI」の読み替えの表の「直しのモード」の行にある
+
+## API
+
+共通のエラー応答と本人の判定は DESIGN.md「横断規約 > エラー応答」「横断規約 > 本人の判定」参照。
+
+### GET `/api/issues/:id/design`
+
+設計レビューの内容を返す。差分は、記録した `baseCommit` と `headCommit` から画面のサーバーが git で求める。
+
+```json
+{
+  "issueId": "01J...",
+  "state": "design_review",
+  "status": "reviewing",
+  "designConversationId": "01J...",
+  "submittedAt": 1764100000000,
+  "policy": "予約の作成時に在庫を引き当てる。期限は 30 分。",
+  "checks": ["期限切れの引き当ては、1 分ごとの定期処理で戻します。これでよいですか?"],
+  "headCommit": "3f2a9c1...",
+  "files": [
+    {
+      "path": "docs/design/features/stock.md",
+      "status": "modified",
+      "binary": false,
+      "hunks": [
+        {
+          "oldStart": 12, "oldLines": 1, "newStart": 12, "newLines": 2,
+          "lines": [
+            { "kind": "del", "oldNo": 12, "newNo": null, "text": "在庫は出荷時に減らす。" },
+            { "kind": "add", "oldNo": null, "newNo": 12, "text": "在庫は予約の作成時に引き当て、出荷時に減らす。" }
+          ]
+        }
+      ]
+    }
+  ],
+  "reflection": { "mode": "direct", "prUrl": null, "failure": null, "reflectedCommit": null },
+  "unsentInstructionCount": 2
+}
+```
+
+- `status` は `none` (設計の記録が無い) / `designing` (設計待ち) / `reviewing` (設計レビュー) / `reflecting` (反映中) / `merging_pr` (PR で反映中) / `merge_failed` (設計書の PR を merge できず停止中) / `approved` (反映済み) とする
+- `merge_failed` は、停止中で、停止中へ移した `state_changed` の `cause` が `design_pr_not_merged` のときである。そのほかの停止中は、停止前の状態の値にする
+- `files[].hunks[].lines[].kind` は `add` (追加) / `del` (削除) / `ctx` (前後の変わらない行) とする。`ctx` の行は `oldNo` と `newNo` の両方を持つ
+- `files[].status` は `added` / `modified` / `deleted` / `renamed` とする。`binary` が真のファイルは `hunks` を空にする
+- `reflection.failure` は、最新の `design_reflect_failed` の文である。その後に承認か差し戻しがあれば `null` にする
+- 設計の記録が無いときも 200 を返し、`status: "none"` と空の中身を返す
+- 記録したコミットがリポジトリから消えていて差分を求められないときは、`files` を空にし、`diffError` に「設計のコミットが見つかりません。差し戻して、AI に設計の完了を報告し直させてください」を入れる
+
+### POST `/api/issues/:id/design/approve`
+
+設計を承認する。反映はランナーで非同期に進み、結果は `/ws` の issue の配信と、この issue の `GET /api/issues/:id/design` で分かる。
+
+- リクエスト: `{ "headCommit": "3f2a9c1..." }`
+- 応答: 202 `{ "status": "reflecting" }`。設計書の変更が無いときも同じ形で返し、すぐに実装待ちへ移る
+- 409 `conflict`: 設計レビューではない / 反映中 / `headCommit` が最新の設計と違う。`message` に読み直しや待つことを書く
+- 503 `runner_unavailable`: ランナーにつながらない。承認は記録しない
+
+### POST `/api/issues/:id/design/reject`
+
+設計を差し戻す。
+
+- リクエスト: `{ "text": "期限は設定で変えられるようにして" }`。`text` は空でもよい (ストックの指示があれば)。長さは 0〜20,000 字
+- 応答: 202 `{ "deliveredStockIds": ["01J...", "01J..."] }`
+- 400 `invalid_input`: 文が空で、ストックの指示も 0 件
+- 409 `conflict`: 設計レビューではない / 反映中
+- 503 `runner_unavailable`: ランナーにつながらない。ストックも書いた文も、送る前のまま残す
+
+### ランナーへの操作
+
+`src/shared/ipc.ts` に次を足す (`features/runtime.md`「画面のサーバーからランナーへの操作」)。どれも、状態が合わなければ 409 を返す。
+
+| メソッド | パス | 用途 | 主な入力 | 主な出力 |
+| --- | --- | --- | --- | --- |
+| POST | `/flow/issues/:id/design/approve` | 設計を承認し、反映を始める | `head_commit` | `status` |
+| POST | `/flow/issues/:id/design/reject` | メニューから差し戻す | `text` | `delivered_stock_ids` |
+
+- 会話の送信 (`/conversations/:id/messages`) とストックの送信 (`/conversations/:id/stock/send`) は、ランナーの中で、設計の会話に届ける前に `rejectDesign` の判定を呼ぶ。ソケットの操作は足さない
+
+## 実装の配置
+
+| 処理 | 層 | 実装先ファイル |
+| --- | --- | --- |
+| 設計レビューの状況 (`status`) を `issue_events` の並びから求める規則 | ドメイン | `src/server/modules/flow/domain/design-status.ts` |
+| 設計レビューの内容を組み立てる → issues, issue_events, conversations, stock_items | ユースケース | `src/server/modules/flow/usecase/get-design.ts` |
+| 承認と差し戻しの事前の検査と、ランナーへの受け渡し | ユースケース | `src/server/modules/flow/usecase/approve-design.ts`、`src/server/modules/flow/usecase/reject-design.ts` |
+| 設計の差分を git で求める (`git diff <base> <head>` を行の形に直す) | インフラ (git の Port) | `src/server/modules/workspace/adapter/git-cli.ts` |
+| API ハンドラ (`/api/issues/:id/design` の 3 本) | API ハンドラ | `src/server/modules/flow/adapter/design-routes.ts` |
+| 設計の worktree を作る、片付ける → worktrees, conversations | ユースケース | `src/runner/modules/flow/usecase/design-workspace.ts` |
+| 設計の完了を記録する → issue_events, issues | ユースケース | `src/runner/modules/flow/usecase/submit-design.ts` |
+| 反映 (変更なし・直接・PR) と失敗の記録 → issue_events, issues | ユースケース | `src/runner/modules/flow/usecase/reflect-design.ts` |
+| 差し戻し (`rejectDesign`) → issue_events, issues, stock_items, conversation_events | ユースケース | `src/runner/modules/flow/usecase/reject-design.ts` |
+| git と `gh` の実行 | インフラ (Port) | `src/runner/modules/workspace/adapter/git-cli.ts`、`src/runner/modules/flow/adapter/gh-cli.ts` |
+| 入出力の Zod のスキーマ | 共有 | `src/shared/api/design.ts` |
+| 「設計」の表示 (行の組み立て、メニュー、確認、差し戻しの入力欄) | UI | `src/front/pages/issue/design-view.tsx`、`src/front/pages/issue/design-lines.ts` |
+
+- 会話の送信とストックの送信は、設計の会話の指示を届ける前に `flow` に差し戻しの判定を問う。入口の側の実装は `features/conversation.md` と `features/stock-thread.md` に置き、判定と処理は `reject-design.ts` に置く
+- テーブルの定義は DESIGN.md「データスキーマ」参照
+
+## エッジケースの決定
+
+1. **空・最小データ**: 設計書の変更が無い設計は、差分の代わりに「設計書の変更はありません」を出し、承認すると何も反映せずに実装待ちにする。確かめたい点が 0 件なら「ありません」を出す。修正方針が空の報告は `report_design` が受け付けない (`features/issue.md`)。設計の記録が無い issue の「設計」の表示は「設計はまだありません」の 1 行にする
+2. **上限・境界値**: 差し戻しの文は 20,000 字までとし、超えたら `invalid_input` で送らない。差分は件数で切らず、長いファイルは会話の差分と同じ規則で畳む。バイナリのファイルはパスと「バイナリのため差分を出しません」だけを出す
+3. **エラー時に利用者へ見えるもの**: 反映の失敗は、設計の表示の先頭の行と、エラーのお知らせの 2 か所に出す。承認と差し戻しの API の失敗は、`message` をエラーのお知らせに出し、入力欄とストックはそのまま残す。差分を求められないときは、差分の位置に `diffError` の文を出す。本人の判定は DESIGN.md「横断規約 > 本人の判定」参照
+4. **並行操作・二重実行**: 承認は `headCommit` が一致するときだけ通す。反映中の 2 回目の承認と差し戻しは `conflict` にする。2 つの端末で同時に承認すると、先に届いた方だけが通る (状態の検査と `design_approved` の記録を 1 つのトランザクションに入れる)。スレッドの AI が設計のブランチへコミットした後の承認も `conflict` にする
+5. **再表示時の整合**: 「設計」の表示は、開くたびと、`/ws` の issue の配信を受けるたびに `GET /api/issues/:id/design` を読み直す。配信だけで表示を作らない (DESIGN.md「横断規約 > 配信」)
+6. **表示の寿命**: 反映中の行は、反映が終わるか失敗するまで出す。失敗の行は、次の承認か差し戻しまで残す。承認済みの行は、その後も表示に残す
+7. **送る前のデータ**: 差し戻しの入力欄の文は、設計の会話の書きかけの入力 (`drafts`) に置く (方針 P1)。送るまで残り、ほかの端末でも続きを書ける。承認してもストックの指示は消さず、送るか自分で消すまで残す
+8. **状態の移り変わり**: 設計レビュー → 承認 (変更なし・直接入れる) → 実装待ち。設計レビュー → 承認 (PR で入れる) → 設計待ち → merge できた → 実装待ち。merge できなかったら停止中 (`failed`)。設計レビュー → 差し戻し → 設計待ち → 設計の完了 → 設計レビュー。反映に失敗したら設計レビューのまま。移り変わりの表は `features/issue-flow.md` にある
+9. **自動で進むこと**: 承認の後の反映は、開発者の操作なしに最後まで進める (方針 P2)。反映の途中でランナーが再起動したら、起動時に最後の `design_approved` の後に結果の記録 (`design_reflected`・`design_reflect_failed`・`design_pr_created`) が無い issue を探して反映をやり直す (`features/issue-flow.md`「ランナーの再起動のあと」)。すでに既定ブランチへ入っていれば、成功として記録する。失敗した反映は自動ではやり直さず、開発者の承認を待つ。PR の merge を待つ AI の再開は、利用枠切れのときだけ自動で行う (BR-091)
+10. **端末と画面をまたぐこと**: ストック、書きかけの入力、承認と差し戻しの結果はサーバーに置き、どの端末でも同じにする (方針 P1・P3)。どの表示 (会話・設計・差分) を開いているか、カーソルの位置は、ブラウザのタブごとに持つ。最初に開く表示は issue の状態で決め、前に見ていた表示は覚えない
+11. **並びと数え方**: 差分のファイルは `git diff` の出力の順 (パスの順) に並べる。確かめたい点は AI が報告した順に並べる。「送っていない指示 n 件」は、設計の会話のストックのうち状態が `stocked` で種類が指示のものを数える
+
+## テスト方針
+
+| 受け入れ基準 (docs/design/USECASES.md) | レベル |
+| --- | --- |
+| （US-009）設計レビューの issue を開くと、修正方針、設計書の差分、AI が確かめたい点が表示される | 単体 |
+| （US-009）設計を承認すると、issue が実装待ちになる | 結合 |
+| （US-009）設計を差し戻すと、指摘が設計した会話の続きで AI に届き、直し終えると issue が設計レビューに戻る | E2E |
+| （US-009）設計レビュー中の issue の会話で発言を送ると、issue が設計待ちに戻り、直し終えると設計レビューに戻る | 結合 |
+| （US-037）設計を承認すると、設計書の変更が既定ブランチに反映される | 結合 |
+| （US-037）設計書の変更が無い issue を承認すると、何も反映されずに実装待ちになる | 結合 |
+| （US-037）既定ブランチへ直接入れない設定のプロジェクトで承認すると、設計書の PR が作られ、CI が通ると AI が merge して実装待ちになる | 結合 |
+| （US-037）設計書の反映に失敗すると、理由が表示され、issue は設計レビューのままになる | 結合 |
+| （US-024）設計を読み、指摘をストックし、承認か差し戻しをするまでを、Vim と同じ操作感のキーボード操作だけで行える | E2E |
+
+- 単体: 「設計」の表示の行の組み立てを、設計 API の応答の見本から確かめる (修正方針・確かめたい点・差分・状態ごとの先頭の行)。文言は完全一致で比べる
+- 結合: ランナーの `flow` を、本物の SQLite と、一時ディレクトリに作った本物の git のリポジトリで動かす。Agent SDK は台本どおりにイベントを流す偽物、`gh` は Port の偽物に差し替える。Agent SDK の偽物は、名前が `mcp__sukuna__` で始まるツールの呼び出しでは、登録した処理を実際に呼ぶ (`features/runtime.md`)。設計の AI のコミットは、台本の `shell` の段 (`features/runtime.md`) が設計の worktree で git を実行して作る。直接入れる反映は、既定ブランチの先頭が設計のコミットになることで確かめ、PR の反映は偽物の `gh` に PR の作成と merge 済みの状態を返させて確かめる
+- 結合 (反映の失敗): 既定ブランチに同じ行を変えるコミットを先に入れ、rebase がぶつかると `design_reflect_failed` の文が設計 API に出て、状態が設計レビューのままであることを確かめる
+- 会話で発言を送る行は、会話の送信の API から入り、issue が設計待ちになり、偽物の AI が `report_design` を呼ぶと設計レビューに戻ることを結合で確かめる。差し戻しの E2E と同じ処理 (`rejectDesign`) を通るので、E2E にしない
+- 承認の行は、キーボード操作の E2E が承認までをなぞるので、結合で状態の移り変わりだけを確かめる
+- E2E (US-009 の差し戻し): 設計レビューの issue を前提データで用意し、メニューから指摘を書いて差し戻す。偽物の AI が `report_design` を呼ぶと、設計の表示が設計レビューに戻ることを確かめる
+- E2E (US-024): 「設計」の表示で修正方針と差分を読み、行を選んで `Space c` で指示をストックし、メニューで承認して `y` で答え、issue が実装待ちになるまでをキーボードだけで行う
+
+E2E 対象動線: （US-009）設計を差し戻すと、指摘が設計した会話の続きで AI に届き、直し終えると issue が設計レビューに戻る
+
+E2E 対象動線: （US-024）設計を読み、指摘をストックし、承認か差し戻しをするまでを、Vim と同じ操作感のキーボード操作だけで行える
