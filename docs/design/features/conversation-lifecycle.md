@@ -264,7 +264,7 @@ DESIGN.md「API 一覧」のうち、本機能の 5 本を持つ。エラーの�
 | 削除 → conversations (子の行は ON DELETE CASCADE で消える)、notifications、stock_items (`thread_conversation_id`) | ユースケース | `src/server/modules/conversation/usecase/delete.ts` |
 | 会話とスレッドの一覧 → conversations、issues | ユースケース | `src/server/modules/conversation/usecase/list-conversations.ts` |
 | issue と会話の検索 → issues、conversations | ユースケース | `src/server/modules/conversation/usecase/search.ts` |
-| git と gh を実行する口 (GitPort) の実物 | インフラ | `src/server/modules/workspace/adapter/git.ts` |
+| git と gh を実行する口 (GitPort) の実物 | インフラ | `src/server/modules/workspace/adapter/git-cli.ts` (`features/runtime.md`「実装の配置」の土台に足す) |
 | API ハンドラ | API ハンドラ | `src/server/modules/conversation/adapter/lifecycle-http.ts` |
 | 締めくくりの確認、会話とスレッドの一覧、検索の結果 | UI | `src/front/components/lifecycle/{ClosingWindow,ConversationList,SearchResults}.tsx` |
 

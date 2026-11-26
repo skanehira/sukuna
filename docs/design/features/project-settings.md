@@ -68,6 +68,7 @@
 | 文字の行 (名前、既定ブランチ、同時に実装する件数) で `Enter` か `i` | 今の値を入れた入力欄を開く (`features/buffer-ui.md`)。Normal モードの `Enter` で保存する |
 | パスの行で `Enter` | 何もしない。パスは変えられない |
 
+- 設定は、次に開く実行から効く。新しく始める会話と、止まった会話の再開が当たる。動いている AI には、その実行を開いたときの設定が効き続ける
 - 保存したら、お知らせに「<項目> を <値> にしました。次に始まる AI から使います」を出す。保存に失敗したら、`message` をエラーのお知らせに出す。選択肢の行は前の値に戻し、入力欄は書いた値を残す
 
 **値の使われ方**:
@@ -309,7 +310,7 @@
 | `PUT /api/settings/flow-paused` のハンドラ | API ハンドラ | `features/operations.md` の設定の API ハンドラ (`src/server/modules/settings/adapter/routes.ts`) に足す |
 | 設定の変化を受けて issue を拾い直す。一時停止と段階の検査 | ユースケース | `src/runner/modules/flow/usecase/flow-gate.ts` |
 | 解除の前に会話を止める (`/flow/projects/:id/stop`) → conversations, conversation_events | ユースケース | `src/runner/modules/flow/usecase/stop-project.ts` |
-| 利用枠の状態を保存する → settings | ユースケース | `src/runner/modules/conversation/usecase/record-rate-limit.ts` |
+| 利用枠の状態を保存する → settings | ユースケース | `src/runner/modules/conversation/usecase/record-rate-limit.ts` (`features/runtime.md` のランナーの会話の実行が作る。本機能は保存した値を読む) |
 | 入出力の Zod のスキーマ | 共有 | `src/shared/api/project.ts`、`src/shared/api/usage.ts` |
 | 設定の画面の「全体」の自動フローの行と、プロジェクトの節 | UI | `src/front/components/settings/project-section.tsx` (`features/operations.md` の設定の画面 `src/front/pages/settings.tsx` が並べる部品) |
 | 取り込みの画面、利用量の画面 | UI | `src/front/pages/github-import.tsx`、`src/front/pages/usage.tsx` |

@@ -393,10 +393,10 @@ DESIGN.md「API 一覧」のうち本機能の分を書く。エラーの形と�
 | 画像の保存 | ユースケース | `src/server/modules/conversation/usecase/upload-image.ts` |
 | API のハンドラ | API ハンドラ | `src/server/modules/conversation/adapter/http.ts` |
 | テーブルの読み書き | インフラ (Repository) | `src/server/modules/conversation/adapter/repository.ts` |
-| 会話の実行 (開く、届ける、預かった指示を届ける、止める、再開する) → conversations、conversation_events、queued_instructions、stock_items (`sent_seq`) | ユースケース | `src/runner/modules/conversation/usecase/run-conversation.ts` |
-| issue の会話へ届ける前の `flow` の判定の呼び出し | ユースケース | `src/runner/modules/conversation/usecase/run-conversation.ts` から `src/runner/modules/flow/usecase/reject-design.ts`、`impl-instruction.ts`、`retry-stage-worktree.ts` を呼ぶ |
-| 質問と許可の確認の保留、回答の受け渡し → questions、pending_answers (削除)、conversation_events | ユースケース | `src/runner/modules/conversation/usecase/hold-requests.ts` |
-| 利用枠の戻りを待つタイマー (自動フローの会話は一時停止を `flow` に問う)、再起動のあとの状態の付け直し | ユースケース | `src/runner/modules/conversation/usecase/recover.ts` |
+| 会話の実行 (開く、届ける、預かった指示を届ける、止める、再開する) → conversations、conversation_events、queued_instructions、stock_items (`sent_seq`) | ユースケース | `features/runtime.md`「実装の配置」の `src/runner/modules/conversation/usecase/*.ts` に足す (ファイルは同書が正本) |
+| issue の会話へ届ける前の `flow` の判定の呼び出し | ユースケース | 上のユースケースの送信と再開から `src/runner/modules/flow/usecase/reject-design.ts`、`impl-instruction.ts`、`retry-stage-worktree.ts` を呼ぶ |
+| 質問と許可の確認の保留、回答の受け渡し → questions、pending_answers (削除)、conversation_events | ユースケース | `features/runtime.md`「実装の配置」の回答と許可のユースケースに足す |
+| 利用枠の戻りを待つタイマー (自動フローの会話は一時停止を `flow` に問う)、再起動のあとの状態の付け直し | ユースケース | `features/runtime.md`「実装の配置」の `usage-limit-timer.ts` と `recover.ts` に足す |
 | スキルとコマンドの一覧の記憶 | インフラ | `src/runner/modules/conversation/adapter/command-cache.ts` |
 | 会話の画面、入力欄、質問の区画、届く前の指示の行 | UI | `src/front/pages/conversation/`、`src/front/components/conversation/` |
 | 書きかけの同期と未送信の扱い | UI | `src/front/lib/conversation/draft-sync.ts` |

@@ -672,6 +672,7 @@ interface GhRunner {
 | テーブルの定義、接続の設定、マイグレーションの当て方 (ロックを取って呼ぶのは `features/operations.md` の `startup.ts`) → 全テーブル | 共有 (インフラ) | `src/shared/db/schema.ts`、`src/shared/db/migrations/`、`src/shared/db/open.ts`、`src/shared/db/migrate.ts` |
 | 環境変数の読み取りと、起動を失敗させる検査 (`features/operations.md`「環境変数」) | 共有 | `src/shared/env.ts` |
 | `gh` の実行器と、その偽物の台本の形 | 共有 (インフラ) | `src/shared/gh/gh-runner.ts`、`src/shared/gh/scripted-gh.ts`、`src/shared/gh-script.ts` |
+| git と `gh` を実行する口の土台。実行の口と偽物への差し替えだけを持ち、各機能が自分の関数を足す | インフラ | `src/server/modules/workspace/adapter/git-cli.ts`、`src/runner/modules/workspace/adapter/git-cli.ts`、`src/runner/modules/flow/adapter/gh-cli.ts` |
 | ロガー | 共有 | `src/shared/log.ts` |
 | ランナーの起動の順序と組み立て | ランナーの入口 | `src/runner/main.ts`、`src/runner/app.ts` |
 | ソケットの待ち受けと操作の振り分け | インフラ (ランナー) | `src/runner/modules/conversation/adapter/ipc-routes.ts` |
@@ -681,6 +682,7 @@ interface GhRunner {
 | 開始・送信・停止・再開・分岐・回答・許可・手放す → `conversations`、`conversation_events`、`queued_instructions`、`pending_answers`、`questions` | ユースケース | `src/runner/modules/conversation/usecase/*.ts` |
 | 再起動のときの直し → `conversations`、`conversation_events` | ユースケース | `src/runner/modules/conversation/usecase/recover.ts` |
 | 利用枠の戻りを待つタイマー | ユースケース | `src/runner/modules/conversation/usecase/usage-limit-timer.ts` |
+| 利用枠の状態の保存 → `settings` (`usage.rate_limit`) | ユースケース | `src/runner/modules/conversation/usecase/record-rate-limit.ts` |
 | 記録の保存 → `conversation_events`、`conversations` | インフラ (Repository) | `src/runner/modules/conversation/adapter/sqlite-conversation-store.ts` |
 | SDK の実物と、SDK のメッセージからの写し | インフラ | `src/runner/modules/conversation/adapter/claude-agent-sdk.ts`、`src/runner/modules/conversation/adapter/sdk-message-mapping.ts` |
 | 偽物 | インフラ | `src/runner/modules/conversation/adapter/scripted-agent.ts` |

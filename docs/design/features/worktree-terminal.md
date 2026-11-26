@@ -199,7 +199,7 @@
 ### POST `/api/projects/:id/worktrees`
 
 - リクエスト: `{ "name": "try-2" }`
-- 応答: 201 で、一覧の 1 件と同じ形
+- 応答: 201 で、一覧の 1 件と同じ形に `notice` を足す。`notice` は、fetch に失敗して手元の既定ブランチから作ったときの文「GitHub から取得できなかったので、手元の既定ブランチから作りました」で、それ以外は `null` にする。画面は `notice` をお知らせに出す
 - 400 `invalid_input`: 名前が規則に合わないか、`design-` か `issue-` で始まるか、`main` か `sukuna` である。`message` に規則を書く
 - 409 `conflict`: 同じ名前の worktree かフォルダがある / 同じ名前のブランチがほかの worktree で開かれている
 - 500 `worktree_failed`: git が失敗した。`message` に git の出力の最初のエラーの 1 行を入れる
