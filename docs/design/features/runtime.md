@@ -123,7 +123,7 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 - `stock_items` の `state` と `thread_conversation_id` (`features/stock-thread.md`)
 - 下書きから精査待ちへ移す `issues` (`features/issue.md`)
 - `toc_entries` の `title` と `start_seq`。ランナーが行を足し、画面のサーバーが開発者の修正を書く (`features/recap.md`)
-- `conversations` の `cwd` と `worktree_id`。worktree の削除では、画面のサーバーが `cwd` が消した worktree のパスのときだけ書く。merge のあとの直しなど、自動フローが worktree を用意したときはランナーが書く (`features/worktree-terminal.md`、`features/implementation-flow.md`)
+- `conversations` の `cwd` と `worktree_id`。worktree の削除では、画面のサーバーが `cwd` が消した worktree のパスのときだけ書く。merge のあとの直しなど、自動フローが worktree を用意したときと、開発者が作業場所を切り替えたときはランナーが書く。切り替えでは、読んだときの `cwd` を条件に付ける (`features/worktree-terminal.md`、`features/implementation-flow.md`)
 - `worktrees` の `removed_at`。どちらのプロセスも、`removed_at` が空のときだけ書く (`features/worktree-terminal.md`「書くプロセス」)
 
 貼り付けた画像は、画面のサーバーが `$SUKUNA_HOME/images/<conversation_id>/<ID>.<拡張子>` に書き、記録には `SUKUNA_HOME` からの相対のパスで残す。ランナーは、指示を送るときにこのファイルを読む。
@@ -149,6 +149,7 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 | POST | `/conversations/:id/answers` | 選択式の質問に答える | `request_id`、`answers` (`pending_answers.answers` と同じ形) | `result` (`answered` / `delivered` / `queued`)、`seq?` |
 | POST | `/conversations/:id/permissions/:requestId` | 許可の確認に答える | `behavior` (`allow` / `deny`)、`message?` | `seq` |
 | GET | `/conversations/:id/commands` | スキルとスラッシュコマンドの候補 | なし | `commands` (`name`、`description`) |
+| POST | `/conversations/:id/workspace` | 開発者が始めた会話の作業ディレクトリを切り替える。開いている実行を閉じる (`features/worktree-terminal.md`「作業場所の切り替え」) | `cwd`、`worktree_id?` | `cwd` |
 | POST | `/conversations/:id/release` | 実行を片付けて手放す (閉じる・削除の前)。利用枠の戻りを待つタイマーも外す | なし | `run_state` |
 | POST | `/conversations/:id/stock/send` | ストックを送る (`features/stock-thread.md`) | `kinds` | stock-thread.md の `POST /api/conversations/:id/stock/send` の 200 と同じ |
 | POST | `/conversations/:id/recap/rebuild` | 反映していない番から目次などの更新をやり直す (`features/recap.md`) | なし | `state` |

@@ -202,7 +202,7 @@ AI が作業中: <工程> <工程の経過> / 最後にしたこと: <最後に�
 - 止める処理は `POST /api/conversations/:id/stop` (`features/conversation.md`) を呼ぶ。issue では担当の会話を止める。AI と、裏へ移ったコマンドが止まり、会話の記録は保存される (DESIGN.md「既知の制約」)
 - 止めた会話は `run_state` が `stopped`、`stop_reason` が `user` になり、一覧では指示待ち (理由 `stopped_by_user`) に移る。届く前の指示は届けずに残す (BR-088)
 - 確認は挟まない。止めた作業は、指示を送れば続きから動くためである (BR-056)
-- 止められたら、お知らせに「AI を止めました」を出す。止める AI が無ければ 409 が返り、その `message` (「止める AI がありません」) をお知らせに出す (`features/conversation.md`)
+- 止められたら、お知らせに「<送り先> の AI を止めました。作業は保存され、指示待ちになります」を出す (文の決まりは `features/conversation.md`)。止める AI が無ければ 409 が返り、その `message` (「止める AI がありません」) をお知らせに出す (`features/conversation.md`)
 - 止めた issue の状態は変えない。自動フローは、開発者が止めた担当の会話を、指示が送られるまで動かさない (`features/issue-flow.md`)
 - 止めたあとに指示を送ると、同じ会話を再開して続きから動く (`features/conversation.md`)
 

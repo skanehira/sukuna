@@ -141,7 +141,7 @@ SQLite のファイルを 1 つ使う。識別子は ULID の文字列、時刻�
 
 | テーブル | 主な列 | 役割 |
 | --- | --- | --- |
-| `projects` | `id`、`name`、`path`、`uses_github`、`default_branch`、`permission_mode`、`model`、`design_merge_mode`、`auto_stages`、`impl_concurrency`、`flow_paused`、`removed_at` | 登録したプロジェクトと、自動フローの設定。`auto_stages` は自動で処理する段階 (`triage` / `design` / `impl`) の配列 |
+| `projects` | `id`、`name`、`path`、`uses_github`、`default_branch`、`permission_mode`、`model`、`design_merge_mode`、`auto_stages`、`impl_concurrency`、`confirm_before_merge_default`、`flow_paused`、`removed_at` | 登録したプロジェクトと、自動フローの設定。`auto_stages` は自動で処理する段階 (`triage` / `design` / `impl`) の配列。`confirm_before_merge_default` は新しい issue の merge 前の確認の初めの値 |
 | `conversations` | `id`、`project_id`、`kind`、`issue_id`、`parent_conversation_id`、`title`、`session_id`、`cwd`、`worktree_id`、`run_state`、`stop_reason`、`resets_at`、`last_seq`、`last_read_seq`、`last_position`、`recap_seq`、`recap_failed_at`、`last_activity_at`、`closed_at` | 会話。`kind` は `chat` / `triage` / `design` / `impl` / `thread` |
 | `conversation_events` | `conversation_id`、`seq`、`type`、`payload`、`sdk_uuid`、`created_at` | 会話のイベントの記録。画面はこの記録を表示する |
 | `drafts` | `conversation_id`、`text`、`images`、`updated_at`、`updated_by` | 書きかけの入力。会話ごとに 1 つ |
@@ -249,6 +249,7 @@ SQLite のファイルを 1 つ使う。識別子は ULID の文字列、時刻�
 | GET | `/api/projects/:id/worktrees` | worktree の一覧 | `features/worktree-terminal.md` |
 | POST | `/api/projects/:id/worktrees` | worktree を作る | `features/worktree-terminal.md` |
 | DELETE | `/api/worktrees/:id` | worktree を消す | `features/worktree-terminal.md` |
+| PUT | `/api/conversations/:id/workspace` | 会話の作業場所を切り替える | `features/worktree-terminal.md` |
 | POST | `/api/terminals` | ターミナルを開く | `features/worktree-terminal.md` |
 | POST | `/api/projects` | プロジェクトを登録する | `features/project-settings.md` |
 | GET | `/api/projects/:id` | プロジェクトの設定と、解除すると止まる会話の数 | `features/project-settings.md` |

@@ -282,7 +282,7 @@ type KeymapEntry = {
 
 | キー | 動作の名前 | 動作 | 使える場所 | 処理を持つ機能 |
 | --- | --- | --- | --- | --- |
-| Enter | `open` | 行の先を開く。メニューの行では実行する。設定の画面の値の行では値を変える (`features/project-settings.md`) | Normal | `buffer-ui` |
+| Enter | `open` | 行の先を開く。メニューの行では実行する。値の行では、`i` と同じく値を書く入力欄を開く (`features/project-settings.md`、`features/issue.md`) | Normal | `buffer-ui` |
 | 番号 + Enter | `open` | その番号のメニューの行を実行する | Normal | `buffer-ui` |
 | `-` | `back` | 1 つ前の画面へ戻る。右のウィンドウでは 1 つ前の表示へ | Normal | `buffer-ui` |
 | `:` | `cmdline` | コマンド行を開く | Normal、Visual | `buffer-ui` |
