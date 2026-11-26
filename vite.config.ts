@@ -1,0 +1,232 @@
+import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
+import devServer from "@hono/vite-dev-server";
+import { defineConfig } from "vite-plus";
+import type { Plugin } from "vite";
+import type { UpgradeHandler } from "./src/server/runtime";
+
+function webSocketUpgrade(): Plugin {
+  return {
+    name: "sukuna:ws-upgrade",
+    async configureServer(server) {
+      const httpServer = server.httpServer;
+      if (httpServer === null) return;
+      const runtime = await server.ssrLoadModule("/src/server/runtime.ts");
+      httpServer.on("upgrade", runtime.handleUpgrade as UpgradeHandler);
+    },
+  };
+}
+
+const isTest = Boolean(process.env.VITEST);
+
+export default defineConfig({
+  plugins: [
+    react(),
+    tailwindcss(),
+    !isTest &&
+      devServer({
+        entry: "src/server/dev.ts",
+        exclude: [/^(?!\/api(\/|$)).*/],
+        injectClientScript: false,
+      }),
+    !isTest && webSocketUpgrade(),
+  ],
+
+  environments: {
+    client: {
+      build: { outDir: "dist/client" },
+    },
+    server: {
+      consumer: "server",
+      input: "src/server/main.ts",
+      build: { outDir: "dist/server" },
+    },
+    runner: {
+      consumer: "server",
+      input: "src/runner/main.ts",
+      build: { outDir: "dist/runner" },
+    },
+  },
+
+  builder: {},
+
+  fmt: {
+    ignorePatterns: ["docs/**"],
+  },
+
+  lint: {
+    options: {
+      typeAware: true,
+      typeCheck: true,
+    },
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "react",
+              importNames: ["useEffect"],
+              message:
+                "useEffect は誤用が多いため禁止。どうしても必要な場合は該当行に oxlint-disable コメントを付けて理由を明記する。",
+            },
+          ],
+        },
+      ],
+    },
+    overrides: [
+      {
+        files: ["src/front/**"],
+        rules: {
+          "no-restricted-imports": [
+            "error",
+            {
+              paths: [
+                {
+                  name: "react",
+                  importNames: ["useEffect"],
+                  message:
+                    "useEffect は誤用が多いため禁止。どうしても必要な場合は該当行に oxlint-disable コメントを付けて理由を明記する。",
+                },
+              ],
+              patterns: [
+                {
+                  group: ["**/server/**", "**/runner/**"],
+                  message:
+                    "境界違反: src/front は src/server と src/runner を import できない。通信は HTTP と WebSocket で行い、共有する型は src/shared に置く。",
+                },
+              ],
+            },
+          ],
+        },
+      },
+      {
+        files: ["src/**/domain/**"],
+        rules: {
+          "no-restricted-imports": [
+            "error",
+            {
+              patterns: [
+                {
+                  group: [
+                    "**/adapter/**",
+                    "**/adapters/**",
+                    "**/infrastructure/**",
+                    "**/infra/**",
+                    "**/presentation/**",
+                    "**/middleware/**",
+                    "**/routes/**",
+                    "**/db/**",
+                    "**/usecase/**",
+                    "**/usecases/**",
+                    "**/application/**",
+                    "**/front/**",
+                    "**/server/**",
+                    "**/runner/**",
+                  ],
+                  message:
+                    "Clean Architecture 違反: domain 層は外側のレイヤに依存できない。domain に Port (interface) を定義し、外側に Adapter 実装を置いて DI で繋ぐ。",
+                },
+                {
+                  group: [
+                    "hono",
+                    "hono/*",
+                    "@hono/*",
+                    "drizzle-orm",
+                    "drizzle-orm/*",
+                    "better-sqlite3",
+                    "ws",
+                    "react",
+                    "react/*",
+                    "react-dom",
+                    "react-dom/*",
+                    "react-router",
+                    "react-router/*",
+                    "swr",
+                    "swr/*",
+                  ],
+                  message:
+                    "Clean Architecture 違反: domain 層はフレームワーク・IO ライブラリに依存できない。IO は関数注入 (DI) で外側から渡す。",
+                },
+              ],
+            },
+          ],
+        },
+      },
+      {
+        files: ["src/**/usecase/**", "src/**/usecases/**", "src/**/application/**"],
+        rules: {
+          "no-restricted-imports": [
+            "error",
+            {
+              patterns: [
+                {
+                  group: [
+                    "**/adapter/**",
+                    "**/adapters/**",
+                    "**/infrastructure/**",
+                    "**/infra/**",
+                    "**/presentation/**",
+                    "**/middleware/**",
+                    "**/routes/**",
+                    "**/db/**",
+                    "**/front/**",
+                    "**/server/**",
+                    "**/runner/**",
+                  ],
+                  message:
+                    "Clean Architecture 違反: usecase 層は外側のレイヤに依存できない。domain の Port (interface) を介して DI で受け取る。",
+                },
+                {
+                  group: [
+                    "hono",
+                    "hono/*",
+                    "@hono/*",
+                    "drizzle-orm",
+                    "drizzle-orm/*",
+                    "better-sqlite3",
+                    "ws",
+                    "react",
+                    "react/*",
+                    "react-dom",
+                    "react-dom/*",
+                    "react-router",
+                    "react-router/*",
+                    "swr",
+                    "swr/*",
+                  ],
+                  message:
+                    "Clean Architecture 違反: usecase 層はフレームワーク・IO ライブラリに依存できない。IO は関数注入 (DI) で外側から渡す。",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ],
+  },
+
+  test: {
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: "front",
+          environment: "jsdom",
+          globals: true,
+          setupFiles: ["./src/test/setup.ts"],
+          include: ["src/front/**/*.test.{ts,tsx}"],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: "server",
+          environment: "node",
+          globals: true,
+          include: ["src/server/**/*.test.ts", "src/runner/**/*.test.ts"],
+        },
+      },
+    ],
+  },
+});

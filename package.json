@@ -1,0 +1,47 @@
+{
+  "name": "sukuna",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:runner": "node --watch src/runner/main.ts",
+    "e2e": "playwright test"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.11",
+    "better-sqlite3": "^13.2.0",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.13.16",
+    "neverthrow": "^8.2.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "react-router": "^8.3.0",
+    "swr": "^2.4.2",
+    "ulid": "^3.0.2",
+    "ws": "^8.23.0",
+    "zod": "^4.6.6"
+  },
+  "devDependencies": {
+    "@hono/vite-dev-server": "^0.26.1",
+    "@playwright/test": "^1.65.1",
+    "@tailwindcss/vite": "^4.3.2",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^24.12.3",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@types/ws": "^8.18.2",
+    "@vitejs/plugin-react": "^6.0.1",
+    "drizzle-kit": "^0.31.10",
+    "jsdom": "^29.1.1",
+    "lefthook": "^2.1.10",
+    "tailwindcss": "^4.3.2",
+    "typescript": "^7.0.2",
+    "vite": "catalog:",
+    "vite-plus": "catalog:",
+    "vitest": "catalog:"
+  },
+  "packageManager": "pnpm@11.28.5"
+}
