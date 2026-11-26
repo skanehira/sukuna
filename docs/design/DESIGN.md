@@ -56,7 +56,7 @@ flowchart LR
 | ディレクトリ | 中身 |
 | --- | --- |
 | `src/front` | SPA。`pages`、`components`、`buffer` (Vim のバッファの土台)、`lib` |
-| `src/server` | 画面のサーバー。`main.ts` (入口)、`app.ts` (組み立て)、`modules/<コンテキスト>/{domain,usecase,adapter}`。プロセスに 1 つだけ置く部品として `runtime.ts` (データベースの接続)、`ws-hub.ts` (配信)、`runner-link.ts` (ランナーとの接続) |
+| `src/server` | 画面のサーバー。`main.ts` (入口)、`app.ts` (組み立て)、`modules/<コンテキスト>/{domain,usecase,adapter}`。プロセスに 1 つだけ置く部品として `runtime.ts` (データベースの接続と WebSocket の受け口)、`ws-hub.ts` (配信)、`runner-link.ts` (ランナーとの接続) |
 | `src/runner` | ランナー。`main.ts` (入口)、`app.ts` (組み立て)、`modules/<コンテキスト>/{domain,usecase,adapter}` |
 | `src/shared` | 画面・サーバー・ランナーが共有する型と Zod のスキーマ (API の入出力、イベント、プロセスの間のやりとり、データベースのスキーマ)。入出力を持たないドメインの関数 (例: 依存の循環の検査) も置く |
 
@@ -101,22 +101,21 @@ flowchart LR
 
 ## 開発・検証コマンド
 
-プロジェクトはまだ作られていない。この節は、セットアップの issue の完了後に、実測した値で確定する。セットアップの issue の DoD に「本節を実測値で確定させる (Playwright のセットアップと実行の手順を含む)」を入れる。次は PoC `vite-plus-node-stack` で動いた形で、確定の出発点とする。
-
 | 用途 | コマンド |
 | --- | --- |
 | 依存の導入 | `vp install` |
 | 開発 (SPA と画面のサーバー) | `vp dev --port <port> --strictPort` |
-| 開発 (ランナー) | セットアップの issue で決める。出発点は、ランナーの入口を監視付きで起動する `vp run dev:runner` |
+| 開発 (ランナー) | `vp run dev:runner` |
 | テスト (画面とサーバーとランナー) | `CI=1 vp test --run` |
 | 型・lint・フォーマットの検査 | `vp check` |
 | ビルド | `vp build` |
 | E2E | `vp run e2e` |
-| 本番の起動 | `node dist/server/main.js` と `node dist/runner/main.js` |
+| 本番の起動 | `PORT=<port> node dist/server/main.js` と `node dist/runner/main.js` |
 
 - コマンドは `vp` に揃え、`pnpm`・`vite`・`vitest` を直接実行しない
 - worktree のセットアップ: チェックアウトの直後に `vp install` を実行する。`.env` 系のファイルは使わず、設定は環境変数で渡す
-- ポートは `--port` (開発) と環境変数 `PORT` (本番) で外から指定する。指定したポートで起動できなければ失敗させる (`--strictPort`)。並列の検証で使う基準のポートは 5180 とし、worktree ごとに 10 ずつずらして使う (5180、5190、5200)。E2E は、既に動いているサーバーに相乗りせず、指定したポートで自分のサーバーを起動する
+- Playwright のセットアップ: 初回だけ `vp exec playwright install chromium` を実行してブラウザを入れる。`vp run e2e` は `e2e/start-server.sh` で `vp dev` を起動し、既に動いているサーバーには相乗りしない (`reuseExistingServer: false`)。`SUKUNA_HOME` には実行ごとの一時ディレクトリを渡し、終了時に消す。並列で流すときは `PORT=5190 vp run e2e` のようにポートをずらす
+- ポートは `--port` (開発) と環境変数 `PORT` (本番と E2E) で外から指定する。指定したポートで起動できなければ失敗させる (`--strictPort`)。並列の検証で使う基準のポートは 5180 とし、worktree ごとに 10 ずつずらして使う (5180、5190、5200)
 - データの置き場所は環境変数 `SUKUNA_HOME` で指定する (既定は `~/.sukuna`)。テストと E2E は、実行ごとに作った一時ディレクトリを指定する
 - テストと E2E は、本物の Claude も GitHub も呼ばない。Agent SDK と `gh` は Port の偽物に差し替える。Agent SDK の偽物は、台本どおりにイベントを流し、アプリのツールの呼び出しでは登録した処理を実際に呼ぶ。E2E は、偽物を使う設定で画面のサーバーとランナーを起動する
 - 環境変数は次のとおりとする。値の形、既定の値、読むプロセスは `features/operations.md`「環境変数」が正本である
