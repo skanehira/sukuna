@@ -11,6 +11,7 @@ import { recover } from "./modules/conversation/usecase/recover";
 import { SqliteConversationStore } from "./modules/conversation/adapter/sqlite-conversation-store";
 import { ScriptedAgent } from "./modules/conversation/adapter/scripted-agent";
 import { ClaudeAgentSdk } from "./modules/conversation/adapter/claude-agent-sdk";
+import { createImageFiles } from "./modules/conversation/adapter/image-files";
 import { ChildProcesses } from "./modules/conversation/adapter/child-processes";
 import { systemClock } from "./modules/conversation/adapter/system-clock";
 import type { AgentPort } from "./modules/conversation/domain/agent-port";
@@ -57,6 +58,7 @@ export async function startRunnerApp(options: {
     const runtime = new ConversationRuntime({
       store: new SqliteConversationStore(database.sqlite),
       agent,
+      images: createImageFiles(env.home),
       clock,
       id: ulid,
       uuid: randomUUID,

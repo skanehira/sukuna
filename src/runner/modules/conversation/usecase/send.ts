@@ -33,6 +33,10 @@ export async function sendUnlocked(
   if (input.text.length === 0 && input.images.length === 0 && this.store.queue(id).length === 0)
     return err({ code: "invalid_input", message: "入力を確認してください。" });
   if (activeStates.includes(c.runState) && !input.interrupt) {
+    for (const imageId of input.images) {
+      const image = this.options.images.read(id, imageId);
+      if (image.isErr()) return err(image.error);
+    }
     const queue = this.store.queue(id);
     const queuedId = this.options.id();
     this.record(id, acceptance?.events ?? [], () => {
@@ -53,15 +57,13 @@ export async function sendUnlocked(
     this.partsChanged(id, ["queue"]);
     return ok({ result: "queued", queuedId });
   }
-  if (activeStates.includes(c.runState)) await this.interrupt(id, "interrupt");
-  return ok(
-    this.deliver(
-      id,
-      {
-        ...input,
-        origin: input.interrupt && activeStates.includes(c.runState) ? "interrupt" : input.origin,
-      },
-      acceptance,
-    ),
+  return this.deliver(
+    id,
+    {
+      ...input,
+      origin: input.interrupt && activeStates.includes(c.runState) ? "interrupt" : input.origin,
+    },
+    acceptance,
+    { interrupt: activeStates.includes(c.runState) },
   );
 }

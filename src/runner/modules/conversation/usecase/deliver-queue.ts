@@ -14,7 +14,9 @@ export function deliverQueue(
       !this.store.queue(id).length
     )
       return err(conflict());
-    const result = this.deliver(id, { text: "", images: [], origin: "queued" });
-    return result.result === "delivered" ? ok({ seq: result.seq }) : err(conflict());
+    const result = await this.deliver(id, { text: "", images: [], origin: "queued" });
+    return result.andThen((sent) =>
+      sent.result === "delivered" ? ok({ seq: sent.seq }) : err(conflict()),
+    );
   });
 }

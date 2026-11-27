@@ -25,7 +25,7 @@ export function resume(
     )
       return err(conflict());
     this.record(id, [{ type: "resumed", payload: { by } }]);
-    const sent = this.deliver(
+    const sent = await this.deliver(
       id,
       {
         text: "中断したところから続けてください。",
@@ -33,9 +33,10 @@ export function resume(
         origin: "resume",
       },
       undefined,
-      false,
+      { includeQueued: false },
     );
+    if (sent.isErr()) return err(sent.error);
     if (by === "usage_limit") this.options.notice(id, "利用枠が戻ったため、作業を再開しました。");
-    return ok({ seq: sent.result === "delivered" ? sent.seq : 0 });
+    return ok({ seq: sent.value.result === "delivered" ? sent.value.seq : 0 });
   });
 }

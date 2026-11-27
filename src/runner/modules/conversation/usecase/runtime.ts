@@ -17,6 +17,7 @@ import type {
   PermissionRequest,
   PermissionDecision,
 } from "../domain/agent-port";
+import type { ImagePort, LoadedImage } from "../domain/image-port";
 import type { Clock } from "../domain/clock";
 import type { Conversation, ConversationStore, SendResult } from "../domain/conversation-store";
 import { classifyStop, type RateLimit } from "../domain/stop-reason";
@@ -43,6 +44,7 @@ export type RuntimeSignal = { conversationId: string } & (
 export type RuntimeOptions = {
   store: ConversationStore;
   agent: AgentPort;
+  images: ImagePort;
   clock: Clock;
   id: () => string;
   uuid: () => string;
@@ -222,14 +224,28 @@ export class ConversationRuntime {
     execution.consuming = this.consume(c.id, execution);
     return execution;
   }
-  deliver(
+  async deliver(
     id: string,
     input: SendInput,
     acceptance?: InputAcceptance,
-    includeQueued = true,
-  ): SendResult {
+    options: { includeQueued?: boolean; interrupt?: boolean; omitMissingImages?: boolean } = {},
+  ): Promise<Result<SendResult, OperationError>> {
     const c = this.store.get(id);
     if (!c) throw new Error("会話がありません。");
+    const includeQueued = options.includeQueued ?? true;
+    const queued = includeQueued ? this.store.queue(id) : [];
+    const inputs = [...queued, input];
+    const images: LoadedImage[] = [];
+    let missingImages = 0;
+    for (const imageId of inputs.flatMap((entry) => entry.images)) {
+      const image = this.options.images.read(id, imageId);
+      if (image.isErr()) {
+        if (!options.omitMissingImages || image.error.code !== "invalid_input")
+          return err(image.error);
+        missingImages += 1;
+      } else images.push(image.value);
+    }
+    if (options.interrupt) await this.interrupt(id, "interrupt");
     let execution: Execution;
     try {
       execution = this.execution(c);
@@ -245,8 +261,6 @@ export class ConversationRuntime {
       ]);
       throw error;
     }
-    const queued = includeQueued ? this.store.queue(id) : [];
-    const inputs = [...queued, input];
     const hasStructuredComments = inputs.some((entry) => entry.timelineComments !== undefined);
     const legacyTexts = inputs
       .filter((entry) => entry.timelineComments === undefined && entry.text.length > 0)
@@ -258,7 +272,7 @@ export class ConversationRuntime {
       type: "user_message",
       payload: {
         text,
-        images: [],
+        images: images.map(({ path, mediaType }) => ({ path, media_type: mediaType })),
         origin: input.origin,
         ...(hasStructuredComments
           ? {
@@ -312,8 +326,13 @@ export class ConversationRuntime {
     execution.ended = new Promise((resolve) => {
       execution.end = resolve;
     });
-    execution.session.send({ text, images: [] });
-    return { result: "delivered", seq: record.seq };
+    execution.session.send({
+      text,
+      images: images.map(({ data, mediaType }) => ({ data, mediaType })),
+    });
+    if (missingImages)
+      this.options.notice(id, `画像 ${missingImages} 件が見つからないため、外して届けました`);
+    return ok({ result: "delivered", seq: record.seq });
   }
   private async consume(id: string, execution: Execution): Promise<void> {
     try {
@@ -389,16 +408,27 @@ export class ConversationRuntime {
         intent === null &&
         this.store.queue(id).length
       )
-        void this.serial(id, () => {
+        void this.serial(id, async () => {
           const state = this.store.get(id)?.runState;
           if (
             !this.closing &&
             state === "idle" &&
             this.store.get(id)?.closedAt === null &&
             this.store.queue(id).length
-          )
-            this.deliver(id, { text: "", images: [], origin: "queued" });
-          return Promise.resolve(ok(undefined));
+          ) {
+            const result = await this.deliver(
+              id,
+              { text: "", images: [], origin: "queued" },
+              undefined,
+              { omitMissingImages: true },
+            );
+            if (result.isErr()) {
+              this.log(id, "預かった指示を届けられませんでした。", result.error.message);
+              this.options.notice(id, result.error.message);
+            }
+            return result.map(() => undefined);
+          }
+          return ok(undefined);
         });
       return;
     }

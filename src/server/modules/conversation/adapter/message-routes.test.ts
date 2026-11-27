@@ -65,6 +65,14 @@ async function fixture() {
   const id = (
     await runner.runtime.start({ projectId: "p", kind: "chat", title: "会話", cwd: home })
   )._unsafeUnwrap().conversationId;
+  mkdirSync(join(home, "images", id), { recursive: true });
+  writeFileSync(
+    join(home, "images", id, "existing-image.png"),
+    Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1cAAAAASUVORK5CYII=",
+      "base64",
+    ),
+  );
   const request = async (input: unknown, address = "127.0.0.1") => {
     const response = await server.request(
       `/api/conversations/${id}/messages`,
@@ -136,7 +144,7 @@ it("公開送信は本人判定を通し、入力名・由来・画像IDをIPC�
   ).toEqual([
     {
       text: input.text,
-      images: [],
+      images: [{ path: `images/${f.id}/existing-image.png`, media_type: "image/png" }],
       origin: "developer",
       timeline_comments: comments,
       client_ids: ["first"],
