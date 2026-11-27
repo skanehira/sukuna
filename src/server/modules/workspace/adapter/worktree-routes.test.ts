@@ -947,6 +947,244 @@ describe("worktree API", () => {
 
   it.each(
     (["scripted", "sdk"] as const).flatMap((backend) =>
+      (["messages", "queue", "resume", "timer"] as const).flatMap((delivery) =>
+        (["while-waiting", "after-delivery"] as const).map((shutdown) => ({
+          backend,
+          delivery,
+          shutdown,
+        })),
+      ),
+    ),
+  )(
+    "$backend は $delivery の古い出力待ちと終了が重なっても指示を失わない: $shutdown",
+    async ({ backend, delivery, shutdown }) => {
+      const path = add("shutdown-target");
+      record("w", path, "shutdown-target");
+      const observed = createWorkspaceAgent(backend);
+      const clock = new WorkspaceClock();
+      const runner = ipcRunner(observed.agent, clock);
+      let finishTurn: (() => void) | undefined;
+      let finishOutput: (() => void) | undefined;
+      let stopping: Promise<void> | undefined;
+      let cleanup = false;
+      const outputEnded = new Promise<void>((resolve) => {
+        observed.delayOutputEnd((finish) => {
+          finishOutput = finish;
+          resolve();
+          if (cleanup) finish();
+        });
+      });
+      const firstEnded = new Promise<void>((resolve) => {
+        observed.delayTurnEnd((finish) => {
+          finishTurn = finish;
+          resolve();
+        });
+      });
+      try {
+        expect(
+          await runner.post("/conversations", {
+            project_id: "p",
+            kind: "chat",
+            cwd: path,
+            worktree_id: "w",
+            title: "終了と配達",
+          }),
+        ).toEqual({ status: 200, body: { conversation_id: "new-c-1" } });
+        const send = (text: string, images: string[] = []) =>
+          runner.post("/conversations/new-c-1/messages", {
+            text,
+            images,
+            interrupt: false,
+            client_id: text,
+            origin: "developer",
+          });
+        const first =
+          delivery === "timer"
+            ? "first-usage"
+            : delivery === "resume"
+              ? "first-failed"
+              : "first-hold";
+        expect(await send(first)).toEqual({ status: 200, body: { result: "delivered", seq: 1 } });
+        await runner.until(() =>
+          runner.runtime.store.events("new-c-1").some((event) => event.type === "tool_result"),
+        );
+        expect(
+          runner.runtime.store.events("new-c-1").find((event) => event.type === "tool_result")
+            ?.payload,
+        ).toEqual({
+          tool_use_id: expect.any(String),
+          content: `${path}\n`,
+          is_error: false,
+          bytes: Buffer.byteLength(`${path}\n`),
+          truncated: false,
+        });
+        const image = Buffer.from([137, 80, 78, 71]);
+        const imagePath = join(home, "images", "new-c-1", "one.png");
+        mkdirSync(join(home, "images", "new-c-1"), { recursive: true });
+        writeFileSync(imagePath, image);
+        expect(await send("queued", ["one"])).toEqual({
+          status: 200,
+          body: { result: "queued", queued_id: "new-c-2" },
+        });
+        if (first === "first-hold") {
+          const stopped = runner.post("/conversations/new-c-1/stop", {});
+          await firstEnded;
+          finishTurn!();
+          expect(await stopped).toEqual({ status: 200, body: { run_state: "stopped" } });
+        } else {
+          await firstEnded;
+          finishTurn!();
+          await runner.until(() => runner.runtime.store.get("new-c-1")?.runState !== "working");
+        }
+        const removed = await request("/api/worktrees/w", "DELETE");
+        expect({ status: removed.status, body: await removed.json() }).toEqual({
+          status: 200,
+          body: { removedBranch: false, movedConversationIds: ["new-c-1"] },
+        });
+        expect(existsSync(path)).toBe(false);
+        const queue = runner.runtime.store.queue("new-c-1");
+        const reads: string[] = [];
+        const imageFiles = runner.runtime.options.images;
+        runner.runtime.options.images = {
+          read(id, imageId) {
+            reads.push(imageId);
+            return imageFiles.read(id, imageId);
+          },
+        };
+        expect(clock.timers.size).toBe(delivery === "timer" ? 1 : 0);
+        const pending =
+          delivery === "messages"
+            ? send("again", ["one"])
+            : delivery === "queue"
+              ? runner.post("/conversations/new-c-1/queue/deliver", {})
+              : delivery === "resume"
+                ? runner.post("/conversations/new-c-1/resume", {})
+                : clock.advance(69000);
+        await Promise.race([
+          outputEnded,
+          pending.then(() => {
+            throw new Error("古い実行の出力の消費完了を待っていません");
+          }),
+        ]);
+        expect(reads).toEqual(
+          delivery === "messages" ? ["one", "one"] : delivery === "queue" ? ["one"] : [],
+        );
+        expect({ opened: observed.opened.length, closed: observed.closed }).toEqual({
+          opened: 1,
+          closed: [0],
+        });
+        const events = runner.runtime.store.events("new-c-1");
+        const state = runner.runtime.store.get("new-c-1");
+        if (shutdown === "while-waiting") stopping = runner.runtime.shutdown();
+        finishOutput!();
+        const result = await pending;
+        if (shutdown === "while-waiting") {
+          expect(result).toEqual(
+            delivery === "timer"
+              ? undefined
+              : {
+                  status: 409,
+                  body: {
+                    error: {
+                      code: "conflict",
+                      message: "会話の状態が変わりました。もう一度操作してください。",
+                    },
+                  },
+                },
+          );
+          await stopping;
+          expect({
+            events: runner.runtime.store.events("new-c-1"),
+            queue: runner.runtime.store.queue("new-c-1"),
+            conversation: runner.runtime.store.get("new-c-1"),
+            duplicate: runner.runtime.store.duplicate("new-c-1", "again", 0),
+            queuedDuplicate: runner.runtime.store.duplicate("new-c-1", "queued", 0),
+            delivered: observed.delivered,
+            opened: observed.opened.length,
+            image: readFileSync(imagePath),
+          }).toEqual({
+            events,
+            queue,
+            conversation: state,
+            duplicate: null,
+            queuedDuplicate: { result: "queued", queuedId: "new-c-2" },
+            delivered: [{ text: first, images: [] }],
+            opened: 1,
+            image,
+          });
+        } else {
+          if (delivery !== "timer")
+            expect(result).toEqual({
+              status: 200,
+              body:
+                delivery === "messages"
+                  ? { result: "delivered", seq: expect.any(Number) }
+                  : { seq: expect.any(Number) },
+            });
+          const expected = [
+            { text: first, images: [] },
+            ...(delivery === "resume" || delivery === "timer"
+              ? [{ text: "中断したところから続けてください。", images: [] }]
+              : []),
+            {
+              text: delivery === "messages" ? "queued\n\nagain" : "queued",
+              images: Array.from({ length: delivery === "messages" ? 2 : 1 }, () => ({
+                data: image,
+                mediaType: "image/png",
+              })),
+            },
+          ];
+          await runner.until(
+            () =>
+              observed.delivered.length === expected.length &&
+              runner.runtime.store.get("new-c-1")?.runState === "idle",
+          );
+          expect(observed.delivered).toEqual(expected);
+          expect(
+            observed.opened.map(({ cwd, sessionId, resume }) => ({ cwd, sessionId, resume })),
+          ).toEqual([
+            { cwd: path, sessionId: "new-session", resume: false },
+            { cwd, sessionId: "new-session", resume: true },
+          ]);
+          expect(runner.runtime.store.queue("new-c-1")).toEqual([]);
+          stopping = runner.runtime.shutdown();
+          await stopping;
+        }
+        expect({
+          closed: [...new Set(observed.closed)],
+          executions: runner.runtime.executions.size,
+          timers: clock.timers.size,
+        }).toEqual({ closed: observed.opened.map((_, index) => index), executions: 0, timers: 0 });
+        expect(await send("after-shutdown", ["one"])).toEqual({
+          status: 503,
+          body: {
+            error: {
+              code: "runner_unavailable",
+              message:
+                "AI を動かすプロセスにつながりません。少し待ってから、もう一度操作してください。",
+            },
+          },
+        });
+        const opened = observed.opened.length;
+        await clock.advance(900000);
+        expect({ opened: observed.opened.length, timers: clock.timers.size }).toEqual({
+          opened,
+          timers: 0,
+        });
+      } finally {
+        cleanup = true;
+        finishTurn?.();
+        finishOutput?.();
+        await stopping;
+        await runner.runtime.shutdown();
+        await observed.dispose();
+        await runner.close();
+      }
+    },
+  );
+
+  it.each(
+    (["scripted", "sdk"] as const).flatMap((backend) =>
       ["success", "stopped", "queue", "failed", "usage", "timer", "keep", "released"].map(
         (mode) => ({ backend, mode }),
       ),

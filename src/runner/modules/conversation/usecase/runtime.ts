@@ -257,6 +257,7 @@ export class ConversationRuntime {
       const result = this.store.withWorkspace(
         id,
         (worktreeId): Result<SendResult, OperationError> | Execution => {
+          if (this.closing) return err(conflict());
           const c = this.store.get(id);
           if (!c) throw new Error("会話がありません。");
           const opened = this.executions.get(id);

@@ -8,6 +8,7 @@ import {
 } from "../../../../runner/modules/conversation/adapter/claude-agent-sdk";
 import type {
   AgentPort,
+  AgentSession,
   OpenParams,
 } from "../../../../runner/modules/conversation/domain/agent-port";
 import type { Clock } from "../../../../runner/modules/conversation/domain/clock";
@@ -136,7 +137,11 @@ export function createWorkspaceAgent(backend: "scripted" | "sdk") {
   const opened: OpenParams[] = [];
   const delivered: { text: string; images: { data: Buffer; mediaType: string }[] }[] = [];
   const closed: number[] = [];
+  const sessions: AgentSession[] = [];
+  const consumed: Promise<void>[] = [];
   let beforeClose: ((finish: () => void) => void) | undefined;
+  let beforeTurnEnd: ((finish: () => void) => void) | undefined;
+  let beforeOutputEnd: ((finish: () => void) => void) | undefined;
   const agent: AgentPort & { opened: OpenParams[] } = {
     opened,
     fork: delegate.fork.bind(delegate),
@@ -145,8 +150,29 @@ export function createWorkspaceAgent(backend: "scripted" | "sdk") {
       const index = opened.length;
       opened.push(params);
       const session = delegate.open(params);
+      sessions.push(session);
+      let finishConsumption: () => void;
+      consumed.push(
+        new Promise<void>((resolve) => {
+          finishConsumption = resolve;
+        }),
+      );
       return {
         ...session,
+        output: {
+          async *[Symbol.asyncIterator]() {
+            for await (const output of session.output) {
+              if (index === 0 && output.kind === "turn_end" && beforeTurnEnd) {
+                const pause = beforeTurnEnd;
+                beforeTurnEnd = undefined;
+                await new Promise<void>(pause);
+              }
+              yield output;
+            }
+            if (index === 0 && beforeOutputEnd) await new Promise<void>(beforeOutputEnd);
+            finishConsumption();
+          },
+        },
         send(input) {
           delivered.push(input);
           session.send(input);
@@ -166,6 +192,16 @@ export function createWorkspaceAgent(backend: "scripted" | "sdk") {
     closed,
     delayClose(callback: (finish: () => void) => void) {
       beforeClose = callback;
+    },
+    delayTurnEnd(callback: (finish: () => void) => void) {
+      beforeTurnEnd = callback;
+    },
+    delayOutputEnd(callback: (finish: () => void) => void) {
+      beforeOutputEnd = callback;
+    },
+    async dispose() {
+      for (const session of sessions) session.close();
+      await Promise.all(consumed);
     },
   };
 }
