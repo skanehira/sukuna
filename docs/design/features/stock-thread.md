@@ -109,7 +109,7 @@ type TerminalQuote = {
 
 ### 古い引用の判定
 
-- 判定するのはファイルの引用だけで、ストックの一覧を返すたびにサーバーが行う。ほかの種類の `stale` は常に偽とする
+- ファイルの引用だけを判定する。画面のサーバーは一覧を返すとき、ランナーは質問や指示の文を組み立てるときに判定する。ほかの引用は新しいものとして扱う
 - いまのファイルから、保存した位置と選び方で文字列を切り出し、保存した `text` と完全に一致すれば新しい。違えば古い
 - ファイルが無い・1MB を超える・文字として読めないときも古い (ファイルの読み方は `features/files.md`)
 - 箇所を探し直して位置をずらすことはしない。GitHub のレビューの「Outdated」と同じ扱いである
@@ -199,7 +199,7 @@ type TerminalQuote = {
 3. 質問があれば、1 件ずつ「スレッドの始め方」でスレッドを始める。トランザクションは質問 1 件ごとに 1 つで、1 件の失敗はほかの件を止めない (DESIGN.md「トランザクション境界」)
 4. 結果を件ごとに返す。失敗した質問は `stocked` のまま残る (UC-004 E2)
 
-- 閉じた会話に指示を送ると、ランナーが受け付けたあとに会話を開き直す (BR-096)。質問だけを送ったときは、元の会話を開き直さない
+- 閉じた会話に指示を送ると、ランナーが受け付けたあとに画面のサーバーが会話を開き直す (BR-096)。受付時と同じ終了時刻が残っている場合だけ開く。質問だけの送信では親を閉じたままにする
 - 届く前の指示を届けたときは、同じトランザクションで、`stock_item_id` を持つ行の件に `sent_seq` を書く (`features/conversation.md` の届け方)
 - 届く前の指示を取り消したときは、`stock_item_id` を持つ行の件を `stocked` に戻し、印を `!` に戻す。届く前の指示の編集は、ストックの本文を変えない
 - issue の会話のストックから指示を送ったときは、届ける前に `flow` の判定を通す。判定の表は `features/conversation.md`「指示を届ける規則」にある (担当でない段階の会話を断る、worktree を作り直す、設計レビューの差し戻し、実装中に戻す)
@@ -227,10 +227,12 @@ type TerminalQuote = {
 
 ### スレッドの始め方
 
-1. 元の会話に `session_id` が無ければ失敗とする (AI の番が 1 度も終わっていない)。理由は「元の会話に AI の応答がまだ無いため、スレッドを始められません」
+質問を 1 件ずつ分岐する。スレッドの行と送信済みの記録は、最初の指示を受け付けたときに保存する。
+
+1. 送信を始めた時点の元のセッションに、AI の本文、ツールの記録、質問か許可の依頼のいずれかがあれば分岐できる。セッションの初期化だけなら「元の会話に AI の応答がまだ無いため、スレッドを始められません」と返す
 2. `AgentPort.fork(元の session_id, { dir: 元の cwd })` で分岐し、新しい `session_id` を受け取る (`features/runtime.md`「Agent SDK を包む Port」の分岐)
-3. 1 つのトランザクションで、スレッドの会話の行を作り、ストックの件を `sent` にして `sent_at` と `thread_conversation_id` を書く
-4. スレッドに最初の指示を `origin: "stock"` で送る
+3. スレッドの行を作り、ストックの件を `sent` にして `sent_at` と `thread_conversation_id` を書く。最初の指示の記録 (`origin: "stock"`) も同じトランザクションで書く。受付前に実行を開けなければ、すべて取り消す
+4. 保存した指示をスレッドの AI に届ける
 
 スレッドの会話の行は、次の値で作る。
 
@@ -272,13 +274,14 @@ src/order/confirm.ts 5〜7 行目
 
 1. 画面のサーバーは、スレッドに決まった文を `origin: "finish_proposal"` で送る。文は「このスレッドで確定した事項を、元の会話の AI への指示として書いてください。出力は指示の文だけにしてください。確定した事項が無ければ『なし』とだけ書いてください。」とする
 2. スレッドの表示には、この文を開発者の発言としては出さず、「確定事項の案を求めました」の区切りの行を出す
-3. 番が終わったら、画面はその番の最後の AI の発言を案とする。スレッドの書きかけが空なら、案の文を入れて入力欄「確定事項」を開く。書きかけがあれば、書きかけのまま開く
+3. 番が正常に終わったら、画面はその番の最後の AI の発言を案とする。スレッドの書きかけが空なら、案の文を入れて入力欄「確定事項」を開く。書きかけがあれば、書きかけのまま開く
 4. 入力欄の文は、スレッドの書きかけとして保存する (`features/conversation.md` の書きかけの保存)
 5. Enter で決定すると、1 つのトランザクションで、指示のストックを足し、スレッドの `closed_at` を書き、スレッドの書きかけを消す。足す指示は、元の質問と同じ引用と、`thread_conversation_id` にこのスレッドを持つ
 6. スレッドの実行を手放す (`features/runtime.md` の `release`)
 
-- 案の番が終わったあとに別のタブで「確定事項をまとめて終える」を選んだときは、最後の開発者の発言が案を求めた文なら、AI に再び求めずに入力欄を開く
+- 最後の開発者の発言が案を求めた文で、その番が正常に終わり、AI の本文があればその案を再利用する。本文が空の番、ツールだけの番、途中で止まった番は案を取り直す
 - 閉じるだけのときは、ランナーに終了の予約を取り、作業中の AI を止めて実行を手放す。画面のサーバーが予約のトークンを条件に `closed_at` を書き、ランナーへ完了を知らせる。書きかけは残す
+- 終了を保存できなかったときは、予約を待ち始めた時点と予約を解く時点の稼働状態を比べる。状態が変わり、スレッドが開いたままなら、親の購読先に現在の状態を知らせる。
 - ランナーは、終了の保存が完了するまで同じ会話の直列処理を保持する。予約中の新しい指示と再開は 409 にする。完了後の返信は通常どおり受け付け、開き直す処理は `features/conversation-lifecycle.md`「開き直す (再開)」に従う
 - 終了の予約は 10 秒で解除する。サーバーの終了保存は、同じトークンの予約が有効期限内にある場合だけ通す。通信や保存が失敗しても、後続の操作を永久に待たせず、遅れて届く終了保存で新しい実行を閉じないためである
 - 終了前に予定された届く前の指示の自動配送と、利用枠の自動再開は、終了を保存したあとには動かさない。開発者の送信による再開はそのまま受け付ける
@@ -376,13 +379,19 @@ DESIGN.md「API 一覧」のうち、本機能の 7 本を持つ。エラーの�
 ```
 
 - `delivery` は `delivered` / `queued` / null (送る指示が無い) とする
-- 質問の失敗の `code` は `no_session` (元の会話に応答が無い) / `fork_failed` (分岐に失敗した) とする
+- 質問の失敗の `code` は `no_session` (元の会話に応答が無い) / `fork_failed` (分岐に失敗したか、受け付ける前に応答期限が切れた) とする
+- 400 `invalid_input`: 種類または対象 ID の形式が合わない
 - 404 `not_found`: 会話が無い
 - 409 `conflict`: 会話がスレッドである。issue の担当でない段階の会話に指示を送った (`features/conversation.md`「指示を届ける規則」)
-- 503 `runner_unavailable`: ランナーにつながらない。どの件も `stocked` のまま残る
+- ランナーの応答を受け取れなくても、受け付け済みの件があれば 200 でその結果を返す。期限内に受け付けなかった質問は失敗として返し、`stocked` のまま残す
+- 503 `runner_unavailable`: ランナーの応答を受け取れず、受け付け済みの件が無い。すべての件が `stocked` のまま残る
 - 500 `worktree_failed`: 停止中の issue の会話で、worktree の作り直しに失敗した (`features/issue-flow.md`「停止中から戻る」)。どの件も `stocked` のまま残る
 
-ランナーの口 (`src/shared/ipc.ts` に足す) は `POST /conversations/:id/stock/send` とする。入力は `kinds` と省略可能な `stockIds`、出力は上の 200 と同じとする。
+ランナーの口は `POST /conversations/:id/stock/send` とする。入力は `kinds`、省略可能な `stockIds`、画面のサーバーが発行する `attempt_id` (UUID)。出力は上の 200 と同じ形とする。
+
+ランナーは、受け付けた結果をストックの状態と同じトランザクションで保存する。応答が途切れたとき、画面のサーバーは SQLite の書き込みロックを取って結果を読み、残りの件の受付を止める。
+
+書き込みが競合したときは、画面のサーバーが最大 20 秒間、ほかの処理を止めずに照合を再試行する。その間に照合できない場合や、別の書き込みエラーが起きた場合は 500 (`internal`) を返す。結果は `settings` の `runner-stock-send:` で始まるキーに 60 秒間残し、後続の送信で期限切れの記録を取り除く。
 
 ### GET /api/conversations/:id/threads
 
@@ -409,7 +418,7 @@ DESIGN.md「API 一覧」のうち、本機能の 7 本を持つ。エラーの�
 - 400 `invalid_input`: `stock` の本文が空か 10,000 文字を超える
 - 404 `not_found`: スレッドが無い
 - 409 `conflict`: 終えたスレッドである。`propose` と `stock` で、スレッドの AI が作業中である (「スレッドの AI が作業中です。止めるか、終わってから選んでください」)
-- 503 `runner_unavailable`: 案を求められない、AI を止められない。何も変えない
+- 503 `runner_unavailable`: 案を求められないか、AI の実行を手放せない。終了時刻、ストック、書きかけは変えない
 
 ### 終了の予約に使う内部の口
 
@@ -417,7 +426,7 @@ DESIGN.md「API 一覧」のうち、本機能の 7 本を持つ。エラーの�
 
 | メソッド | パス | 入出力 |
 | --- | --- | --- |
-| POST | `/conversations/:id/release/reserve` | 作業中の AI を止めて実行を手放し、`{ "token": "..." }` を返す。予約中の新しい指示と再開は 409 にし、ほかの後続操作は予約が解除されるまで進めない |
+| POST | `/conversations/:id/release/reserve` | 実行を手放し、`{ "token": "..." }` を返す。閉じるだけのときは作業中の AI を止める。`idle_only: true` のときはスレッドが作業中なら 409 を返す。予約中の新しい指示と再開は 409 にし、ほかの後続操作は予約が解除されるまで進めない |
 | POST | `/conversations/:id/release/complete` | `{ "token": "..." }` を受け取り、その予約を解除して `{}` を返す。違うトークンと解除済みのトークンは 409 |
 
 予約は `settings` の `runner-release:<会話の id>` に `{ "token", "expiresAt" }` として持つ。ランナーが作成・解除し、起動時には残った予約を消す。画面のサーバーは、この行のトークンと有効期限を `closed_at` の更新条件に含める。
@@ -437,8 +446,9 @@ DESIGN.md「API 一覧」のうち、本機能の 7 本を持つ。エラーの�
 | stock_items の読み書き | インフラ (Repository) | `src/server/modules/stock/adapter/stock-repository.ts` |
 | API ハンドラ | API ハンドラ | `src/server/modules/stock/adapter/http.ts` |
 | 指示の文、スレッドの最初の指示、作業中の注記の組み立て | ドメイン | `src/runner/modules/stock/domain/message-format.ts` |
+| 確定事項の案を求める → conversation_events | ユースケース (ランナー) | `src/runner/modules/stock/usecase/propose-thread-finish.ts` |
 | 終了保存までの実行の予約 → settings (`runner-release:<会話の id>`) | ユースケース (ランナー) | `src/runner/modules/conversation/usecase/release-reservations.ts` |
-| ストックを送る → stock_items、conversations、queued_instructions、conversation_events | ユースケース | `src/runner/modules/stock/usecase/send-stock.ts` |
+| ストックを送る → stock_items、conversations、queued_instructions、conversation_events、settings | ユースケース | `src/runner/modules/stock/usecase/send-stock.ts` |
 | 届く前の指示を届けたときの `sent_seq`、取り消したときの戻し → stock_items | ユースケース | `src/runner/modules/conversation/usecase/run-conversation.ts`、`src/server/modules/conversation/usecase/edit-queue.ts` から `src/server/modules/stock/usecase/return-queued.ts` を呼ぶ |
 | 選んだ範囲から引用を作る (会話・ファイル・設計の差分・PR の差分・ターミナルの行) | UI | `src/front/lib/stock/quote.ts` |
 | 印の計算 (優先の順、古い引用を除く) | UI | `src/front/lib/stock/marks.ts` |
