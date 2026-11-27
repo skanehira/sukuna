@@ -62,7 +62,8 @@ test("API fixtureを使うUIブラウザ確認: キーだけで会話を始め�
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
-    if (path === "/api/me" || path === "/api/health") return route.continue();
+    if (path === "/api/me" || path === "/api/health" || path === "/api/settings")
+      return route.continue();
     if (path === "/api/projects")
       return route.fulfill({
         json: { projects: [{ id: "ui-project", name: "shop-api", conversations: [], issues: [] }] },

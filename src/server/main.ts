@@ -1,3 +1,4 @@
+import { createSettingsDependencies } from "./modules/settings/adapter/dependencies";
 import { createInboxRepository, formatResetTime } from "./modules/inbox/adapter/inbox-repository";
 import { createRecapDependencies } from "./modules/recap/adapter/dependencies";
 import { serve } from "@hono/node-server";
@@ -12,6 +13,7 @@ import {
   attachUpgradeHandler,
   getPrDependencies,
   getDatabase,
+  getRuntimeIdentity,
   getProgressDependencies,
   getConversationDependencies,
   getRunnerLink,
@@ -56,6 +58,12 @@ const server = serve(
     fetch: createApp({
       clientDir,
       build: buildId,
+      resolveIdentity: getRuntimeIdentity(),
+      settings: createSettingsDependencies(
+        () => getDatabase().db,
+        env.home,
+        () => getWsHub().settingsChanged(),
+      ),
       workspace,
       inbox: {
         repository: createInboxRepository(() => getDatabase().db),

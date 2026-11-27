@@ -1,3 +1,10 @@
+import { defaultIdentityOptions } from "./modules/identity/adapter/options";
+import { createUpgradeAuthorizer } from "./modules/identity/adapter/middleware";
+import {
+  createResolveIdentity,
+  type ResolveIdentity,
+} from "./modules/identity/usecase/resolve-identity";
+import { deniedMessage, type DeniedReason } from "../shared/denied";
 import { ulid } from "ulid";
 import { createConversationDependencies } from "./modules/conversation/adapter/dependencies";
 import type { ConversationDependencies } from "./modules/conversation/domain/ports";
@@ -21,10 +28,6 @@ import type { Duplex } from "node:stream";
 import { err, ok, type Result } from "neverthrow";
 import type { OpenedDatabase } from "../shared/db/open";
 import { startDatabase, type StartupError, type StartupOptions } from "../shared/db/startup";
-import { defaultIdentityOptions } from "./modules/identity/adapter/options";
-import { createUpgradeAuthorizer } from "./modules/identity/adapter/middleware";
-import { createResolveIdentity } from "./modules/identity/usecase/resolve-identity";
-import { deniedMessage } from "../shared/denied";
 import { createPtySessions, type PtySessions } from "./modules/workspace/adapter/pty-session";
 import { connectTerminal } from "./modules/workspace/adapter/terminal-ws";
 
@@ -37,9 +40,18 @@ export type UpgradeCapableServer = {
 const WS_PATH = "/ws";
 const TERMINAL_PREFIX = "/ws/terminals/";
 
-function rejectTerminalUpgrade(socket: Duplex, status: 401 | 404, message: string): void {
+function rejectUpgrade(
+  socket: Duplex,
+  status: 401 | 404,
+  message: string,
+  deniedReason?: DeniedReason,
+): void {
   const body = JSON.stringify({
-    error: { code: status === 401 ? "unauthorized" : "not_found", message },
+    error: {
+      code: status === 401 ? "unauthorized" : "not_found",
+      message,
+      ...(deniedReason && { details: { reason: deniedReason } }),
+    },
   });
   const reason = status === 401 ? "Unauthorized" : "Not Found";
   socket.end(
@@ -48,7 +60,7 @@ function rejectTerminalUpgrade(socket: Duplex, status: 401 | 404, message: strin
 }
 
 export function createUpgradeHandler(options: {
-  authorizeTerminal: ReturnType<typeof createUpgradeAuthorizer>;
+  authorize: ReturnType<typeof createUpgradeAuthorizer>;
   terminals: Pick<PtySessions, "find">;
   connectHub?: (client: WebSocket) => void;
 }): UpgradeHandler {
@@ -61,18 +73,27 @@ export function createUpgradeHandler(options: {
       socket.destroy();
       return;
     }
-    if (path === WS_PATH) {
-      if (options.connectHub) wss.handleUpgrade(request, socket, head, options.connectHub);
-      return;
-    }
     // Vite の HMR も同じ httpServer の upgrade を受ける。対象外のパスは別のリスナーに任せる。
-    if (!path.startsWith(TERMINAL_PREFIX)) return;
-    socket.once("error", () => socket.destroy());
+    const connectHub = path === WS_PATH ? options.connectHub : undefined;
+    const isTerminal = path.startsWith(TERMINAL_PREFIX);
+    if (!connectHub && !isTerminal) return;
+    const abandon = () => socket.destroy();
+    socket.once("error", abandon);
     void (async () => {
-      const decision = await options.authorizeTerminal(request);
+      const decision = await options.authorize(request);
       if (socket.destroyed || !socket.writable) return;
       if (!decision.allowed) {
-        rejectTerminalUpgrade(socket, 401, deniedMessage(decision.reason));
+        rejectUpgrade(
+          socket,
+          401,
+          deniedMessage(decision.reason),
+          connectHub ? decision.reason : undefined,
+        );
+        return;
+      }
+      if (connectHub) {
+        socket.removeListener("error", abandon);
+        wss.handleUpgrade(request, socket, head, connectHub);
         return;
       }
       const origin = request.headers.origin;
@@ -81,16 +102,21 @@ export function createUpgradeHandler(options: {
         origin !== undefined &&
         origin !== new URL(`${protocol}://${request.headers.host}`).origin
       ) {
-        rejectTerminalUpgrade(socket, 401, "アプリを開いた画面から接続してください。");
+        rejectUpgrade(socket, 401, "アプリを開いた画面から接続してください。");
         return;
       }
       const terminal = options.terminals.find(path.slice(TERMINAL_PREFIX.length));
       if (!terminal) {
-        rejectTerminalUpgrade(socket, 404, "ターミナルは終了しています。");
+        rejectUpgrade(socket, 404, "ターミナルは終了しています。");
         return;
       }
+      socket.removeListener("error", abandon);
       wss.handleUpgrade(request, socket, head, (client) => connectTerminal(client, terminal));
-    })().catch(() => socket.destroy());
+    })().catch(() => {
+      if (socket.destroyed || !socket.writable) return;
+      if (connectHub) rejectUpgrade(socket, 401, deniedMessage("unavailable"), "unavailable");
+      else socket.destroy();
+    });
   };
 }
 
@@ -99,44 +125,62 @@ export function getPtySessions(): PtySessions {
   return terminalSessions;
 }
 
-export const handleUpgrade: UpgradeHandler = createUpgradeHandler({
-  authorizeTerminal: createUpgradeAuthorizer({
-    resolve: createResolveIdentity(defaultIdentityOptions()),
-  }),
-  terminals: terminalSessions,
-  connectHub: (client) => {
-    hub?.add(client);
-    client.on("message", (data) => {
-      try {
-        hub?.receive(
-          client,
-          JSON.parse(
-            (data instanceof ArrayBuffer
-              ? Buffer.from(data)
-              : Array.isArray(data)
-                ? Buffer.concat(data)
-                : data
-            ).toString(),
-          ),
-        );
-      } catch {
-        log({
-          level: "warn",
-          component: "server.ws",
-          message: "配信の要求を読み取れませんでした。",
-        });
-      }
-    });
-    client.on("close", () => hub?.remove(client));
-    client.on("error", () => {
-      hub?.remove(client);
-      log({ level: "warn", component: "server.ws", message: "配信の接続が切れました。" });
-    });
-  },
+function connectWsHub(client: WebSocket, target?: WsHub): void {
+  target?.add(client);
+  client.on("message", (data) => {
+    try {
+      target?.receive(
+        client,
+        JSON.parse(
+          (data instanceof ArrayBuffer
+            ? Buffer.from(data)
+            : Array.isArray(data)
+              ? Buffer.concat(data)
+              : data
+          ).toString(),
+        ),
+      );
+    } catch {
+      log({
+        level: "warn",
+        component: "server.ws",
+        message: "配信の要求を読み取れませんでした。",
+      });
+    }
+  });
+  client.on("close", () => target?.remove(client));
+  client.on("error", () => {
+    target?.remove(client);
+    log({ level: "warn", component: "server.ws", message: "配信の接続が切れました。" });
+  });
+}
+
+let runtimeIdentity: ResolveIdentity | undefined;
+export function getRuntimeIdentity(): ResolveIdentity {
+  runtimeIdentity ??= createResolveIdentity(defaultIdentityOptions());
+  return runtimeIdentity;
+}
+
+type UpgradeDependencies = { resolve: ResolveIdentity; hub: () => WsHub | undefined };
+
+function runtimeUpgradeHandler(deps: UpgradeDependencies): UpgradeHandler {
+  return createUpgradeHandler({
+    authorize: createUpgradeAuthorizer({ resolve: deps.resolve }),
+    terminals: terminalSessions,
+    connectHub: (client) => connectWsHub(client, deps.hub()),
+  });
+}
+
+export const handleUpgrade = runtimeUpgradeHandler({
+  resolve: (source) => getRuntimeIdentity()(source),
+  hub: () => hub,
 });
 
-export function attachUpgradeHandler(server: UpgradeCapableServer): void {
-  server.on("upgrade", handleUpgrade);
+export function attachUpgradeHandler(
+  server: UpgradeCapableServer,
+  deps?: UpgradeDependencies,
+): void {
+  server.on("upgrade", deps === undefined ? handleUpgrade : runtimeUpgradeHandler(deps));
 }
 
 let database: OpenedDatabase | undefined;

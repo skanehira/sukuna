@@ -93,8 +93,8 @@ test("API fixtureを使うUIブラウザ確認: 未読から目次を編集し�
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
-    if (path === "/api/me" || path === "/api/health") return route.continue();
-    if (path === "/api/keymap") return route.fulfill({ json: { version: 1, entries: [] } });
+    if (path === "/api/me" || path === "/api/health" || path === "/api/settings")
+      return route.continue();
     if (path.endsWith("/read")) {
       readSeq = Math.max(readSeq, request.postDataJSON().readSeq ?? 0);
       return route.fulfill({ status: 204 });
@@ -173,6 +173,7 @@ test("API fixtureを使うUIブラウザ確認: 未読から目次を編集し�
       );
     })
     .toBe(true);
+  await expect(page.getByRole("alert")).toHaveCount(0);
   await capture(page, "未読の先頭と直近の質問を表示");
   await page.reload();
   await expect(page.getByRole("region", { name: "直近" })).toBeVisible();

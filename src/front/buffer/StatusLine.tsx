@@ -52,6 +52,9 @@ export function StatusLine({
           </span>
         ))}
       </span>
+      {controller.currentLine()?.status ? (
+        <span className="truncate">{controller.currentLine()?.status}</span>
+      ) : null}
       <span className="flex shrink-0 gap-4">
         {controller.statusItems().map((text) => (
           <span key={text}>{text}</span>

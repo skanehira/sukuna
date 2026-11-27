@@ -1,3 +1,5 @@
+import { dirname } from "node:path";
+import { createSettingsDependencies } from "./modules/settings/adapter/dependencies";
 import { createInboxRepository, formatResetTime } from "./modules/inbox/adapter/inbox-repository";
 import { createRecapDependencies } from "./modules/recap/adapter/dependencies";
 import { createApp } from "./app";
@@ -6,6 +8,7 @@ import { createIssueDependencies } from "./modules/issue/adapter/dependencies";
 import {
   getPrDependencies,
   getDatabase,
+  getRuntimeIdentity,
   getRunnerLink,
   getWsHub,
   writeRuntimeLog,
@@ -22,6 +25,12 @@ const workspace = createWorkspaceDependencies(() => getDatabase().db);
 
 export default createApp({
   build: buildId,
+  resolveIdentity: getRuntimeIdentity(),
+  settings: createSettingsDependencies(
+    () => getDatabase().db,
+    dirname(getDatabase().sqlite.name),
+    () => getWsHub().settingsChanged(),
+  ),
   workspace,
   inbox: { repository: createInboxRepository(() => getDatabase().db), resetTime: formatResetTime },
   pr: getPrDependencies(),

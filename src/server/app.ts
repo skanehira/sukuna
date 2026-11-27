@@ -16,7 +16,10 @@ import type { HealthResponse } from "../shared/api";
 import { createIdentityMiddleware, type IdentityEnv } from "./modules/identity/adapter/middleware";
 import { createMeHandler } from "./modules/identity/adapter/routes";
 import { defaultIdentityOptions, type IdentityOptions } from "./modules/identity/adapter/options";
-import { createResolveIdentity } from "./modules/identity/usecase/resolve-identity";
+import {
+  createResolveIdentity,
+  type ResolveIdentity,
+} from "./modules/identity/usecase/resolve-identity";
 import { createWorkspaceRoutes } from "./modules/workspace/adapter/http";
 import type { WorkspaceDependencies } from "./modules/workspace/domain/ports";
 
@@ -29,6 +32,8 @@ import { createWorktreeRoutes } from "./modules/workspace/adapter/worktree-route
 import type { WorktreeDependencies } from "./modules/workspace/domain/worktree-ports";
 import { createRecapRoutes } from "./modules/recap/adapter/http";
 import type { RecapDependencies } from "./modules/recap/domain/ports";
+import { createSettingsRoutes } from "./modules/settings/adapter/routes";
+import type { SettingsDependencies } from "./modules/settings/domain/ports";
 
 export type { IdentityOptions } from "./modules/identity/adapter/options";
 
@@ -37,6 +42,8 @@ export type AppOptions = {
   clientDir?: string;
   build: string;
   identity?: IdentityOptions;
+  resolveIdentity?: ResolveIdentity;
+  settings?: SettingsDependencies;
   workspace?: WorkspaceDependencies;
   progress?: ProgressDependencies;
   messages?: MessageDependencies;
@@ -50,8 +57,8 @@ export type AppOptions = {
 };
 
 export function createApp(options: AppOptions): Hono<IdentityEnv> {
-  const identity = options.identity ?? defaultIdentityOptions();
-  const resolveIdentity = createResolveIdentity(identity);
+  const resolveIdentity =
+    options.resolveIdentity ?? createResolveIdentity(options.identity ?? defaultIdentityOptions());
   const app = new Hono<IdentityEnv>();
 
   app.use("*", createIdentityMiddleware({ resolve: resolveIdentity }));
@@ -78,6 +85,7 @@ export function createApp(options: AppOptions): Hono<IdentityEnv> {
     return c.json(body);
   });
 
+  if (options.settings) app.route("/api", createSettingsRoutes(options.settings));
   if (options.inbox) app.route("/api", createInboxRoutes(options.inbox));
 
   if (options.pr) app.route("/api", createPrRoutes(options.pr));

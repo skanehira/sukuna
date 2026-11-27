@@ -1,11 +1,7 @@
 import type { ActionRegistry, KeymapEntry } from "./registry";
 import { normalizeKeys, parseKeys } from "./notation";
 import { vimBuiltins } from "./vim-builtins";
-function views(entry: KeymapEntry, registry: ActionRegistry): string[] | undefined {
-  return entry.to !== null && "action" in entry.to
-    ? registry.get(entry.to.action)?.views
-    : undefined;
-}
+import { keymapViews, keymapViewsOverlap } from "./resolve";
 export function findConflicts(
   current: KeymapEntry[],
   next: KeymapEntry,
@@ -14,20 +10,36 @@ export function findConflicts(
   if (next.to === null) return [];
   const keys = parseKeys(normalizeKeys(next.keys));
   if (keys === null) return [];
-  const nextViews = views(next, registry);
-  const builtin = vimBuiltins.filter(
-    (entry) =>
-      !current.some(
+  const describe = (name: string) => registry.describe(name);
+  const targetViews = keymapViews(next, describe);
+  const builtin = vimBuiltins.filter((entry) => {
+    if (entry.context !== next.context) return false;
+    const builtinKeys = normalizeKeys(entry.keys);
+    const coveringViews = current
+      .filter(
         (value) =>
-          normalizeKeys(value.keys) === normalizeKeys(entry.keys) &&
-          value.context === entry.context,
-      ),
-  );
+          value.to !== null &&
+          value.context === entry.context &&
+          builtinKeys.startsWith(normalizeKeys(value.keys)),
+      )
+      .flatMap(({ to }) => {
+        if (to === null) return [];
+        if ("keys" in to) return [undefined];
+        const action = describe(to.action);
+        return action &&
+          (entry.context !== "prompt" || action.fromPrompt || action.name === "cmdline")
+          ? [action.views]
+          : [];
+      });
+    if (coveringViews.includes(undefined)) return false;
+    return (
+      targetViews === undefined ||
+      !targetViews.every((view) => coveringViews.some((views) => views?.includes(view)))
+    );
+  });
   return [...current, ...builtin].filter((entry) => {
     if (entry.context !== next.context) return false;
-    const existingViews = views(entry, registry);
-    if (nextViews && existingViews && !nextViews.some((view) => existingViews.includes(view)))
-      return false;
+    if (!keymapViewsOverlap(entry, next, describe)) return false;
     const tokens = parseKeys(normalizeKeys(entry.keys));
     if (tokens === null) return false;
     return tokens
