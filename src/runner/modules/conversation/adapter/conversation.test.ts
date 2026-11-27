@@ -1,3 +1,6 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { createImageFiles } from "./image-files";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import {
   createTempHome,
@@ -51,6 +54,7 @@ function fixture(script: AgentScript, allowResume = true) {
   const runtime = new ConversationRuntime({
     store,
     agent,
+    images: createImageFiles(home),
     clock,
     id: (() => {
       let n = 0;
@@ -73,9 +77,18 @@ function fixture(script: AgentScript, allowResume = true) {
     removeTempHome(home);
   });
   const start = (kind: "chat" | "triage" = "chat", message?: string) =>
-    runtime
-      .start({ projectId: "p", kind, cwd: "/tmp", title: "会話", message })
-      .then((r) => r._unsafeUnwrap().conversationId);
+    runtime.start({ projectId: "p", kind, cwd: "/tmp", title: "会話", message }).then((r) => {
+      const id = r._unsafeUnwrap().conversationId;
+      mkdirSync(join(home, "images", id), { recursive: true });
+      writeFileSync(
+        join(home, "images", id, "existing-image.png"),
+        Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1cAAAAASUVORK5CYII=",
+          "base64",
+        ),
+      );
+      return id;
+    });
   const until = (id: string, predicate: () => boolean): Promise<void> => {
     if (predicate()) return Promise.resolve();
     return new Promise((resolve) => {

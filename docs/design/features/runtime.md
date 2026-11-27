@@ -683,7 +683,9 @@ interface GhRunner {
 | ランナーの起動の順序と組み立て | ランナーの入口 | `src/runner/main.ts`、`src/runner/app.ts` |
 | ソケットの待ち受けと操作の振り分け | インフラ (ランナー) | `src/runner/modules/conversation/adapter/ipc-routes.ts` |
 | 知らせの流れ | インフラ (ランナー) | `src/runner/modules/conversation/adapter/change-feed.ts` |
-| Port と出力の型 | ドメイン | `src/runner/modules/conversation/domain/agent-port.ts` |
+| AI の Port と出力の型 | ドメイン | `src/runner/modules/conversation/domain/agent-port.ts` |
+| 画像を読む Port と画像の型 | ドメイン | `src/runner/modules/conversation/domain/image-port.ts` |
+| 会話専用ディレクトリからの画像の読み取り | インフラ | `src/runner/modules/conversation/adapter/image-files.ts` |
 | 出力から記録への写し、状態の移り変わり、止まった理由の判定 | ドメイン | `src/runner/modules/conversation/domain/event-mapping.ts`、`src/runner/modules/conversation/domain/run-state.ts`、`src/runner/modules/conversation/domain/stop-reason.ts` |
 | 開始・送信・停止・再開・分岐・回答・許可・手放す → `conversations`、`conversation_events`、`queued_instructions`、`pending_answers`、`questions` | ユースケース | `src/runner/modules/conversation/usecase/*.ts` |
 | 再起動のときの直し → `conversations`、`conversation_events` | ユースケース | `src/runner/modules/conversation/usecase/recover.ts` |
