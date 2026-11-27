@@ -79,112 +79,117 @@ test("締めくくりをやめて指示を書き、一覧と検索からスレ�
     },
   };
   await page.routeWebSocket("**/ws", () => {});
-  await page.route("**/api/**", (route) => {
-    const url = new URL(route.request().url());
-    const path = url.pathname;
-    if (
-      path === "/api/me" ||
-      path === "/api/health" ||
-      path === "/api/settings" ||
-      path === "/api/inbox"
-    )
-      return route.continue();
-    if (path === "/api/projects")
-      return route.fulfill({
-        json: {
-          projects: [{ id: "p1", name: project, flowPaused: false, conversations: [], issues: [] }],
-        },
-      });
-    if (path === "/api/projects/p1/conversations")
-      return route.fulfill({
-        json: {
-          conversations: [
-            { ...chat, threads: [thread] },
-            {
-              ...chat,
-              id: "closed",
-              title: "決済フローの相談",
-              closedAt: now - 180_000,
-              lastActivityAt: now - 180_000,
-              threads: [],
-            },
-          ],
-          issueThreads: [],
-        },
-      });
-    if (path === "/api/conversations/c1/closing-summary") return route.fulfill({ json: summary });
-    if (path === "/api/conversations/c1/read") return route.fulfill({ status: 204 });
-    if (path === "/api/conversations/c1/recap") {
-      recapRequests++;
-      return route.fulfill({
-        json: {
-          lastUserMessage: null,
-          questions: [],
-          pendingPermission: null,
-          draft: { exists: false },
-          counts: { stock: 1, threads: 1, activeThreads: 0, queue: 0 },
-          lastReadSeq: 0,
-          lastPosition: null,
-          state: { reflectedSeq: 1, failedAt: null, updating: false },
-        },
-      });
-    }
-    if (path === "/api/conversations/c1") return route.fulfill({ json: snapshot });
-    if (path === "/api/conversations/t1")
-      return route.fulfill({
-        json: {
-          ...snapshot,
-          conversation: {
-            ...snapshot.conversation,
-            ...thread,
-            kind: "thread",
-            parentConversationId: "c1",
+  await page.route(
+    (url) => url.pathname.startsWith("/api/"),
+    (route) => {
+      const url = new URL(route.request().url());
+      const path = url.pathname;
+      if (
+        path === "/api/me" ||
+        path === "/api/health" ||
+        path === "/api/settings" ||
+        path === "/api/inbox"
+      )
+        return route.continue();
+      if (path === "/api/projects")
+        return route.fulfill({
+          json: {
+            projects: [
+              { id: "p1", name: project, flowPaused: false, conversations: [], issues: [] },
+            ],
           },
-        },
-      });
-    if (path.endsWith("/events")) {
-      const text = path.includes("/t1/")
-        ? "在庫不足のときは確保せず、品切れを返します。"
-        : "予約 API の設計を整理しました。";
-      return route.fulfill({
-        json: {
-          events: [
-            {
-              seq: 1,
-              createdAt: now - 30_000,
-              type: "assistant_text",
-              payload: { text, parent_tool_use_id: null },
+        });
+      if (path === "/api/projects/p1/conversations")
+        return route.fulfill({
+          json: {
+            conversations: [
+              { ...chat, threads: [thread] },
+              {
+                ...chat,
+                id: "closed",
+                title: "決済フローの相談",
+                closedAt: now - 180_000,
+                lastActivityAt: now - 180_000,
+                threads: [],
+              },
+            ],
+            issueThreads: [],
+          },
+        });
+      if (path === "/api/conversations/c1/closing-summary") return route.fulfill({ json: summary });
+      if (path === "/api/conversations/c1/read") return route.fulfill({ status: 204 });
+      if (path === "/api/conversations/c1/recap") {
+        recapRequests++;
+        return route.fulfill({
+          json: {
+            lastUserMessage: null,
+            questions: [],
+            pendingPermission: null,
+            draft: { exists: false },
+            counts: { stock: 1, threads: 1, activeThreads: 0, queue: 0 },
+            lastReadSeq: 0,
+            lastPosition: null,
+            state: { reflectedSeq: 1, failedAt: null, updating: false },
+          },
+        });
+      }
+      if (path === "/api/conversations/c1") return route.fulfill({ json: snapshot });
+      if (path === "/api/conversations/t1")
+        return route.fulfill({
+          json: {
+            ...snapshot,
+            conversation: {
+              ...snapshot.conversation,
+              ...thread,
+              kind: "thread",
+              parentConversationId: "c1",
             },
-          ],
-          lastSeq: 1,
-          hasMore: false,
-        },
-      });
-    }
-    if (path.endsWith("/draft")) return route.fulfill({ json: { draft: null, applied: true } });
-    if (path === "/api/search" && url.searchParams.get("q") === "在庫")
+          },
+        });
+      if (path.endsWith("/events")) {
+        const text = path.includes("/t1/")
+          ? "在庫不足のときは確保せず、品切れを返します。"
+          : "予約 API の設計を整理しました。";
+        return route.fulfill({
+          json: {
+            events: [
+              {
+                seq: 1,
+                createdAt: now - 30_000,
+                type: "assistant_text",
+                payload: { text, parent_tool_use_id: null },
+              },
+            ],
+            lastSeq: 1,
+            hasMore: false,
+          },
+        });
+      }
+      if (path.endsWith("/draft")) return route.fulfill({ json: { draft: null, applied: true } });
+      if (path === "/api/search" && url.searchParams.get("q") === "在庫")
+        return route.fulfill({
+          json: {
+            results: [
+              { ...thread, type: "conversation", kind: "thread", projectId: "p1", parentId: "c1" },
+              {
+                type: "issue",
+                id: "i1",
+                projectId: "p1",
+                number: 42,
+                title: "在庫の引き当てを追加する",
+                state: "triage",
+                lastActivityAt: now - 160_000,
+              },
+            ],
+            truncated: false,
+          },
+        });
       return route.fulfill({
-        json: {
-          results: [
-            { ...thread, type: "conversation", kind: "thread", projectId: "p1", parentId: "c1" },
-            {
-              type: "issue",
-              id: "i1",
-              projectId: "p1",
-              number: 42,
-              title: "在庫の引き当てを追加する",
-              state: "triage",
-              lastActivityAt: now - 160_000,
-            },
-          ],
-          truncated: false,
-        },
+        status: 404,
+        json: { error: { code: "not_found", message: "fixture 対象外" } },
       });
-    return route.fulfill({
-      status: 404,
-      json: { error: { code: "not_found", message: "fixture 対象外" } },
-    });
-  });
+    },
+  );
 
   await page.goto("/conversations/c1");
   const conversation = page.getByRole("region", { name: mainTitle, exact: true });

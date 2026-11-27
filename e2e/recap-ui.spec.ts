@@ -90,78 +90,81 @@ test("API fixtureを使うUIブラウザ確認: 未読から目次を編集し�
     },
   ];
   await page.routeWebSocket("**/ws", () => {});
-  await page.route("**/api/**", async (route) => {
-    const request = route.request();
-    const path = new URL(request.url()).pathname;
-    if (
-      path === "/api/me" ||
-      path === "/api/health" ||
-      path === "/api/settings" ||
-      path === "/api/projects" ||
-      path === "/api/inbox"
-    )
-      return route.continue();
-    if (path.endsWith("/read")) {
-      readSeq = Math.max(readSeq, request.postDataJSON().readSeq ?? 0);
-      return route.fulfill({ status: 204 });
-    }
-    if (path.endsWith("/events"))
-      return route.fulfill({ json: { events, lastSeq: 4, hasMore: false } });
-    if (path.endsWith("/recap"))
+  await page.route(
+    (url) => url.pathname.startsWith("/api/"),
+    async (route) => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (
+        path === "/api/me" ||
+        path === "/api/health" ||
+        path === "/api/settings" ||
+        path === "/api/projects" ||
+        path === "/api/inbox"
+      )
+        return route.continue();
+      if (path.endsWith("/read")) {
+        readSeq = Math.max(readSeq, request.postDataJSON().readSeq ?? 0);
+        return route.fulfill({ status: 204 });
+      }
+      if (path.endsWith("/events"))
+        return route.fulfill({ json: { events, lastSeq: 4, hasMore: false } });
+      if (path.endsWith("/recap"))
+        return route.fulfill({
+          json: {
+            lastUserMessage: { seq: 3, text: "在庫の引き当ても同じAPIでやりたい。" },
+            questions: [
+              {
+                id: "q1",
+                seq: 4,
+                kind: "text",
+                text: "期限切れの引き当てを戻す方法はどちらにしますか?",
+              },
+              { id: "q2", seq: 4, kind: "text", text: "期限を設定で変えられるようにしますか?" },
+            ],
+            pendingPermission: null,
+            draft: { exists: true },
+            counts: { stock: 2, threads: 1, activeThreads: 1, queue: 0 },
+            lastReadSeq: readSeq,
+            lastPosition: 1,
+            state,
+          },
+        });
+      if (path.endsWith("/toc")) return route.fulfill({ json: toc });
+      if (path.endsWith("/toc/2")) {
+        toc.chapters[1].title = request.postDataJSON().title;
+        return route.fulfill({ json: toc });
+      }
+      if (path.endsWith("/decisions")) return route.fulfill({ json: decisions });
       return route.fulfill({
         json: {
-          lastUserMessage: { seq: 3, text: "在庫の引き当ても同じAPIでやりたい。" },
-          questions: [
-            {
-              id: "q1",
-              seq: 4,
-              kind: "text",
-              text: "期限切れの引き当てを戻す方法はどちらにしますか?",
-            },
-            { id: "q2", seq: 4, kind: "text", text: "期限を設定で変えられるようにしますか?" },
-          ],
+          conversation: {
+            id: "recap-ui",
+            projectId: "p",
+            projectName: "shop-api",
+            kind: "chat",
+            issueId: null,
+            parentConversationId: null,
+            title: "予約APIの壁打ち",
+            cwd: "/fixture/shop-api",
+            worktree: null,
+            runState: "idle",
+            stopReason: null,
+            resetsAt: null,
+            lastSeq: 4,
+            lastReadSeq: readSeq,
+            lastPosition: 1,
+            closedAt: null,
+          },
+          draft: null,
+          queue: [],
+          pendingAnswers: null,
           pendingPermission: null,
-          draft: { exists: true },
-          counts: { stock: 2, threads: 1, activeThreads: 1, queue: 0 },
-          lastReadSeq: readSeq,
-          lastPosition: 1,
-          state,
+          commands: [],
         },
       });
-    if (path.endsWith("/toc")) return route.fulfill({ json: toc });
-    if (path.endsWith("/toc/2")) {
-      toc.chapters[1].title = request.postDataJSON().title;
-      return route.fulfill({ json: toc });
-    }
-    if (path.endsWith("/decisions")) return route.fulfill({ json: decisions });
-    return route.fulfill({
-      json: {
-        conversation: {
-          id: "recap-ui",
-          projectId: "p",
-          projectName: "shop-api",
-          kind: "chat",
-          issueId: null,
-          parentConversationId: null,
-          title: "予約APIの壁打ち",
-          cwd: "/fixture/shop-api",
-          worktree: null,
-          runState: "idle",
-          stopReason: null,
-          resetsAt: null,
-          lastSeq: 4,
-          lastReadSeq: readSeq,
-          lastPosition: 1,
-          closedAt: null,
-        },
-        draft: null,
-        queue: [],
-        pendingAnswers: null,
-        pendingPermission: null,
-        commands: [],
-      },
-    });
-  });
+    },
+  );
   await page.goto("/conversations/recap-ui?tail=1");
   await expect(page.getByRole("region", { name: "直近" })).toBeVisible();
   await expect

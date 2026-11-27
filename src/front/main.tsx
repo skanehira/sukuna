@@ -16,6 +16,8 @@ import { createFilesApi } from "./lib/files/api";
 import type { RealtimeSocket } from "./lib/realtime";
 import { createSettingsApi, createSettingsStore } from "./lib/settings-store";
 import { loadSettingsScreen, registerSettingsCommands } from "./lib/settings-workspace";
+import { createProjectUsageApi } from "./lib/project-usage-api";
+import { loadProjectUsageScreen, registerUsageCommand } from "./lib/project-usage-workspace";
 import { ulid } from "ulid";
 import { createInboxApi, InboxStore } from "./lib/inbox-store";
 import { InboxPage } from "./pages/inbox";
@@ -54,6 +56,8 @@ const settings = createSettingsStore(
 );
 controller.options.keymap = settings.keymap;
 const stopSettingsCommands = registerSettingsCommands(controller);
+const stopUsageCommand = registerUsageCommand(controller);
+const projectUsage = createProjectUsageApi(window.fetch.bind(window));
 const timeFormat = new Intl.DateTimeFormat("ja-JP", {
   month: "2-digit",
   day: "2-digit",
@@ -125,7 +129,9 @@ const loadScreen: ScreenLoader = async (route) => {
       ),
     };
   return (
-    loadSettingsScreen(route, controller, settings, formatTime) ?? conversations.loadScreen(route)
+    loadSettingsScreen(route, controller, settings, formatTime) ??
+    loadProjectUsageScreen(route, controller, projectUsage, formatTime) ??
+    conversations.loadScreen(route)
   );
 };
 const stopConversations = conversations.start();
@@ -143,6 +149,7 @@ import.meta.hot?.dispose(() => {
   notices.dispose();
   window.removeEventListener("pagehide", pagehide);
   stopSettingsCommands();
+  stopUsageCommand();
   stopConversations();
   stopInboxNavigation();
   inbox.dispose();

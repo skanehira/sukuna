@@ -1,3 +1,6 @@
+import { createGithubImportDependencies } from "./modules/issue/adapter/github-import-routes";
+import { createUsageDependencies } from "./modules/conversation/adapter/usage-routes";
+import { createGhRunner } from "../shared/gh/gh-runner";
 import { dirname } from "node:path";
 import { createSettingsDependencies } from "./modules/settings/adapter/dependencies";
 import { createDesignDependencies } from "./modules/flow/adapter/design-dependencies";
@@ -51,6 +54,16 @@ export default createApp({
   }),
 
   design: createDesignDependencies(() => getDatabase().db, getRunnerLink, writeRuntimeLog),
+  usage: createUsageDependencies(() => getDatabase().db),
+  githubImport: createGithubImportDependencies(
+    () => getDatabase().db,
+    createGhRunner(process.env.SUKUNA_GH ?? null),
+    {
+      log: writeRuntimeLog,
+      changed: (issueId, projectId) =>
+        getWsHub().notice({ kind: "issue", issue_id: issueId, project_id: projectId, seq: 0 }),
+    },
+  ),
   issues: createIssueDependencies(
     () => getDatabase().db,
     getRunnerLink,

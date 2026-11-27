@@ -59,133 +59,136 @@ test("API fixtureを使うUIブラウザ確認: キーだけで会話を始め�
       }),
     );
   };
-  await page.route("**/api/**", async (route) => {
-    const request = route.request();
-    const path = new URL(request.url()).pathname;
-    if (path === "/api/me" || path === "/api/health" || path === "/api/settings")
-      return route.continue();
-    if (path === "/api/inbox")
+  await page.route(
+    (url) => url.pathname.startsWith("/api/"),
+    async (route) => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path === "/api/me" || path === "/api/health" || path === "/api/settings")
+        return route.continue();
+      if (path === "/api/inbox")
+        return route.fulfill({
+          json: {
+            sections: [
+              { name: "decision", rows: [] },
+              { name: "instruction", rows: [] },
+              { name: "working", rows: [] },
+            ],
+          },
+        });
+      if (path === "/api/projects")
+        return route.fulfill({
+          json: {
+            projects: [
+              {
+                id: "ui-project",
+                name: "shop-api",
+                flowPaused: false,
+                conversations: [],
+                issues: [],
+              },
+            ],
+          },
+        });
+      if (path === "/api/conversations")
+        return route.fulfill({ status: 201, json: { conversation: snapshot.conversation } });
+      if (path.endsWith("/events"))
+        return route.fulfill({
+          json: {
+            events: events.filter(
+              (event) => event.seq > Number(new URL(request.url()).searchParams.get("after") ?? 0),
+            ),
+            lastSeq: snapshot.conversation.lastSeq,
+            hasMore: false,
+          },
+        });
+      if (path.endsWith("/messages")) {
+        const body = request.postDataJSON();
+        snapshot.draft = null;
+        snapshot.conversation.runState = "waiting_answer";
+        await route.fulfill({ status: 202, json: { result: "delivered", queueItem: null } });
+        publish({
+          seq: 1,
+          createdAt: 1,
+          type: "user_message",
+          payload: { text: body.text, images: [], origin: "developer" },
+        });
+        publish({
+          seq: 2,
+          createdAt: 2,
+          type: "assistant_text",
+          payload: { text: "確認したいことが2点あります。", parent_tool_use_id: null },
+        });
+        publish({
+          seq: 3,
+          createdAt: 3,
+          type: "question",
+          payload: {
+            request_id: "ui-question",
+            questions: [
+              {
+                question: "在庫を戻す方法は?",
+                header: "方法",
+                multi_select: false,
+                options: [
+                  { label: "定期処理", description: "1分ごと" },
+                  { label: "次の処理", description: "必要なとき" },
+                ],
+              },
+              {
+                question: "設定で変えられるようにする?",
+                header: "設定",
+                multi_select: false,
+                options: [{ label: "はい", description: "設定で変える" }],
+              },
+            ],
+          },
+        });
+        return;
+      }
+      if (path.endsWith("/answers/send")) {
+        const answers = snapshot.pendingAnswers!.answers;
+        snapshot.pendingAnswers = null;
+        snapshot.conversation.runState = "idle";
+        await route.fulfill({ status: 202, json: { result: "answered" } });
+        publish({
+          seq: 4,
+          createdAt: 4,
+          type: "answer",
+          payload: { request_id: "ui-question", answers, as_message: false },
+        });
+        publish({
+          seq: 5,
+          createdAt: 5,
+          type: "assistant_text",
+          payload: { text: "選んだ方針で設計を進めます。", parent_tool_use_id: null },
+        });
+        return;
+      }
+      if (path.endsWith("/answers")) {
+        snapshot.pendingAnswers = request.postDataJSON();
+        return route.fulfill({ json: { pendingAnswers: snapshot.pendingAnswers } });
+      }
+      if (path.endsWith("/draft")) {
+        const body = request.postDataJSON();
+        snapshot.draft =
+          body.text || body.images.length
+            ? {
+                text: body.text,
+                images: body.images,
+                updatedAt: body.editedAt,
+                updatedBy: body.clientId,
+              }
+            : null;
+        return route.fulfill({ json: { draft: snapshot.draft, applied: true } });
+      }
+      if (path === "/api/conversations/ui-conversation") return route.fulfill({ json: snapshot });
       return route.fulfill({
-        json: {
-          sections: [
-            { name: "decision", rows: [] },
-            { name: "instruction", rows: [] },
-            { name: "working", rows: [] },
-          ],
-        },
+        status: 404,
+        json: { error: { code: "not_found", message: "fixture対象外です" } },
       });
-    if (path === "/api/projects")
-      return route.fulfill({
-        json: {
-          projects: [
-            {
-              id: "ui-project",
-              name: "shop-api",
-              flowPaused: false,
-              conversations: [],
-              issues: [],
-            },
-          ],
-        },
-      });
-    if (path === "/api/conversations")
-      return route.fulfill({ status: 201, json: { conversation: snapshot.conversation } });
-    if (path.endsWith("/events"))
-      return route.fulfill({
-        json: {
-          events: events.filter(
-            (event) => event.seq > Number(new URL(request.url()).searchParams.get("after") ?? 0),
-          ),
-          lastSeq: snapshot.conversation.lastSeq,
-          hasMore: false,
-        },
-      });
-    if (path.endsWith("/messages")) {
-      const body = request.postDataJSON();
-      snapshot.draft = null;
-      snapshot.conversation.runState = "waiting_answer";
-      await route.fulfill({ status: 202, json: { result: "delivered", queueItem: null } });
-      publish({
-        seq: 1,
-        createdAt: 1,
-        type: "user_message",
-        payload: { text: body.text, images: [], origin: "developer" },
-      });
-      publish({
-        seq: 2,
-        createdAt: 2,
-        type: "assistant_text",
-        payload: { text: "確認したいことが2点あります。", parent_tool_use_id: null },
-      });
-      publish({
-        seq: 3,
-        createdAt: 3,
-        type: "question",
-        payload: {
-          request_id: "ui-question",
-          questions: [
-            {
-              question: "在庫を戻す方法は?",
-              header: "方法",
-              multi_select: false,
-              options: [
-                { label: "定期処理", description: "1分ごと" },
-                { label: "次の処理", description: "必要なとき" },
-              ],
-            },
-            {
-              question: "設定で変えられるようにする?",
-              header: "設定",
-              multi_select: false,
-              options: [{ label: "はい", description: "設定で変える" }],
-            },
-          ],
-        },
-      });
-      return;
-    }
-    if (path.endsWith("/answers/send")) {
-      const answers = snapshot.pendingAnswers!.answers;
-      snapshot.pendingAnswers = null;
-      snapshot.conversation.runState = "idle";
-      await route.fulfill({ status: 202, json: { result: "answered" } });
-      publish({
-        seq: 4,
-        createdAt: 4,
-        type: "answer",
-        payload: { request_id: "ui-question", answers, as_message: false },
-      });
-      publish({
-        seq: 5,
-        createdAt: 5,
-        type: "assistant_text",
-        payload: { text: "選んだ方針で設計を進めます。", parent_tool_use_id: null },
-      });
-      return;
-    }
-    if (path.endsWith("/answers")) {
-      snapshot.pendingAnswers = request.postDataJSON();
-      return route.fulfill({ json: { pendingAnswers: snapshot.pendingAnswers } });
-    }
-    if (path.endsWith("/draft")) {
-      const body = request.postDataJSON();
-      snapshot.draft =
-        body.text || body.images.length
-          ? {
-              text: body.text,
-              images: body.images,
-              updatedAt: body.editedAt,
-              updatedBy: body.clientId,
-            }
-          : null;
-      return route.fulfill({ json: { draft: snapshot.draft, applied: true } });
-    }
-    if (path === "/api/conversations/ui-conversation") return route.fulfill({ json: snapshot });
-    return route.fulfill({
-      status: 404,
-      json: { error: { code: "not_found", message: "fixture対象外です" } },
-    });
-  });
+    },
+  );
   await page.goto("/");
   await page.getByRole("region", { name: "一覧", exact: true }).locator(".cm-content").focus();
   await page.keyboard.press("Space");
