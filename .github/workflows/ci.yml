@@ -52,6 +52,9 @@ jobs:
       - name: Install dependencies
         run: vp install --frozen-lockfile
 
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
       - name: Mutation test (changed files)
         env:
           BASE_REF: ${{ github.base_ref }}
