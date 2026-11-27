@@ -599,6 +599,8 @@ Space を押すと、ステータス行の上に、続けて押せるキーの�
 | ヘルプの行の生成 | UI (土台) | `src/front/buffer/help-lines.ts` |
 | 今の割り当ての Vim への当て直し | UI (土台) | `src/front/buffer/keymap/apply-vim.ts` |
 | コマンド行と、コマンドの読み取り | UI | `src/front/buffer/CommandLine.tsx`、`src/front/buffer/commands.ts` |
+| ウィンドウと入力欄の操作状態、動作の実行と設定の購読 | UI (土台) | `src/front/buffer/controller.ts` |
+| ターミナルの入力中のキーの受け口 | UI (土台) | `src/front/buffer/terminal.ts` |
 | ウィンドウの並び、見出し、列の見出し、移動 | UI | `src/front/buffer/Layout.tsx`、`src/front/buffer/Frame.tsx`、`src/front/buffer/ColHead.tsx` |
 | 右のウィンドウの表示の順 | UI (土台) | `src/front/buffer/right-window.ts` |
 | Space の候補、確認、ステータス行、ヒント | UI | `src/front/buffer/WhichKey.tsx`、`src/front/buffer/ConfirmBar.tsx`、`src/front/buffer/StatusLine.tsx`、`src/front/buffer/hints.ts` |
@@ -606,6 +608,7 @@ Space を押すと、ステータス行の上に、続けて押せるキーの�
 | 末尾の区画の書き換え、`seq` から行を求める | UI (土台) | `src/front/buffer/tail.ts`、`src/front/buffer/seq-index.ts` |
 | ジャンプの履歴 | UI (土台) | `src/front/buffer/jump-history.ts` |
 | 画面の URL と、URL から画面を開く | UI | `src/front/lib/routes.ts` |
+| ブラウザの履歴、タブごとの保存、ページを離れるときの保存をつなぐ | UI | `src/front/lib/browser.ts` |
 | コピー | UI (土台) | `src/front/buffer/clipboard.ts` |
 | 書体の同梱 | UI | `src/front/styles/fonts.css` |
 

@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useContext, useRef, useSyncExternalStore } from "react";
 // oxlint-disable-next-line no-restricted-imports -- CodeMirror の EditorView は要素の寿命に合わせて 1 度だけ作り、追記は dispatch で当てるため effect が要る
 import { useEffect } from "react";
 import {
@@ -11,6 +11,10 @@ import {
 import { drawSelection, EditorView, highlightActiveLine } from "@codemirror/view";
 import { getCM, vim } from "@replit/codemirror-vim";
 import type { ColumnDef, LineInfo } from "./line";
+import { BufferControllerContext, windowId, type WindowHandle } from "./controller";
+import { numberMenus, numberMenuOperation } from "./menu";
+import { FrameContext } from "./Frame";
+import { applyVim, vimMode } from "./keymap/apply-vim";
 import { canPlaceCursor, initialLine, placeCursor } from "./no-cursor";
 import { findSeqLine } from "./seq-index";
 import {
@@ -45,11 +49,15 @@ export type BufferHandle = {
   setTail(part: TailPart, lines: LineInfo[]): void;
   replaceAll(lines: LineInfo[]): void;
   jumpTo(line: number): void;
+  pushJump(line: number): void;
   findSeq(seq: number, seqLine?: number): number | null;
 };
 
 export type BufferProps = {
   side: BufferSide;
+  posKey?: string;
+  viewName?: string;
+  name?: string;
   lines: LineInfo[];
   columns?: ColumnDef[];
   startLine?: number;
@@ -142,12 +150,21 @@ function cursorSelection(
 
 export function Buffer({
   side,
+  posKey,
+  viewName,
+  name,
   lines,
   columns,
   startLine,
   followTail = false,
   onReady,
 }: BufferProps) {
+  const controller = useContext(BufferControllerContext);
+  const frameTitle = useContext(FrameContext);
+  useSyncExternalStore(
+    controller?.subscribe ?? (() => () => {}),
+    controller?.snapshot ?? (() => null),
+  );
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const batchRef = useRef<Batch | null>(null);
@@ -158,9 +175,13 @@ export function Buffer({
     const host = hostRef.current;
     if (host === null) return;
     const config = configRef.current;
-    const content = createContent(config.lines);
+    const content = createContent(numberMenus(config.lines));
     const initial = initialLine(config.lines, config.startLine);
+    let rememberSelection = () => {};
     const extensions: Extension[] = [
+      EditorView.updateListener.of((update) => {
+        if (update.selectionSet || update.docChanged) rememberSelection();
+      }),
       vim(),
       drawSelection(),
       highlightActiveLine(),
@@ -179,7 +200,7 @@ export function Buffer({
     const state = EditorState.create({
       doc: contentText(content),
       selection: EditorSelection.single(
-        config.lines.length === 0 ? 0 : lineStart(config.lines, initial),
+        config.lines.length === 0 ? 0 : lineStart(contentLines(content), initial),
       ),
       extensions,
     });
@@ -220,7 +241,7 @@ export function Buffer({
       if (viewRef.current !== view) return;
       const batch = batchRef.current;
       const base = batch?.content ?? view.state.field(bufferField).content;
-      const op = build(base);
+      const op = numberMenuOperation(base, build(base));
       const changes = ChangeSet.of(op.specs, contentText(base).length);
       const operation = {
         intent: typeof intent === "function" ? intent(base) : intent,
@@ -243,6 +264,69 @@ export function Buffer({
       if (frameRef.current === null) frameRef.current = requestAnimationFrame(flush);
     };
 
+    const logicalSide = windowId(side);
+    const window: WindowHandle = {
+      name: name ?? frameTitle ?? side,
+      url: controller?.options.url ?? "/",
+      view: viewName ?? side,
+      posKey: posKey ?? `${controller?.options.url ?? "/"}:${logicalSide}:${viewName ?? side}`,
+      focus: () => {
+        view.focus();
+        controller?.update({ mode: vimMode(view) });
+      },
+      lines: () => view.state.field(bufferField).lines,
+      position: () => {
+        const line = view.state.doc.lineAt(view.state.selection.main.head);
+        const info = view.state.field(bufferField).lines[line.number - 1];
+        return {
+          line: line.number - 1,
+          column: view.state.selection.main.head - line.from,
+          topLine:
+            view.state.doc.lineAt(view.lineBlockAtHeight(view.scrollDOM.scrollTop).from).number - 1,
+          ...(info?.id ? { id: info.id } : {}),
+        };
+      },
+      place: (position) => {
+        const lines = view.state.field(bufferField).lines;
+        const byId = position.id ? lines.findIndex((line) => line.id === position.id) : -1;
+        const target = Math.max(
+          0,
+          Math.min(byId >= 0 ? byId : position.line, view.state.doc.lines - 1),
+        );
+        const line = view.state.doc.line(target + 1);
+        view.dispatch({
+          selection: EditorSelection.single(Math.min(line.to, line.from + position.column)),
+          effects: EditorView.scrollIntoView(
+            view.state.doc.line(Math.min(position.topLine + 1, view.state.doc.lines)).from,
+            { y: "start" },
+          ),
+        });
+      },
+      scrollCursor: () =>
+        view.dispatch({ effects: EditorView.scrollIntoView(view.state.selection.main.head) }),
+    };
+    const unregister = controller?.registerWindow(logicalSide, window);
+    const unmap = controller
+      ? applyVim(view, controller, logicalSide, viewName ?? side)
+      : undefined;
+    const remember = () => {
+      controller?.positions.setPosition(window.posKey, window.position());
+    };
+    rememberSelection = () => {
+      remember();
+      controller?.update({});
+    };
+    const focus = () => {
+      controller?.focus(logicalSide);
+      controller?.update({ mode: vimMode(view) });
+    };
+    const doubleClick = () => {
+      controller?.open();
+    };
+    view.dom.addEventListener("focusin", focus);
+    view.dom.addEventListener("dblclick", doubleClick);
+    view.dom.addEventListener("keyup", remember);
+    view.scrollDOM.addEventListener("scroll", remember);
     config.onReady({
       append(appendLines_, clearTail) {
         enqueue({ kind: "append" }, (base) => appendLines(base, appendLines_, clearTail ?? []));
@@ -262,6 +346,7 @@ export function Buffer({
         enqueue({ kind: "replaceAll" }, (base) => replaceAllLines(base, allLines));
       },
       jumpTo(line) {
+        controller?.pushJump(logicalSide, window.position().line);
         if (viewRef.current !== view) return;
         const currentLines = view.state.field(bufferField).lines;
         if (currentLines.length === 0) return;
@@ -274,12 +359,21 @@ export function Buffer({
           scrollIntoView: true,
         });
       },
+      pushJump(line) {
+        controller?.pushJump(logicalSide, line);
+      },
       findSeq(seq, seqLine) {
         return findSeqLine(view.state.field(bufferField).lines, seq, seqLine);
       },
     });
 
     return () => {
+      unregister?.();
+      unmap?.();
+      view.dom.removeEventListener("focusin", focus);
+      view.dom.removeEventListener("dblclick", doubleClick);
+      view.dom.removeEventListener("keyup", remember);
+      view.scrollDOM.removeEventListener("scroll", remember);
       if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
       frameRef.current = null;
       batchRef.current = null;
@@ -288,5 +382,16 @@ export function Buffer({
     };
   }, []);
 
-  return <div ref={hostRef} className="flex min-h-0 flex-1 flex-col [&>.cm-editor]:flex-1" />;
+  return (
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      {controller?.busy(windowId(side)) ? (
+        <div
+          role="progressbar"
+          aria-label="操作の実行中"
+          className="absolute right-3 top-2 z-10 h-4 w-4 animate-spin rounded-full border-2 border-line border-t-accent"
+        />
+      ) : null}
+      <div ref={hostRef} className="flex min-h-0 flex-1 flex-col [&>.cm-editor]:flex-1" />
+    </div>
+  );
 }
