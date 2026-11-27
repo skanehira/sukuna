@@ -1,5 +1,6 @@
 import { createInboxRoutes } from "./modules/inbox/adapter/routes";
 import type { InboxDependencies } from "./modules/inbox/domain/ports";
+import { createConversationWorktrees } from "./modules/conversation/adapter/worktrees";
 import { createConversationRoutes } from "./modules/conversation/adapter/http";
 import type { ConversationDependencies } from "./modules/conversation/domain/ports";
 import { createPrRoutes } from "./modules/flow/adapter/pr-routes";
@@ -60,7 +61,14 @@ export function createApp(options: AppOptions): Hono<IdentityEnv> {
   const app = new Hono<IdentityEnv>();
 
   app.use("*", createIdentityMiddleware({ resolve: resolveIdentity }));
-  if (options.conversations) app.route("/api", createConversationRoutes(options.conversations));
+  if (options.conversations)
+    app.route(
+      "/api",
+      createConversationRoutes(
+        options.conversations,
+        options.worktrees && createConversationWorktrees(options.worktrees),
+      ),
+    );
   if (options.messages)
     app.post("/api/conversations/:id/messages", createMessageHandler(options.messages));
 

@@ -16,8 +16,16 @@ export const conversationContentSchema = z.object({
 });
 export const startPublicConversationSchema = z.object({
   projectId: z.string().min(1),
-  workspace: z.object({ kind: z.literal("project") }),
+  workspace: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("project") }),
+    z.object({ kind: z.literal("new_worktree"), name: z.string().optional() }),
+    z.object({ kind: z.literal("worktree"), worktreeId: z.string().min(1) }),
+  ]),
 });
+export type ConversationWorkspaceChoice = z.infer<
+  typeof startPublicConversationSchema
+>["workspace"];
+export const switchPublicWorkspaceSchema = z.object({ worktreeId: z.string().min(1).nullable() });
 export const saveConversationDraftSchema = conversationContentSchema.extend({
   clientId: z.string().min(1),
   editedAt: z.number().int().nonnegative(),

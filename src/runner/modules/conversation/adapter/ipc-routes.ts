@@ -33,6 +33,7 @@ export type IpcExtensions = {
   workspace?: (
     id: string,
     input: z.infer<typeof workspaceSchema>,
+    cancelled: () => boolean,
   ) => Promise<Result<{ cwd: string }, OperationError>>;
 };
 export function createIpcRoutes(
@@ -178,7 +179,9 @@ export function createIpcRoutes(
   );
   const workspace = extensions.workspace;
   if (workspace)
-    route("/conversations/:id/workspace", workspaceSchema, (id, p) => workspace(id, p));
+    route("/conversations/:id/workspace", workspaceSchema, (id, p, _params, callerCancelled) =>
+      workspace(id, p, callerCancelled),
+    );
   if (extensions.allowMerge) {
     const allowMerge = extensions.allowMerge;
     route("/flow/issues/:id/pr/allow-merge", allowMergeIpcSchema, (id, p) =>

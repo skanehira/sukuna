@@ -2,6 +2,7 @@ import { z } from "zod";
 import { recapStateSchema } from "./recap/api";
 import { answersSchema, originSchema, runStateSchema } from "./events";
 import { timelineInputCommentSchema } from "./progress/schema";
+import type { PublicConversation } from "./conversation/api";
 
 export const RUNNER_IPC_TIMEOUT_MS = 10_000;
 export const RUNNER_IPC_DEADLINE_HEADER = "x-sukuna-ipc-deadline";
@@ -31,9 +32,20 @@ export const permissionSchema = z.object({
   behavior: z.enum(["allow", "deny"]),
   message: z.string().optional(),
 });
+export const WORKSPACE_SWITCH_RECEIPT_TTL_MS = 60_000;
+export const workspaceSwitchAttemptSchema = z.object({
+  id: z.uuid(),
+  expires_at: z.number().int().positive(),
+});
+export type WorkspaceSwitchAttempt = z.infer<typeof workspaceSwitchAttemptSchema>;
+export type WorkspaceSwitchReceipt = {
+  conversationId: string;
+  conversation: PublicConversation | null;
+};
 export const workspaceSchema = z.object({
   cwd: z.string().min(1),
-  worktree_id: z.string().nullable().optional(),
+  worktree_id: z.string().min(1).nullable().optional(),
+  attempt: workspaceSwitchAttemptSchema.optional(),
 });
 export const flowNotifySchema = z.object({
   project_id: z.string().optional(),

@@ -1,4 +1,5 @@
 import type { Result } from "neverthrow";
+import type { WorkspaceSwitchAttempt, WorkspaceSwitchReceipt } from "../../../../shared/ipc";
 import type {
   ConversationContent,
   ConversationDraft,
@@ -14,13 +15,27 @@ export type ConversationError = {
     | "conflict"
     | "unanswered_questions"
     | "internal"
-    | "runner_unavailable";
+    | "runner_unavailable"
+    | "worktree_failed";
   message: string;
 };
+type ConversationWorktree = { id: string; path: string };
+export interface ConversationWorktrees {
+  find(projectId: string, id: string): Promise<Result<ConversationWorktree, ConversationError>>;
+  create(
+    projectId: string,
+    name?: string,
+  ): Promise<Result<ConversationWorktree & { notice: string | null }, ConversationError>>;
+}
 export interface ConversationRepository {
   transaction<T>(operation: () => T): T;
   project(id: string): { id: string; path: string } | null;
   conversation(id: string): PublicConversation | null;
+  workspaceSwitchReceipt(
+    attempt: WorkspaceSwitchAttempt,
+    now: number,
+  ): WorkspaceSwitchReceipt | null;
+  cancelWorkspaceSwitch(id: string, attempt: WorkspaceSwitchAttempt, now: number): void;
   draft(id: string): ConversationDraft | null;
   writeDraft(id: string, draft: ConversationDraft): void;
   queue(id: string): QueueItem[];
@@ -47,9 +62,11 @@ export type ConversationDependencies = {
   runner: MessageDependencies["runner"];
   images: ImageStorage;
   id(): string;
+  workspaceSwitchAttempt(): WorkspaceSwitchAttempt;
   now(): number;
   changed(id: string, parts: ("draft" | "queue" | "answers" | "stock")[]): void;
   reopened(ids: string[]): void;
+  notice?(id: string, message: string): void;
 };
 export const emptyDraft = (draft: ConversationDraft | null): ConversationDraft | null =>
   draft && (draft.text || draft.images.length) ? draft : null;

@@ -8,6 +8,8 @@ import {
   realpathSync,
 } from "node:fs";
 import { join, resolve, sep } from "node:path";
+import { randomUUID } from "node:crypto";
+import { WORKSPACE_SWITCH_RECEIPT_TTL_MS } from "../../../../shared/ipc";
 import { err, ok } from "neverthrow";
 import type Database from "better-sqlite3";
 import type { RunnerLink } from "../../../runner-link";
@@ -21,15 +23,21 @@ export function createConversationDependencies(options: {
   now: () => number;
   changed: ConversationDependencies["changed"];
   reopened: ConversationDependencies["reopened"];
+  notice?: ConversationDependencies["notice"];
 }): ConversationDependencies {
   const home = realpathSync(options.home);
   return {
     repository: createConversationRepository(options.sqlite),
     runner: options.runner,
     id: options.id,
+    workspaceSwitchAttempt: () => ({
+      id: randomUUID(),
+      expires_at: options.now() + WORKSPACE_SWITCH_RECEIPT_TTL_MS,
+    }),
     now: options.now,
     changed: options.changed,
     reopened: options.reopened,
+    notice: options.notice,
     images: {
       save: (conversationId, imageId, mediaType, data) => {
         try {

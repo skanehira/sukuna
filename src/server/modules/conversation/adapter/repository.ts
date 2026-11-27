@@ -1,11 +1,12 @@
 import type Database from "better-sqlite3";
+import { readPublicConversation } from "../../../../shared/conversation/sqlite-public-conversation";
+import {
+  readWorkspaceSwitchReceipt,
+  writeWorkspaceSwitchReceipt,
+} from "../../../../shared/conversation/sqlite-workspace-switch-receipts";
 import { eventSchema } from "../../../../shared/events";
 import { answersSchema } from "../../../../shared/events";
-import type {
-  ConversationDraft,
-  PendingAnswers,
-  PublicConversation,
-} from "../../../../shared/conversation/api";
+import type { ConversationDraft, PendingAnswers } from "../../../../shared/conversation/api";
 import type { ConversationRepository } from "../domain/ports";
 import type { QueueItem } from "../domain/message-port";
 import { timelineInputCommentSchema } from "../../../../shared/progress/schema";
@@ -53,28 +54,10 @@ export function createConversationRepository(sqlite: Database.Database): Convers
       (sqlite.prepare("SELECT id,path FROM projects WHERE id=? AND removed_at IS NULL").get(id) as
         | { id: string; path: string }
         | undefined) ?? null,
-    conversation: (id) => {
-      const row = sqlite
-        .prepare(
-          "SELECT c.id,c.project_id AS projectId,COALESCE(p.name,'') AS projectName,c.kind,c.issue_id AS issueId,c.parent_conversation_id AS parentConversationId,COALESCE(c.title,'新しい会話') AS title,c.cwd,c.worktree_id AS worktreeId,w.path AS worktreePath,w.branch AS worktreeBranch,c.run_state AS runState,c.stop_reason AS stopReason,c.resets_at AS resetsAt,c.last_seq AS lastSeq,c.last_read_seq AS lastReadSeq,c.last_position AS lastPosition,c.closed_at AS closedAt FROM conversations c LEFT JOIN projects p ON p.id=c.project_id LEFT JOIN worktrees w ON w.id=c.worktree_id WHERE c.id=?",
-        )
-        .get(id) as
-        | (Omit<PublicConversation, "worktree"> & {
-            worktreeId: string | null;
-            worktreePath: string | null;
-            worktreeBranch: string | null;
-          })
-        | undefined;
-      if (!row) return null;
-      const { worktreeId, worktreePath, worktreeBranch, ...conversation } = row;
-      return {
-        ...conversation,
-        worktree:
-          worktreeId && worktreePath && worktreeBranch
-            ? { id: worktreeId, name: worktreePath.split("/").at(-1)!, branch: worktreeBranch }
-            : null,
-      };
-    },
+    conversation: (id) => readPublicConversation(sqlite, id),
+    workspaceSwitchReceipt: (attempt, now) => readWorkspaceSwitchReceipt(sqlite, attempt, now),
+    cancelWorkspaceSwitch: (id, attempt, now) =>
+      writeWorkspaceSwitchReceipt(sqlite, attempt, { conversationId: id, conversation: null }, now),
     draft: (id) => {
       const row = sqlite
         .prepare(
