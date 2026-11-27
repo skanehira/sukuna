@@ -2,6 +2,7 @@ import { RunOptions } from "./run-options";
 import type { CommandCache } from "../domain/agent-port";
 import { ConversationWorkspaceChanged } from "../domain/conversation-store";
 import { WorktreeActivityBusy } from "../../../../shared/workspace/worktree-activity";
+import { RUNNER_IPC_TIMEOUT_MS } from "../../../../shared/ipc";
 import { deliverQueue } from "./deliver-queue";
 import { start } from "./start";
 import { send } from "./send";
@@ -33,9 +34,10 @@ import { recordRateLimit } from "./record-rate-limit";
 import type { TimelineInputComment } from "../../../../shared/progress/schema";
 
 export type OperationError = {
-  code: "conflict" | "not_found" | "internal" | "invalid_input";
+  code: "conflict" | "not_found" | "internal" | "invalid_input" | "runner_unavailable";
   message: string;
 };
+export type DeliveryError = OperationError | { code: "worktree_failed"; message: string };
 export type RuntimeSignal = { conversationId: string } & (
   | { type: "event"; event: StoredEvent }
   | { type: "turnEnded"; startSeq: number; endSeq: number; subtype: string }
@@ -70,7 +72,21 @@ export type SendInput = {
   origin: Origin;
   timelineComments?: TimelineInputComment[];
 };
-export type InputAcceptance = { events: ConversationEvent[]; before: () => void };
+export type InputAcceptance = {
+  events: ConversationEvent[];
+  before?: () => void;
+  check?: () => OperationError | null;
+  checkBeforeCommit?: () => OperationError | null;
+};
+class InputRefused extends Error {
+  readonly refusal: OperationError;
+  constructor(refusal: OperationError) {
+    super(refusal.message);
+    this.refusal = refusal;
+  }
+}
+type Reopening = { closedAt: number; until: number };
+const reopenWaitMs = RUNNER_IPC_TIMEOUT_MS + 5_000;
 type Execution = {
   cwd: string;
   worktreeId: string | null;
@@ -89,6 +105,7 @@ type Execution = {
   };
   permission?: { request: PermissionRequest; resolve: (answer: PermissionDecision) => void };
   inputOrigin: Origin;
+  reopening: Reopening | null;
 };
 export const activeStates: RunState[] = ["working", "waiting_answer", "waiting_permission"];
 export const conflict = (
@@ -137,10 +154,10 @@ export class ConversationRuntime {
       error,
     );
   }
-  serial<T>(
+  serial<T, E extends DeliveryError>(
     id: string,
-    operation: () => Promise<Result<T, OperationError>>,
-  ): Promise<Result<T, OperationError>> {
+    operation: () => Promise<Result<T, E>>,
+  ): Promise<Result<T, E | OperationError>> {
     const previous = this.operations.get(id) ?? Promise.resolve();
     const next = previous.then(operation).catch((error: unknown) => {
       if (error instanceof WorktreeActivityBusy || error instanceof ConversationWorkspaceChanged)
@@ -162,15 +179,18 @@ export class ConversationRuntime {
     events: ConversationEvent[],
     before: () => void = () => {},
     unchanged: () => boolean = () => true,
+    beforeCommit?: () => void,
   ): StoredEvent[] {
     const previous = this.store.get(id)?.runState;
     const recorded = this.store.transaction(() => {
       if (!unchanged()) return [];
       before();
-      return events.flatMap((e) => {
+      const records = events.flatMap((e) => {
         const record = this.store.append(id, e, this.options.clock.now());
         return record ? [record] : [];
       });
+      beforeCommit?.();
+      return records;
     });
     for (const event of recorded) {
       this.signal({ type: "event", conversationId: id, event });
@@ -233,16 +253,21 @@ export class ConversationRuntime {
       assistantError: null,
       startSeq: 0,
       inputOrigin: "developer",
+      reopening: null,
     };
     this.executions.set(c.id, execution);
-    execution.consuming = this.consume(c.id, execution);
     return execution;
   }
   async deliver(
     id: string,
     input: SendInput,
     acceptance?: InputAcceptance,
-    options: { includeQueued?: boolean; interrupt?: boolean; omitMissingImages?: boolean } = {},
+    options: {
+      includeQueued?: boolean;
+      interrupt?: boolean;
+      omitMissingImages?: boolean;
+      reopensAfterAcceptance?: boolean;
+    } = {},
   ): Promise<Result<SendResult, OperationError>> {
     if (!this.store.get(id)) throw new Error("会話がありません。");
     const prepare = () => {
@@ -291,6 +316,8 @@ export class ConversationRuntime {
       const result = this.store.withWorkspace(
         id,
         (worktreeId): Result<SendResult, OperationError> | Execution | null => {
+          let refusal = acceptance?.check?.() ?? null;
+          if (refusal) return err(refusal);
           if (this.closing) return err(conflict());
           const c = this.store.get(id);
           if (!c) throw new Error("会話がありません。");
@@ -349,13 +376,16 @@ export class ConversationRuntime {
           };
           let execution: Execution | undefined;
           let openingError: { cause: unknown } | undefined;
+          let resumeClosedAt: number | null = null;
           let records: StoredEvent[];
           try {
             records = this.record(
               id,
               [...(acceptance?.events ?? []), event],
               () => {
-                acceptance?.before();
+                acceptance?.before?.();
+                if (options.reopensAfterAcceptance)
+                  resumeClosedAt = this.store.get(id)?.closedAt ?? null;
                 try {
                   execution = this.execution(c, worktreeId);
                 } catch (error) {
@@ -371,7 +401,9 @@ export class ConversationRuntime {
               () =>
                 this.store.withWorkspace(id, (actualWorktreeId) => {
                   const current = this.store.get(id);
+                  refusal = acceptance?.check?.() ?? null;
                   return (
+                    refusal === null &&
                     !this.closing &&
                     current?.cwd === c.cwd &&
                     actualWorktreeId === worktreeId &&
@@ -379,8 +411,21 @@ export class ConversationRuntime {
                       JSON.stringify(this.store.queue(id)) === JSON.stringify(queued))
                   );
                 }),
+              () => {
+                const rejected = acceptance?.checkBeforeCommit?.();
+                if (rejected) throw new InputRefused(rejected);
+              },
             );
           } catch (error) {
+            if (!opened && execution) {
+              this.executions.delete(id);
+              try {
+                execution.session.close();
+              } catch (closeError) {
+                this.log(id, "未受理の実行を閉じられませんでした。", closeError);
+              }
+            }
+            if (error instanceof InputRefused) return err(error.refusal);
             if (openingError)
               this.record(id, [
                 {
@@ -396,9 +441,11 @@ export class ConversationRuntime {
               ]);
             throw error;
           }
+          if (refusal) return err(refusal);
           if (!records.length) return null;
           if (!execution) throw new Error("実行がありません。");
           const activeExecution = execution;
+          if (!opened) activeExecution.consuming = this.consume(id, activeExecution);
           if (queued.length) this.partsChanged(id, ["queue"]);
           const record = records.at(-1);
           if (!record) throw new Error("指示を記録できません。");
@@ -408,6 +455,10 @@ export class ConversationRuntime {
           activeExecution.intent = null;
           activeExecution.startSeq = record.seq;
           activeExecution.inputOrigin = input.origin;
+          activeExecution.reopening =
+            resumeClosedAt === null
+              ? null
+              : { closedAt: resumeClosedAt, until: record.createdAt + reopenWaitMs };
           activeExecution.ended = new Promise((resolve) => {
             activeExecution.end = resolve;
           });
@@ -497,8 +548,16 @@ export class ConversationRuntime {
         `番が終わりました: ${output.subtype}; cost_usd=${output.costUsd}; duration_ms=${output.durationMs}`,
       );
       const intent = execution.intent;
+      const finishedSeq = execution.startSeq;
+      const reopening = execution.reopening;
       execution.end();
-      if (stop.state === "usage_limited") this.scheduleUsageResume(id);
+      if (stop.state === "usage_limited") {
+        const stopped = records.find((record) => record.type === "stopped");
+        this.scheduleUsageResume(
+          id,
+          reopening && stopped ? { ...reopening, stopSeq: stopped.seq } : undefined,
+        );
+      }
       if (
         output.subtype === "success" &&
         !stop.stopped &&
@@ -506,11 +565,14 @@ export class ConversationRuntime {
         this.store.queue(id).length
       )
         void this.serial(id, async () => {
-          const state = this.store.get(id)?.runState;
+          const current = this.store.get(id);
           if (
             !this.closing &&
-            state === "idle" &&
-            this.store.get(id)?.closedAt === null &&
+            !this.releases.has(id) &&
+            this.executions.get(id) === execution &&
+            execution.startSeq === finishedSeq &&
+            current?.runState === "idle" &&
+            (current.closedAt === null || this.reopenWait(current, reopening) > 0) &&
             this.store.queue(id).length
           ) {
             const result = await this.deliver(
@@ -598,14 +660,32 @@ export class ConversationRuntime {
   answer = answer.bind(this);
   permission = permission.bind(this);
   release = release.bind(this);
-  scheduleUsageResume(id: string): void {
+  private reopenWait(c: Conversation, reopening: Reopening | null): number {
+    return reopening && c.closedAt === reopening.closedAt
+      ? Math.max(0, reopening.until - this.options.clock.now())
+      : 0;
+  }
+  scheduleUsageResume(id: string, reopening?: Reopening & { stopSeq: number }): void {
     const c = this.store.get(id);
-    if (!c || c.closedAt !== null || c.runState !== "usage_limited") return;
-    this.timers.schedule(id, c.resetsAt, async () => {
-      const current = this.store.get(id);
-      if (current?.runState === "usage_limited" && current.closedAt === null && !this.closing)
-        await this.resume(id, "usage_limit");
-    });
+    if (!c || c.runState !== "usage_limited") return;
+    if (c.closedAt !== null && this.reopenWait(c, reopening ?? null) === 0) return;
+    const sameStop = () => !reopening || this.store.latestStopSeq(id) === reopening.stopSeq;
+    this.timers.schedule(
+      id,
+      c.resetsAt,
+      async (current) => {
+        await this.resume(id, "usage_limit", { usageTimerCurrent: () => current() && sameStop() });
+      },
+      reopening
+        ? () => {
+            if (this.closing || this.releases.has(id)) return null;
+            const latest = this.store.get(id);
+            if (latest?.runState !== "usage_limited" || !sameStop()) return null;
+            const remaining = this.reopenWait(latest, reopening);
+            return remaining > 0 ? Math.min(remaining, 100) : null;
+          }
+        : undefined,
+    );
   }
   async shutdown(): Promise<void> {
     if (this.closing) return;

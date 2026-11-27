@@ -1,29 +1,44 @@
 import type { Clock } from "../domain/clock";
 export class UsageLimitTimer {
-  private timers = new Map<string, () => void>();
+  private timers = new Map<string, { cancel?: () => void }>();
   private clock: Clock;
   constructor(clock: Clock) {
     this.clock = clock;
   }
-  schedule(id: string, resetsAt: number | null, resume: () => void | Promise<void>): void {
+  schedule(
+    id: string,
+    resetsAt: number | null,
+    resume: (current: () => boolean) => void | Promise<void>,
+    recheckAfter?: () => number | null,
+  ): void {
     this.cancel(id);
-    this.timers.set(
-      id,
-      this.clock.setTimeout(
-        () => {
-          this.timers.delete(id);
-          return resume();
-        },
-        resetsAt === null ? 15 * 60 * 1000 : Math.max(0, resetsAt + 60000 - this.clock.now()),
-      ),
+    const timer: { cancel?: () => void } = {};
+    const current = () => this.timers.get(id) === timer;
+    const run = async () => {
+      if (!current()) return;
+      let next: number | null = null;
+      try {
+        next = recheckAfter?.() ?? null;
+        if (next === null) await resume(current);
+      } finally {
+        if (current()) {
+          if (next === null) this.timers.delete(id);
+          else timer.cancel = this.clock.setTimeout(run, next);
+        }
+      }
+    };
+    this.timers.set(id, timer);
+    timer.cancel = this.clock.setTimeout(
+      run,
+      resetsAt === null ? 15 * 60 * 1000 : Math.max(0, resetsAt + 60000 - this.clock.now()),
     );
   }
   cancel(id: string): void {
-    this.timers.get(id)?.();
+    this.timers.get(id)?.cancel?.();
     this.timers.delete(id);
   }
   clear(): void {
-    for (const cancel of this.timers.values()) cancel();
+    for (const timer of this.timers.values()) timer.cancel?.();
     this.timers.clear();
   }
 }

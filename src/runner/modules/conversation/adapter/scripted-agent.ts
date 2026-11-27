@@ -147,7 +147,7 @@ export class ScriptedAgent implements AgentPort {
             raw: { rate_limit_info: step.rate_limit },
           });
         if ("end" in step) {
-          output.push(turnEnd(step.end));
+          output.push({ ...turnEnd(step.end), terminalReason: step.terminal_reason ?? null });
           ended = true;
           break;
         }

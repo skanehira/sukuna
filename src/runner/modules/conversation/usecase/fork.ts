@@ -1,12 +1,12 @@
 import { err, type Result } from "neverthrow";
-import type { ConversationRuntime, OperationError } from "./runtime";
+import type { ConversationRuntime, DeliveryError } from "./runtime";
 import { conflict } from "./runtime";
 
 export async function fork(
   this: ConversationRuntime,
   id: string,
   input: { title: string; kind: "thread" },
-): Promise<Result<{ conversationId: string }, OperationError>> {
+): Promise<Result<{ conversationId: string }, DeliveryError>> {
   const c = this.store.get(id);
   if (!c) return err({ code: "not_found", message: "会話が見つかりません。" });
   if (c.sessionId === null) return err(conflict());

@@ -175,6 +175,7 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 - `/flow/notify` は、画面のサーバーが issue の項目、プロジェクトの設定、一時停止を書いたあとに送る。全体の一時停止のように対象のプロジェクトが無いときは、どちらの id も付けない
 - PR の取得で GitHub で merge されたのを見たときも、画面のサーバーは `/flow/notify` を `issue_id` 付きで送る (`features/pr-review.md`「取得と最後に取得した内容」)
 - 画面のサーバーは、つながらない・10 秒で応答が無い・知らせの流れが切れているときに、API へ 503 (`runner_unavailable`) を返す。`message` は「AI を動かすプロセスにつながりません。少し待ってから、もう一度操作してください。」とする
+- 手動の再開の受付を確定する前に、IPC の切断と期限を確認する。画面のサーバーは、10 秒後の時刻を Unix ミリ秒で `x-sukuna-ipc-deadline` に渡す
 - 質問と許可の確認の `request_id` は、ランナーが `question` / `permission_request` の記録の `payload` に入れる。画面のサーバーは、`pending_answers.question_seq` の記録から `request_id` を引いて回答の操作に渡す
 - 回答の操作の `result` は、質問を待っている会話に答えを返したとき `answered` とする。待ちの消えた質問の回答を指示の文にして送ったときは、指示を送る操作と同じく `delivered` か `queued` とする。`seq` は、記録を書いたときだけ返す
 - `/flow/projects/:id/stop` は、作業中と回答待ち・許可待ちの会話を止める。作業中でない `usage_limited` と `stopped` (`restarted`) の会話も、`stopped` (`user`) にし、利用枠の戻りを待つタイマーを外す
@@ -566,7 +567,7 @@ type AppTool = {
 | `permission` | `onPermission` を呼び、答えが返るまで次へ進まない |
 | `hold` | 停止の操作が来るまで次へ進まない。止まると `turn_end` (`error_during_execution`) を流す |
 | `rate_limit` | `rate_limit` を流す。続けて `end` を書くと、その番が終わる |
-| `end` | `turn_end` を流す。値は `subtype` |
+| `end` | `turn_end` を流す。値は `subtype` に入る。API の失敗を表すときは `terminal_reason: "api_error"` を添える |
 
 - 指示を受けるたびに、本文が `match` の正規表現に合う最初の規則の `steps` を流す。合う規則が無ければ `fallback` を流す
 - 1 回きりの呼び出しには、`purpose` が同じで、`prompt` が `match` に合う最初の `completions` の `text` を返す。合うものが無ければ空の文字を返す。`text` の中身の形は、呼び出す機能が決める
@@ -630,6 +631,8 @@ interface GhRunner {
 - `usage_limited` の会話は、`resets_at` の 1 分後にタイマーで再開する (`resumed` の `by: "usage_limit"`)。その時刻が過ぎていたら、起動の直後に再開する
 - 自動フローの会話 (`triage`、`design`、`impl`) は、再開の前に、再開してよいかを `flow` に問う。一時停止のときと、その段階を自動で処理する段階から外しているときは、`flow` が断り、再開しない。解除か段階を戻したあとの評価が再開を呼ぶ (`features/issue-flow.md`「AI が止まったとき」)
 - `resets_at` が無いときは、15 分ごとに再開を試みる。再開して再び利用枠切れになったら、新しい `resets_at` でタイマーを張り直す
+- 開発者の再開を受け付けた番が開き直しの前に利用枠切れになった場合も、その停止にタイマーを張る。期限に達したら、同じ停止の会話が開いていることを確かめてから再開する
+- 枠が戻っても閉じたままなら、再開の受付から 15 秒まで開き直しを待つ。15 秒は、IPC の応答待ち 10 秒と SQLite の更新待ち 5 秒を合わせた時間である
 - `credits_required` で止まった会話は、自動では再開しない
 - 自動で再開したときは、知らせの `notice` を出す
 - 実行を手放す操作 (`release`) は、その会話の利用枠の戻りを待つタイマーも外す。閉じた会話は、開発者が送るまで再開しない (`features/conversation-lifecycle.md`)

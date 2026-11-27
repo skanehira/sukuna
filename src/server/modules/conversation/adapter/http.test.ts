@@ -25,6 +25,7 @@ import type {
   AgentSession,
   OpenParams,
 } from "../../../../runner/modules/conversation/domain/agent-port";
+import type { Clock } from "../../../../runner/modules/conversation/domain/clock";
 import { ScriptedAgent } from "../../../../runner/modules/conversation/adapter/scripted-agent";
 import { startRunnerApp } from "../../../../runner/app";
 import { createApp } from "../../../app";
@@ -42,6 +43,7 @@ function deferred() {
 }
 class RecordingAgent extends ScriptedAgent {
   messages: { text: string; images: { data: Buffer; mediaType: string }[] }[] = [];
+  closedSessions: string[] = [];
   beforeInterrupt?: () => Promise<void>;
   beforeOutputEnd?: () => Promise<void>;
   beforeTurnEnd?: () => Promise<void>;
@@ -67,6 +69,10 @@ class RecordingAgent extends ScriptedAgent {
         this.messages.push(message);
         session.send(message);
       },
+      close: () => {
+        this.closedSessions.push(params.sessionId);
+        session.close();
+      },
       interrupt: async () => {
         await this.beforeInterrupt?.();
         await session.interrupt();
@@ -83,8 +89,31 @@ const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1cAAAAASUVORK5CYII=",
   "base64",
 );
+class RunnerClock implements Clock {
+  time = 1000;
+  private timers = new Map<symbol, { at: number; callback: () => void | Promise<void> }>();
+  now = () => this.time;
+  setTimeout(callback: () => void | Promise<void>, ms: number): () => void {
+    const id = Symbol();
+    this.timers.set(id, { at: this.time + ms, callback });
+    return () => this.timers.delete(id);
+  }
+  async advance(ms: number): Promise<void> {
+    const until = this.time + ms;
+    for (;;) {
+      const next = [...this.timers].sort(([, a], [, b]) => a.at - b.at)[0];
+      if (!next || next[1].at > until) break;
+      const [id, timer] = next;
+      this.time = timer.at;
+      this.timers.delete(id);
+      await timer.callback();
+    }
+    this.time = until;
+  }
+}
 async function fixture(
   script: AgentScript = { rules: [], fallback: [{ text: "受け取りました" }, { hold: true }] },
+  ipcClock?: RunnerClock,
 ) {
   const home = createTempHome();
   const database = openMigratedDatabase(home);
@@ -100,12 +129,14 @@ async function fixture(
     () => true,
   )._unsafeUnwrap();
   const agent = new RecordingAgent(script);
-  const clock = { time: 1000, now: () => clock.time, setTimeout: () => () => {} };
+  const clock = new RunnerClock();
   let runner = await startRunnerApp({ database, agent, environment, clock, log: () => {} });
   const hub = new WsHub(database.sqlite);
   const notices: unknown[] = [];
   const link = new RunnerLink({
     socket: environment.socket,
+    clock: ipcClock,
+    now: ipcClock?.now,
     log: () => {},
     notice: (notice) => {
       notices.push(notice);
@@ -201,6 +232,7 @@ async function fixture(
     notices,
     request,
     snapshot: (id: string) => request<ConversationSnapshot>(`/conversations/${id}`),
+    resume: (id: string) => request(`/conversations/${id}/resume`, "POST"),
     start,
     send,
     upload,
@@ -220,6 +252,801 @@ const invalid = {
 async function settled(f: Awaited<ReturnType<typeof fixture>>, id: string, state: string) {
   await expect.poll(() => f.runner().runtime.store.get(id)?.runState).toBe(state);
 }
+
+const resumeText = "中断したところから続けてください。";
+const resumeAccepted = { status: 202, body: { runState: "working" } };
+const resumeConflict = {
+  status: 409,
+  body: {
+    error: { code: "conflict", message: "会話の状態が変わりました。もう一度操作してください。" },
+  },
+};
+const rateLimit = [
+  { rate_limit: { status: "rejected", resetsAt: 123 } },
+  { end: "error_during_execution" },
+] satisfies AgentScript["rules"][number]["steps"];
+
+function limitAfterResume(resetsAt: number | null): AgentScript {
+  return {
+    rules: [
+      {
+        match: "^失敗$",
+        steps: [{ end: "error_during_execution", terminal_reason: "api_error" }],
+      },
+      {
+        match: `^${resumeText}$`,
+        steps: [
+          { rate_limit: { status: "rejected", resetsAt } },
+          { end: "error_during_execution" },
+        ],
+      },
+    ],
+  };
+}
+
+function executionSettings(params: OpenParams) {
+  return {
+    sessionId: params.sessionId,
+    resume: params.resume,
+    cwd: params.cwd,
+    model: params.model,
+    permissionMode: params.permissionMode,
+    instructions: params.appendSystemPrompt,
+    tools: params.appTools.map(({ name, description, alwaysLoad }) => ({
+      name,
+      description,
+      alwaysLoad,
+    })),
+  };
+}
+
+it.each([
+  {
+    reason: "api_error",
+    runState: "failed",
+    resetsAt: null,
+    steps: [{ end: "error_during_execution", terminal_reason: "api_error" }],
+  },
+  { reason: "usage_limit", runState: "usage_limited", resetsAt: 123000, steps: rateLimit },
+] satisfies {
+  reason: string;
+  runState: string;
+  resetsAt: number | null;
+  steps: AgentScript["rules"][number]["steps"];
+}[])(
+  "$reason を取得し、公開APIから保存済みセッションで再開の文だけを届ける",
+  async ({ reason, runState, resetsAt, steps }) => {
+    const f = await fixture({
+      rules: [{ match: "^最初の指示$", steps }],
+      fallback: [{ hold: true }],
+    });
+    f.database.sqlite
+      .prepare("UPDATE projects SET model='sonnet', permission_mode='acceptEdits' WHERE id='p'")
+      .run();
+    const id = await f.start();
+    expect(await f.send(id, "最初の指示")).toEqual(delivered);
+    await settled(f, id, runState);
+    const stopped = await f.snapshot(id);
+    const first = executionSettings(f.agent.opened[0]!);
+    expect({
+      status: stopped.status,
+      runState: stopped.body.conversation.runState,
+      stopReason: stopped.body.conversation.stopReason,
+      resetsAt: stopped.body.conversation.resetsAt,
+      settings: {
+        cwd: first.cwd,
+        model: first.model,
+        permissionMode: first.permissionMode,
+        instructions: first.instructions,
+        tools: first.tools.map((tool) => tool.name),
+      },
+    }).toEqual({
+      status: 200,
+      runState,
+      stopReason: reason,
+      resetsAt,
+      settings: {
+        cwd: f.home,
+        model: "sonnet",
+        permissionMode: "acceptEdits",
+        instructions: issueInstructions(),
+        tools: ["issue_get", "issue_list", "issue_create", "issue_update", "issue_comment"],
+      },
+    });
+    await f.restart();
+
+    expect(await f.resume(id)).toEqual(resumeAccepted);
+    expect(f.agent.opened.map(executionSettings)).toEqual([first, { ...first, resume: true }]);
+    expect(f.agent.sent).toEqual([
+      { sessionId: first.sessionId, text: "最初の指示" },
+      { sessionId: first.sessionId, text: resumeText },
+    ]);
+    const history = await f.request<ConversationEventsPage>(`/conversations/${id}/events`);
+    expect(history.body.events.slice(-2).map(({ type, payload }) => ({ type, payload }))).toEqual([
+      { type: "resumed", payload: { by: "developer" } },
+      {
+        type: "user_message",
+        payload: {
+          text: resumeText,
+          images: [],
+          origin: "resume",
+          client_ids: [],
+          queued_ids: [],
+          client_receipts: [],
+        },
+      },
+    ]);
+    const current = (await f.snapshot(id)).body.conversation;
+    expect({
+      state: current.runState,
+      reason: current.stopReason,
+      resetsAt: current.resetsAt,
+    }).toEqual({
+      state: "working",
+      reason: null,
+      resetsAt: null,
+    });
+  },
+);
+
+it("利用枠が戻る1分後に復旧したタイマーが、元の実行設定で再開する", async () => {
+  const f = await fixture({
+    rules: [{ match: "^利用枠切れ$", steps: rateLimit }],
+    fallback: [{ hold: true }],
+  });
+  f.database.sqlite
+    .prepare("UPDATE projects SET model='opus', permission_mode='plan' WHERE id='p'")
+    .run();
+  const id = await f.start();
+  expect(await f.send(id, "利用枠切れ")).toEqual(delivered);
+  await settled(f, id, "usage_limited");
+  const first = executionSettings(f.agent.opened[0]!);
+  await f.restart();
+
+  await f.clock.advance(183000 - f.clock.now() - 1);
+  const early = await f.snapshot(id);
+  expect({
+    state: early.body.conversation.runState,
+    resetsAt: early.body.conversation.resetsAt,
+    sent: f.agent.sent,
+  }).toEqual({
+    state: "usage_limited",
+    resetsAt: 123000,
+    sent: [{ sessionId: first.sessionId, text: "利用枠切れ" }],
+  });
+  await f.clock.advance(1);
+
+  const current = await f.snapshot(id);
+  const history = await f.request<ConversationEventsPage>(`/conversations/${id}/events`);
+  expect({
+    state: current.body.conversation.runState,
+    reason: current.body.conversation.stopReason,
+    sent: f.agent.sent,
+    opened: f.agent.opened.map(executionSettings),
+    resumes: history.body.events
+      .filter((event) => event.type === "resumed")
+      .map((event) => event.payload),
+  }).toEqual({
+    state: "working",
+    reason: null,
+    sent: [
+      { sessionId: first.sessionId, text: "利用枠切れ" },
+      { sessionId: first.sessionId, text: resumeText },
+    ],
+    opened: [first, { ...first, resume: true }],
+    resumes: [{ by: "usage_limit" }],
+  });
+});
+
+it.each([
+  { beforeReopen: true, resetsAt: 123, deadline: 183000 },
+  { beforeReopen: true, resetsAt: null, deadline: 901000 },
+  { beforeReopen: false, resetsAt: 123, deadline: 183000 },
+])(
+  "閉じた会話を再開した番が利用枠切れになったら時刻 $deadline に一度だけ再開する（開き直し前=$beforeReopen）",
+  async ({ beforeReopen, resetsAt, deadline }) => {
+    const f = await fixture(limitAfterResume(resetsAt));
+    const id = await f.start();
+    expect(await f.send(id, "失敗")).toEqual(delivered);
+    await settled(f, id, "failed");
+    f.database.sqlite.prepare("UPDATE conversations SET closed_at=50 WHERE id=?").run(id);
+    const endManual = deferred();
+    const endAutomatic = deferred();
+    f.agent.beforeTurnEnd = () =>
+      f.agent.messages.length === 2
+        ? beforeReopen
+          ? Promise.resolve()
+          : endManual.promise
+        : endAutomatic.promise;
+    const closedAtWhenStopped: (number | null | undefined)[] = [];
+    f.runner().runtime.subscribe((signal) => {
+      if (
+        signal.type === "stopped" &&
+        signal.conversationId === id &&
+        signal.reason === "usage_limit"
+      )
+        closedAtWhenStopped.push(f.runner().runtime.store.get(id)?.closedAt);
+    });
+    try {
+      expect(await f.resume(id)).toEqual(resumeAccepted);
+      endManual.resolve();
+      await settled(f, id, "usage_limited");
+      expect(closedAtWhenStopped).toEqual([beforeReopen ? 50 : null]);
+      await f.clock.advance(deadline - f.clock.now() - 1);
+      const stopped = (await f.snapshot(id)).body.conversation;
+      expect({
+        state: stopped.runState,
+        reason: stopped.stopReason,
+        resetsAt: stopped.resetsAt,
+        closedAt: stopped.closedAt,
+        sent: f.agent.messages.map(({ text }) => text),
+      }).toEqual({
+        state: "usage_limited",
+        reason: "usage_limit",
+        resetsAt: resetsAt === null ? null : resetsAt * 1000,
+        closedAt: null,
+        sent: ["失敗", resumeText],
+      });
+      await f.clock.advance(1);
+      const active = (await f.snapshot(id)).body.conversation;
+      const history = (await f.request<ConversationEventsPage>(`/conversations/${id}/events`)).body
+        .events;
+      expect({
+        state: active.runState,
+        closedAt: active.closedAt,
+        sent: f.agent.messages.map(({ text }) => text),
+        resumed: history.filter(({ type }) => type === "resumed").map(({ payload }) => payload),
+      }).toEqual({
+        state: "working",
+        closedAt: null,
+        sent: ["失敗", resumeText, resumeText],
+        resumed: [{ by: "developer" }, { by: "usage_limit" }],
+      });
+    } finally {
+      endManual.resolve();
+      endAutomatic.resolve();
+    }
+  },
+);
+
+it.each(["期限内に開き直す", "応答が失われて待機を打ち切る"] as const)(
+  "利用枠の戻りを既に過ぎた番で%s場合、閉じている間は再開しない",
+  async (scenario) => {
+    const f = await fixture(limitAfterResume(123));
+    f.clock.time = 183001;
+    const id = await f.start();
+    expect(await f.send(id, "失敗")).toEqual(delivered);
+    await settled(f, id, "failed");
+    f.database.sqlite.prepare("UPDATE conversations SET closed_at=50 WHERE id=?").run(id);
+    const allowResponse = deferred();
+    const responseReady = deferred();
+    f.deps.runner = {
+      call: async (method, path, input) => {
+        const result = await f.link.call(method, path, input);
+        if (method !== "POST" || path !== `/conversations/${id}/resume`) return result;
+        responseReady.resolve();
+        await allowResponse.promise;
+        return scenario === "期限内に開き直す" ? result : err(runnerUnavailable);
+      },
+    };
+    const automaticEnd = deferred();
+    f.agent.beforeTurnEnd = () =>
+      f.agent.messages.length === 2 ? Promise.resolve() : automaticEnd.promise;
+    try {
+      const manual = f.resume(id);
+      await responseReady.promise;
+      await settled(f, id, "usage_limited");
+      await f.clock.advance(0);
+      expect({
+        closedAt: (await f.snapshot(id)).body.conversation.closedAt,
+        messages: f.agent.messages.map(({ text }) => text),
+      }).toEqual({ closedAt: 50, messages: ["失敗", resumeText] });
+      allowResponse.resolve();
+      if (scenario === "期限内に開き直す") {
+        expect(await manual).toEqual(resumeAccepted);
+        await f.clock.advance(1000);
+        expect({
+          closedAt: (await f.snapshot(id)).body.conversation.closedAt,
+          messages: f.agent.messages.map(({ text }) => text),
+        }).toEqual({ closedAt: null, messages: ["失敗", resumeText, resumeText] });
+      } else {
+        expect(await manual).toEqual({ status: 503, body: { error: runnerUnavailable } });
+        await f.clock.advance(15_000);
+        expect((await f.snapshot(id)).body.conversation.closedAt).toBe(50);
+        f.database.sqlite.prepare("UPDATE conversations SET closed_at=NULL WHERE id=?").run(id);
+        await f.clock.advance(1000);
+        expect({
+          state: (await f.snapshot(id)).body.conversation.runState,
+          messages: f.agent.messages.map(({ text }) => text),
+        }).toEqual({ state: "usage_limited", messages: ["失敗", resumeText] });
+      }
+    } finally {
+      allowResponse.resolve();
+      automaticEnd.resolve();
+    }
+  },
+);
+
+it("正常に開き直したあとでも再度閉じた利用枠停止は自動再開しない", async () => {
+  const f = await fixture(limitAfterResume(123));
+  const id = await f.start();
+  expect(await f.send(id, "失敗")).toEqual(delivered);
+  await settled(f, id, "failed");
+  f.database.sqlite.prepare("UPDATE conversations SET closed_at=50 WHERE id=?").run(id);
+  expect(await f.resume(id)).toEqual(resumeAccepted);
+  await settled(f, id, "usage_limited");
+  expect((await f.snapshot(id)).body.conversation.closedAt).toBeNull();
+  const released = await f.link.call("POST", `/conversations/${id}/release`);
+  expect(released._unsafeUnwrap()).toEqual({ status: 200, body: { run_state: "usage_limited" } });
+  f.database.sqlite.prepare("UPDATE conversations SET closed_at=51 WHERE id=?").run(id);
+
+  await f.clock.advance(183000 - f.clock.now());
+  const stopped = (await f.snapshot(id)).body.conversation;
+  expect({
+    state: stopped.runState,
+    reason: stopped.stopReason,
+    closedAt: stopped.closedAt,
+    messages: f.agent.messages.map(({ text }) => text),
+  }).toEqual({
+    state: "usage_limited",
+    reason: "usage_limit",
+    closedAt: 51,
+    messages: ["失敗", resumeText],
+  });
+});
+
+it("作業中のランナーの再起動で履歴を保ち、指示が届いた時点で作業を再開する", async () => {
+  const f = await fixture();
+  const id = await f.start();
+  expect(await f.send(id, "初回の指示")).toEqual(delivered);
+  await settled(f, id, "working");
+  const before = await f.request<ConversationEventsPage>(`/conversations/${id}/events`);
+  const first = executionSettings(f.agent.opened[0]!);
+  await f.restart();
+  const stopped = await f.snapshot(id);
+  const history = await f.request<ConversationEventsPage>(`/conversations/${id}/events`);
+  expect({
+    state: stopped.body.conversation.runState,
+    reason: stopped.body.conversation.stopReason,
+    events: history.body.events,
+    sent: f.agent.sent,
+  }).toEqual({
+    state: "stopped",
+    reason: "restarted",
+    events: [
+      ...before.body.events,
+      {
+        type: "stopped",
+        payload: { reason: "restarted", previous_run_state: "working" },
+        seq: before.body.lastSeq + 1,
+        createdAt: f.clock.now(),
+      },
+    ],
+    sent: [{ sessionId: first.sessionId, text: "初回の指示" }],
+  });
+  expect(await f.send(id, "続きの指示")).toEqual(delivered);
+  expect({
+    state: (await f.snapshot(id)).body.conversation.runState,
+    sent: f.agent.sent,
+    opened: f.agent.opened.map(executionSettings),
+  }).toEqual({
+    state: "working",
+    sent: [
+      { sessionId: first.sessionId, text: "初回の指示" },
+      { sessionId: first.sessionId, text: "続きの指示" },
+    ],
+    opened: [first, { ...first, resume: true }],
+  });
+});
+
+it("待機中の会話は再開できず、通常の指示を送ると作業を始める", async () => {
+  const f = await fixture();
+  const id = await f.start();
+  expect(await f.resume(id)).toEqual(resumeConflict);
+  expect((await f.request<ConversationEventsPage>(`/conversations/${id}/events`)).body).toEqual({
+    events: [],
+    lastSeq: 0,
+    hasMore: false,
+  });
+  expect(await f.send(id, "許可された指示")).toEqual(delivered);
+  expect(f.agent.messages).toEqual([{ text: "許可された指示", images: [] }]);
+});
+
+it("閉じた失敗会話の再開はflowに断られた間は閉じたまま、受理された後だけ開く", async () => {
+  const f = await fixture({
+    rules: [{ match: "^失敗する指示$", steps: [{ end: "error_during_execution" }] }],
+    fallback: [{ hold: true }],
+  });
+  const id = await f.start();
+  f.database.sqlite
+    .prepare(
+      "INSERT INTO issues (id,project_id,number,title,state,created_at,updated_at) VALUES ('i','p',1,'設計する','design_review',1,1)",
+    )
+    .run();
+  f.database.sqlite
+    .prepare("UPDATE conversations SET kind='design', issue_id='i' WHERE id=?")
+    .run(id);
+  expect(await f.send(id, "失敗する指示")).toEqual(delivered);
+  await settled(f, id, "failed");
+  f.database.sqlite.prepare("UPDATE conversations SET closed_at=50 WHERE id=?").run(id);
+  const inspections: unknown[] = [];
+  let refusal: { code: "conflict" | "worktree_failed"; message: string } | null = null;
+  f.runner().runtime.runOptions.registerDeliveryGuard((conversation, input) => {
+    inspections.push({
+      id: conversation.id,
+      issueId: conversation.issueId,
+      closedAt: conversation.closedAt,
+      input,
+    });
+    return refusal ? err(refusal) : ok(undefined);
+  });
+  const before = await f.snapshot(id);
+  refusal = { code: "conflict", message: "この issue はいま実装の会話で進んでいます" };
+  expect(await f.resume(id)).toEqual({
+    status: 409,
+    body: { error: refusal },
+  });
+  expect(await f.snapshot(id)).toEqual(before);
+  refusal = { code: "worktree_failed", message: "設計の worktree を作り直せませんでした。" };
+  expect(await f.resume(id)).toEqual({
+    status: 500,
+    body: { error: refusal },
+  });
+  expect(await f.snapshot(id)).toEqual(before);
+  expect(f.agent.messages).toEqual([{ text: "失敗する指示", images: [] }]);
+
+  refusal = null;
+  const closedAtWhenSent: (number | null | undefined)[] = [];
+  f.agent.beforeSend = () => closedAtWhenSent.push(f.runner().runtime.store.get(id)?.closedAt);
+  expect(await f.resume(id)).toEqual(resumeAccepted);
+  expect({
+    closedAtWhenSent,
+    current: (await f.snapshot(id)).body.conversation.closedAt,
+    inspections,
+    sent: f.agent.messages,
+  }).toEqual({
+    closedAtWhenSent: [50],
+    current: null,
+    inspections: Array.from({ length: 3 }, () => ({
+      id,
+      issueId: "i",
+      closedAt: 50,
+      input: { text: resumeText, images: [], origin: "resume" },
+    })),
+    sent: [
+      { text: "失敗する指示", images: [] },
+      { text: resumeText, images: [] },
+    ],
+  });
+});
+
+it.each(["開き直し前に成功", "開き直し後に成功", "失敗"] as const)(
+  "閉じた会話の再開が%sした後は、正常終了した番からだけ預けた指示と画像が届く",
+  async (order) => {
+    const failed = order === "失敗";
+    const f = await fixture({
+      rules: [
+        {
+          match: "^初回$",
+          steps: [{ end: "error_during_execution", terminal_reason: "api_error" }],
+        },
+        {
+          match: `^${resumeText}$`,
+          steps: [
+            failed
+              ? { end: "error_during_execution", terminal_reason: "api_error" }
+              : { end: "success" },
+          ],
+        },
+      ],
+      fallback: [{ hold: true }],
+    });
+    const id = await f.start();
+    const initialEnd = deferred();
+    let queued: ConversationQueueItem | null = null;
+    f.agent.beforeTurnEnd = () => initialEnd.promise;
+    try {
+      expect(await f.send(id, "初回")).toEqual(delivered);
+      const imageId = (await f.upload(id)).body.image.id;
+      const response = await f.send(id, "預けた指示", "queued-image", "send", [imageId]);
+      expect(response.body.result).toBe("queued");
+      queued = response.body.queueItem;
+    } finally {
+      initialEnd.resolve();
+    }
+    await settled(f, id, "failed");
+    f.database.sqlite.prepare("UPDATE conversations SET closed_at=50 WHERE id=?").run(id);
+    const successfulEnd = deferred();
+    f.agent.beforeTurnEnd = order === "開き直し後に成功" ? () => successfulEnd.promise : undefined;
+    const closedAtEnd: (number | null | undefined)[] = [];
+    f.runner().runtime.subscribe((signal) => {
+      if (
+        signal.type === "turnEnded" &&
+        signal.conversationId === id &&
+        signal.subtype === (failed ? "error_during_execution" : "success")
+      )
+        closedAtEnd.push(f.runner().runtime.store.get(id)?.closedAt);
+    });
+    try {
+      expect(await f.resume(id)).toEqual(resumeAccepted);
+    } finally {
+      successfulEnd.resolve();
+    }
+    await expect.poll(() => closedAtEnd).toEqual([order === "開き直し後に成功" ? null : 50]);
+    await f.runner().runtime.serial(id, async () => ok(undefined));
+    const after = (await f.snapshot(id)).body;
+    expect({
+      state: after.conversation.runState,
+      closedAt: after.conversation.closedAt,
+      queue: after.queue,
+      messages: f.agent.messages,
+    }).toEqual({
+      state: failed ? "failed" : "working",
+      closedAt: null,
+      queue: failed ? [queued] : [],
+      messages: [
+        { text: "初回", images: [] },
+        { text: resumeText, images: [] },
+        ...(failed
+          ? []
+          : [{ text: "預けた指示", images: [{ data: png, mediaType: "image/png" }] }]),
+      ],
+    });
+  },
+);
+
+it("明示的に再開していない閉じた会話では、正常終了後も預けた指示が残る", async () => {
+  const f = await fixture({ rules: [], fallback: [{ end: "success" }] });
+  const id = await f.start();
+  const end = deferred();
+  f.agent.beforeTurnEnd = () => end.promise;
+  try {
+    expect(await f.send(id, "初回")).toEqual(delivered);
+    expect((await f.send(id, "預けた指示")).body.result).toBe("queued");
+    f.database.sqlite.prepare("UPDATE conversations SET closed_at=50 WHERE id=?").run(id);
+  } finally {
+    end.resolve();
+  }
+  await settled(f, id, "idle");
+  await f.runner().runtime.serial(id, async () => ok(undefined));
+  const current = (await f.snapshot(id)).body;
+  expect({
+    closedAt: current.conversation.closedAt,
+    texts: current.queue.map(({ text }) => text),
+    messages: f.agent.messages,
+  }).toEqual({ closedAt: 50, texts: ["預けた指示"], messages: [{ text: "初回", images: [] }] });
+});
+
+it.each([
+  { accept: true, reason: "api_error", state: "failed" },
+  { accept: true, reason: "usage_limit", state: "usage_limited" },
+  { accept: false, reason: null, state: "working" },
+] as const)(
+  "前の利用枠タイマーは手動再開後の $state を対象にしない（手動受理=$accept）",
+  async ({ accept, reason, state }) => {
+    const next: AgentScript["rules"][number]["steps"] =
+      reason === "api_error"
+        ? [{ end: "error_during_execution", terminal_reason: "api_error" }]
+        : reason === "usage_limit"
+          ? [
+              { rate_limit: { status: "rejected", resetsAt: 456 } },
+              { end: "error_during_execution" },
+            ]
+          : [{ hold: true }];
+    const f = await fixture({
+      rules: [
+        { match: "^利用枠切れ$", steps: rateLimit },
+        { match: `^${resumeText}$`, steps: next },
+      ],
+    });
+    const id = await f.start();
+    expect(await f.send(id, "利用枠切れ")).toEqual(delivered);
+    await settled(f, id, "usage_limited");
+    const entered = deferred();
+    const proceed = deferred();
+    f.runner().runtime.runOptions.registerDeliveryGuard(async () => {
+      entered.resolve();
+      await proceed.promise;
+      return accept
+        ? ok(undefined)
+        : err({ code: "conflict", message: resumeConflict.body.error.message });
+    });
+
+    const manual = f.resume(id);
+    await entered.promise;
+    const untilTurnEnds = f.runner().runtime.serial(id, async () => {
+      if (accept) await settled(f, id, state);
+      return ok(undefined);
+    });
+    const oldTimer = f.clock.advance(183000 - f.clock.now());
+    proceed.resolve();
+    expect(await manual).toEqual(accept ? resumeAccepted : resumeConflict);
+    await untilTurnEnds;
+    await oldTimer;
+    await settled(f, id, state);
+    const current = (await f.snapshot(id)).body.conversation;
+    const history = (await f.request<ConversationEventsPage>(`/conversations/${id}/events`)).body
+      .events;
+    expect({
+      reason: current.stopReason,
+      resetsAt: current.resetsAt,
+      sent: f.agent.sent.map(({ text }) => text),
+      resumed: history.filter(({ type }) => type === "resumed").map(({ payload }) => payload),
+    }).toEqual({
+      reason,
+      resetsAt: reason === "usage_limit" ? 456000 : null,
+      sent: ["利用枠切れ", resumeText],
+      resumed: [{ by: accept ? "developer" : "usage_limit" }],
+    });
+  },
+);
+
+it.each(["9999ms", "10000msで接続中", "IPC切断", "古い実行の終了待ち"] as const)(
+  "公開再開要求の%sでは、受付結果・会話の閉鎖・配達が一致する",
+  async (scenario) => {
+    const ipcClock = new RunnerClock();
+    const f = await fixture(
+      {
+        rules: [
+          {
+            match: "^失敗$",
+            steps: [{ end: "error_during_execution", terminal_reason: "api_error" }],
+          },
+        ],
+        fallback: [{ hold: true }],
+      },
+      ipcClock,
+    );
+    const id = await f.start();
+    expect(await f.send(id, "失敗")).toEqual(delivered);
+    await settled(f, id, "failed");
+    f.database.sqlite.prepare("UPDATE conversations SET closed_at=50 WHERE id=?").run(id);
+    const entered = deferred();
+    const proceed = deferred();
+    const oldExecution = scenario === "古い実行の終了待ち";
+    if (oldExecution) {
+      const nextCwd = join(f.home, "new-cwd");
+      mkdirSync(nextCwd);
+      f.database.sqlite.prepare("UPDATE conversations SET cwd=? WHERE id=?").run(nextCwd, id);
+      f.agent.beforeOutputEnd = () => {
+        entered.resolve();
+        return proceed.promise;
+      };
+    } else {
+      f.runner().runtime.runOptions.registerDeliveryGuard(async () => {
+        entered.resolve();
+        await proceed.promise;
+        return ok(undefined);
+      });
+    }
+
+    const operation = f.resume(id);
+    const beforeDeadline = scenario === "9999ms";
+    try {
+      await entered.promise;
+      if (scenario === "IPC切断") {
+        await ipcClock.advance(10000);
+        expect(await operation).toEqual({ status: 503, body: { error: runnerUnavailable } });
+        await f.link.call("GET", "/health");
+      } else if (beforeDeadline) {
+        await ipcClock.advance(9999);
+        f.clock.time = ipcClock.now();
+      } else {
+        f.clock.time = ipcClock.now() + 10000;
+      }
+    } finally {
+      proceed.resolve();
+    }
+    expect(await operation).toEqual(
+      beforeDeadline ? resumeAccepted : { status: 503, body: { error: runnerUnavailable } },
+    );
+    await f.runner().runtime.serial(id, async () => ok(undefined));
+    const after = (await f.snapshot(id)).body.conversation;
+    const history = (await f.request<ConversationEventsPage>(`/conversations/${id}/events`)).body
+      .events;
+    expect({
+      closedAt: after.closedAt,
+      state: after.runState,
+      reason: after.stopReason,
+      opened: f.agent.opened.length,
+      sent: f.agent.sent.map(({ text }) => text),
+      resumed: history.filter(({ type }) => type === "resumed").map(({ payload }) => payload),
+    }).toEqual(
+      beforeDeadline
+        ? {
+            closedAt: null,
+            state: "working",
+            reason: null,
+            opened: 1,
+            sent: ["失敗", resumeText],
+            resumed: [{ by: "developer" }],
+          }
+        : {
+            closedAt: 50,
+            state: "failed",
+            reason: "api_error",
+            opened: 1,
+            sent: ["失敗"],
+            resumed: [],
+          },
+    );
+  },
+);
+
+it.each([9999, 10000])(
+  "再開の発言をSQLiteに書いた時点で要求から%dms経過していた場合の受理を決める",
+  async (elapsed) => {
+    const ipcClock = new RunnerClock();
+    const f = await fixture(
+      {
+        rules: [
+          {
+            match: "^失敗$",
+            steps: [{ end: "error_during_execution", terminal_reason: "api_error" }],
+          },
+        ],
+        fallback: [{ hold: true }],
+      },
+      ipcClock,
+    );
+    const id = await f.start();
+    expect(await f.send(id, "失敗")).toEqual(delivered);
+    await settled(f, id, "failed");
+    await f.restart();
+    const { sqlite } = f.database;
+    sqlite.prepare("UPDATE conversations SET closed_at=50 WHERE id=?").run(id);
+    const before = (await f.snapshot(id)).body.conversation;
+    const eventsPath = `/conversations/${id}/events`;
+    const previousEvents = (await f.request<ConversationEventsPage>(eventsPath)).body.events;
+    const closedBefore = f.agent.closedSessions.length;
+    let writes = 0;
+    sqlite.function("advance_resume_clock", () => {
+      writes++;
+      f.clock.time = ipcClock.now() + elapsed;
+    });
+    sqlite.exec(`
+      CREATE TEMP TRIGGER advance_clock_after_resume
+      AFTER UPDATE OF last_seq ON conversations
+      WHEN EXISTS (
+        SELECT 1 FROM conversation_events
+        WHERE conversation_id=NEW.id AND seq=NEW.last_seq AND type='user_message'
+          AND json_extract(payload, '$.origin')='resume'
+      )
+      BEGIN SELECT advance_resume_clock(); END
+    `);
+
+    const accepted = elapsed === 9999;
+    expect(await f.resume(id)).toEqual(
+      accepted ? resumeAccepted : { status: 503, body: { error: runnerUnavailable } },
+    );
+    const current = (await f.snapshot(id)).body.conversation;
+    const events = (await f.request<ConversationEventsPage>(eventsPath)).body.events;
+    const newSession = f.agent.opened[1]!;
+    expect({
+      writes,
+      state: current.runState,
+      reason: current.stopReason,
+      closedAt: current.closedAt,
+      seq: current.lastSeq,
+      events: events.slice(0, previousEvents.length),
+      additions: events.slice(previousEvents.length).map(({ type }) => type),
+      sent: f.agent.messages.map(({ text }) => text),
+      currentRun: f.runner().runtime.executions.has(id),
+      disposed: f.agent.closedSessions.slice(closedBefore),
+    }).toEqual({
+      writes: 1,
+      state: accepted ? "working" : before.runState,
+      reason: accepted ? null : before.stopReason,
+      closedAt: accepted ? null : before.closedAt,
+      seq: accepted ? before.lastSeq + 2 : before.lastSeq,
+      events: previousEvents,
+      additions: accepted ? ["resumed", "user_message"] : [],
+      sent: accepted ? ["失敗", resumeText] : ["失敗"],
+      currentRun: accepted,
+      disposed: accepted ? [] : [newSession.sessionId],
+    });
+  },
+);
 
 it("プロジェクトの空の会話を開始し、初回指示で題名・発言・実行設定を保存してスキルをそのまま届ける", async () => {
   const f = await fixture();

@@ -1,6 +1,11 @@
 import { request, type ClientRequest } from "node:http";
 import { err, ok, type Result } from "neverthrow";
-import { runnerNoticeSchema, type RunnerNotice } from "../shared/ipc";
+import {
+  RUNNER_IPC_DEADLINE_HEADER,
+  RUNNER_IPC_TIMEOUT_MS,
+  runnerNoticeSchema,
+  type RunnerNotice,
+} from "../shared/ipc";
 import type { Logger } from "../shared/log";
 type Clock = { setTimeout(callback: () => void, ms: number): () => void };
 
@@ -16,6 +21,7 @@ type Options = {
   notice: (notice: RunnerNotice) => void;
   connection: (connected: boolean) => void;
   clock?: Clock;
+  now?: () => number;
 };
 export class RunnerLink {
   private stopped = true;
@@ -39,6 +45,7 @@ export class RunnerLink {
     path: string,
     input?: unknown,
   ): Promise<Result<IpcResponse, RunnerUnavailable>> {
+    const deadline = (this.options.now?.() ?? Date.now()) + RUNNER_IPC_TIMEOUT_MS;
     return new Promise((resolve) => {
       let cancelTimeout = () => {};
       const finish = (result: Result<IpcResponse, RunnerUnavailable>) => {
@@ -50,7 +57,10 @@ export class RunnerLink {
           socketPath: this.options.socket,
           path,
           method,
-          headers: input === undefined ? {} : { "content-type": "application/json" },
+          headers: {
+            [RUNNER_IPC_DEADLINE_HEADER]: String(deadline),
+            ...(input === undefined ? {} : { "content-type": "application/json" }),
+          },
         },
         (res) => {
           let body = "";
@@ -72,7 +82,7 @@ export class RunnerLink {
       cancelTimeout = this.clock.setTimeout(() => {
         req.destroy(new Error("runner timeout"));
         finish(err(runnerUnavailable));
-      }, 10000);
+      }, RUNNER_IPC_TIMEOUT_MS);
       req.end(input === undefined ? undefined : JSON.stringify(input));
     });
   }

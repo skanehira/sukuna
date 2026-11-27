@@ -192,6 +192,14 @@ export class SqliteConversationStore implements ConversationStore {
       createdAt: r.createdAt,
     }));
   }
+  latestStopSeq(id: string): number | null {
+    const stop = this.sqlite
+      .prepare(
+        "SELECT seq FROM conversation_events WHERE conversation_id = ? AND type = 'stopped' ORDER BY seq DESC LIMIT 1",
+      )
+      .get(id) as { seq: number } | undefined;
+    return stop?.seq ?? null;
+  }
   append(id: string, input: ConversationEvent, now: number): StoredEvent | null {
     return this.withWorkspace(id, () => {
       const event = eventSchema.parse(input);

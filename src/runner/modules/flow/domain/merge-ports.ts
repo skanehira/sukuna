@@ -1,6 +1,6 @@
 import type { Result } from "neverthrow";
 type OperationError = {
-  code: "conflict" | "not_found" | "internal" | "invalid_input";
+  code: "conflict" | "not_found" | "internal" | "invalid_input" | "runner_unavailable";
   message: string;
 };
 export type MergeIssue = {

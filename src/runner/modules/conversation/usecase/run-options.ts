@@ -2,13 +2,13 @@ import type { AppToolRegistry } from "./app-tool-registry";
 import { ok, type Result } from "neverthrow";
 import type { Conversation, ConversationStore } from "../domain/conversation-store";
 import type { OpenParams } from "../domain/agent-port";
-import type { SendInput, OperationError } from "./runtime";
+import type { DeliveryError, SendInput } from "./runtime";
 export class RunOptions {
   private providers: ((conversation: Conversation) => string)[] = [];
   private guards: ((
     conversation: Conversation,
     input: SendInput,
-  ) => Result<void, OperationError> | Promise<Result<void, OperationError>>)[] = [];
+  ) => Result<void, DeliveryError> | Promise<Result<void, DeliveryError>>)[] = [];
   private store: ConversationStore;
   private tools: AppToolRegistry;
   constructor(store: ConversationStore, tools: AppToolRegistry) {
@@ -22,7 +22,7 @@ export class RunOptions {
     guard: (
       conversation: Conversation,
       input: SendInput,
-    ) => Result<void, OperationError> | Promise<Result<void, OperationError>>,
+    ) => Result<void, DeliveryError> | Promise<Result<void, DeliveryError>>,
   ): void {
     this.guards.push(guard);
   }
@@ -42,7 +42,7 @@ export class RunOptions {
   async allowDelivery(
     conversation: Conversation,
     input: SendInput,
-  ): Promise<Result<void, OperationError>> {
+  ): Promise<Result<void, DeliveryError>> {
     for (const guard of this.guards) {
       const result = await guard(conversation, input);
       if (result.isErr()) return result;

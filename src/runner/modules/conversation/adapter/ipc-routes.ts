@@ -7,12 +7,13 @@ import {
   completeReleaseSchema,
   forkConversationSchema,
   permissionSchema,
+  RUNNER_IPC_DEADLINE_HEADER,
   sendMessageSchema,
   startConversationSchema,
   workspaceSchema,
 } from "../../../../shared/ipc";
 import type { Logger } from "../../../../shared/log";
-import type { ConversationRuntime, OperationError } from "../usecase/runtime";
+import type { ConversationRuntime, DeliveryError, OperationError } from "../usecase/runtime";
 
 function wireResult(value: unknown): unknown {
   if (value === null || typeof value !== "object") return value;
@@ -78,7 +79,8 @@ export function createIpcRoutes(
       id: string,
       input: z.infer<S>,
       params: Record<string, string>,
-    ) => Promise<Result<unknown, OperationError>>,
+      callerCancelled: () => boolean,
+    ) => Promise<Result<unknown, DeliveryError>>,
   ) => {
     app.post(path, async (c) => {
       const body = await c.req.json().catch(() => undefined);
@@ -88,7 +90,17 @@ export function createIpcRoutes(
           { error: { code: "invalid_input", message: "入力を確認してください。" } },
           400,
         );
-      const result = await operation(c.req.param("id") ?? "", parsed.data, c.req.param());
+      const deadline = Number(c.req.header(RUNNER_IPC_DEADLINE_HEADER) ?? NaN);
+      const signal = c.req.raw.signal;
+      const callerCancelled = () =>
+        signal.aborted ||
+        (Number.isSafeInteger(deadline) && runtime.options.clock.now() >= deadline);
+      const result = await operation(
+        c.req.param("id") ?? "",
+        parsed.data,
+        c.req.param(),
+        callerCancelled,
+      );
       return result.isErr()
         ? c.json(
             { error: result.error },
@@ -98,7 +110,9 @@ export function createIpcRoutes(
                 ? 404
                 : result.error.code === "invalid_input"
                   ? 400
-                  : 500,
+                  : result.error.code === "runner_unavailable"
+                    ? 503
+                    : 500,
           )
         : c.json(wireResult(result.value));
     });
@@ -136,7 +150,9 @@ export function createIpcRoutes(
   });
   route("/conversations/:id/queue/deliver", empty, (id) => runtime.deliverQueue(id));
   route("/conversations/:id/stop", empty, (id) => runtime.stop(id));
-  route("/conversations/:id/resume", empty, (id) => runtime.resume(id));
+  route("/conversations/:id/resume", empty, (id, _p, _params, callerCancelled) =>
+    runtime.resume(id, "developer", { callerCancelled }),
+  );
   route("/conversations/:id/fork", forkConversationSchema, (id, p) => runtime.fork(id, p));
   route("/conversations/:id/answers", answerSchema, (id, p) =>
     runtime.answer(id, p.request_id, p.answers),
