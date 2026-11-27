@@ -15,6 +15,7 @@ export type LayoutProps = {
   controller?: BufferController;
   renderRight?: (view: RightView) => ReactNode;
   disconnected?: boolean;
+  notices?: ReactNode;
 };
 export function Layout({
   tree,
@@ -23,6 +24,7 @@ export function Layout({
   controller: supplied,
   renderRight,
   disconnected,
+  notices,
 }: LayoutProps) {
   const [local] = useState(() => new BufferController());
   const controller = supplied ?? local;
@@ -80,6 +82,7 @@ export function Layout({
             {state.notice.message}
           </div>
         ) : null}
+        {notices}
         <StatusLine controller={controller} state={state} disconnected={disconnected} />
       </div>
     </BufferControllerContext>
