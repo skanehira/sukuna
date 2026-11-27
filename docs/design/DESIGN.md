@@ -188,6 +188,7 @@ SQLite のファイルを 1 つ使う。識別子は ULID の文字列、時刻�
 | ストックの質問を送る (質問 1 件ごと) | スレッドの `conversations` の追加、その `stock_items` の `state` の更新。1 件の失敗でほかの件を止めない |
 | 届く前の指示を届ける | `queued_instructions` の削除、開発者の発言の `conversation_events` への追加、ストックから来た指示の `stock_items.sent_seq` の更新 |
 | 指摘の投稿記録を保存する | 対象の `stock_items` 全件の `github_comment_url` の更新。GitHub との通信はトランザクションの外で行う |
+| merge を許可する | `merge_allowed`・`state_changed`・`stage_changed` の `issue_events` への追加、`issues` の更新、指示の `conversation_events` への追加。会話の作業場所の同期と同じ worktree の排他の予約を使う |
 | issue の状態を移す | `issues` の `state` の更新、`issue_events` への追加 |
 | issue を確定する | `issues` の追加または更新、`issue_dependencies` の入れ替え、`issue_events` への追加 |
 | worktree を消す | `worktrees.removed_at` の更新、その worktree を作業ディレクトリにしていた `conversations` の `cwd` と `worktree_id` の更新 |
