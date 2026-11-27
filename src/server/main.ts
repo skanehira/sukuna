@@ -20,6 +20,7 @@ import { ulid } from "ulid";
 import { createStockDependencies } from "./modules/stock/adapter/dependencies";
 
 import { createIssueDependencies } from "./modules/issue/adapter/dependencies";
+import { createWorktreeDependencies } from "./modules/workspace/adapter/worktree-dependencies";
 import { createWorkspaceDependencies } from "./modules/workspace/adapter/dependencies";
 
 const environment = readEnvironment("server", process.env, homedir(), (path) => {
@@ -77,6 +78,7 @@ const server = serve(
         (issueId, projectId) =>
           getWsHub().notice({ kind: "issue", issue_id: issueId, project_id: projectId, seq: 0 }),
       ),
+      worktrees: createWorktreeDependencies(() => getDatabase().db),
     }).fetch,
     port: env.port,
     hostname: "0.0.0.0",

@@ -10,6 +10,7 @@ import {
   getProgressDependencies,
   getMessageDependencies,
 } from "./runtime";
+import { createWorktreeDependencies } from "./modules/workspace/adapter/worktree-dependencies";
 import { createWorkspaceDependencies } from "./modules/workspace/adapter/dependencies";
 import { ulid } from "ulid";
 import { createStockDependencies } from "./modules/stock/adapter/dependencies";
@@ -40,4 +41,5 @@ export default createApp({
     (issueId, projectId) =>
       getWsHub().notice({ kind: "issue", issue_id: issueId, project_id: projectId, seq: 0 }),
   ),
+  worktrees: createWorktreeDependencies(() => getDatabase().db),
 });

@@ -55,7 +55,7 @@
 - `design-` と `issue-` で始まる名前は、自動フローの worktree のために取っておき、開発者は使えない
 - `sukuna` も使えない。自動フローのブランチ (`sukuna/issue-<番号>` など) と同じ名前のブランチは、git が作れないためである
 - 元にするのは既定ブランチの最新である。GitHub を使うプロジェクトは `git fetch origin <既定ブランチ>` のあと `origin/<既定ブランチ>` から作る。取得に失敗したら手元の既定ブランチから作り、「GitHub から取得できなかったので、手元の既定ブランチから作りました」のお知らせを出す。GitHub を使わないプロジェクトは手元の既定ブランチから作る
-- 同じ名前のブランチがあり、どの worktree でも開かれていなければ、そのブランチで作る。このとき `worktrees.branch_created` を偽にし、ブランチはアプリが作ったものとして扱わない。ブランチを新しく作ったときは真にする
+- 同じ名前のブランチがあり、どの worktree でも開かれていなければ、そのブランチで作る。このとき `worktrees.branch_created` を偽にし、ブランチはアプリが作ったものとして扱わない。ブランチを新しく作ったときは真にする。既存のブランチを使うときは fetch を行わず、`notice` は `null` にする
 - 本書の作る処理は、作った後に依存の導入などのコマンドを実行しない。実装の worktree に固有の準備は `features/implementation-flow.md` に従う
 
 ### 消す
@@ -78,8 +78,12 @@
 - 表の 1〜6 の判定と未 push の数え方 (上の例外を含む) は、`src/shared` の 1 つの関数に置き、画面のサーバーとランナーの `flow` の両方が使う (`features/implementation-flow.md`「worktree の片付け」)
 - この関数は入出力を持たず、表の 1〜6 の材料と、HEAD がその issue のどれかの merge 済みの PR の先頭と同じかを受け取る。返すのは、消してよいかと理由である。git と `gh` で材料を集めるのは、それぞれのプロセスの Port である
 - 消せるときは、その worktree で開いているターミナルを終わらせ、`git worktree remove <パス>` で消す。強制の指定は使わない
-- ブランチは、アプリが worktree と一緒に作ったもの (`worktrees.branch_created` が真) だけを `git branch -D` で消す。未 push のコミットが無いことを確かめた後なので、コミットは失われない
-- `worktrees.removed_at` に時刻を入れる。その worktree を作業ディレクトリにしていた会話は、作業ディレクトリをプロジェクトのディレクトリに変え、`worktree_id` を空にする
+- ブランチは、アプリが worktree と一緒に作ったもの (`worktrees.branch_created` が真) だけを消す。worktree の現在の HEAD と、消すブランチの先端の両方で、未 push のコミットが無いことを確かめる。merge 済み PR の例外も、それぞれの先端との一致で判定する
+- 画面のサーバーは、HEAD と参照をロックし、検査した先端が変わっていないことを確かめてから worktree を消す。所有ブランチの削除には `git update-ref --no-deref -d refs/heads/<ブランチ> <検査した先端>` を使う。検査後に先端が進めば削除せず、状態の変化を知らせる
+- 保存してある所有ブランチが既に無ければ、その削除は行わない。ほかの worktree で開かれている場合は、worktree のフォルダを消す前に拒否する
+- worktree のフォルダを消したら、`worktrees.removed_at` の記入と会話の移動を同じトランザクションで行う。その worktree を作業ディレクトリにしていた会話は、プロジェクトのディレクトリへ移し、`worktree_id` を空にする。トランザクションは、組み立て時に渡す Unit of Work をユースケースが呼び出す
+- 画面のサーバーは、削除の途中経過を `.git/sukuna-worktree-removals/<worktree の id>.json` に置く。所有ブランチの先端、Git の管理ディレクトリの識別情報、フォルダの削除が済んだかを保存する。フォルダを消した後のブランチ削除か DB 更新に失敗しても、この記録を読んで同じ削除要求を再試行できる
+- ブランチ削除に失敗しても、会話の移動を DB に反映してから失敗を返す。再試行では、既に消えた Git の記録とブランチを処理済みとして扱う。同じパスに作り直された別の worktree やフォルダがあれば触らずに拒否する。全て終わったら途中経過の記録を消す
 - フォルダが外で消されて git の記録だけが残る worktree は、一覧に「フォルダがありません」と出す。消すと、git の記録だけを片付ける (`git worktree prune`)
 
 ### 書くプロセス
@@ -97,7 +101,7 @@
 
 右のウィンドウ「worktree」である (UI_SKETCH.html の `pc-conv--worktree`)。列は「名前 / ブランチ / 使っているもの」とし、ウィンドウの見出しに列の見出しを置く。
 
-- 先頭の行は「main」(プロジェクトのディレクトリ) とし、その後に作った順に並べる
+- 先頭の行は「main」(プロジェクトのディレクトリ) とし、その後の並びは「エッジケースの決定」の「並びと数え方」に従う
 - 「使っているもの」には、使っている issue (`#42`)、会話の件数 (`会話 2 件`)、どちらも無ければ「会話なし」を書く。未コミットの変更か未 push のコミットがあれば、「未コミット 3」「未 push 2」を添える
 - いまの作業場所の行には、印 ● を付ける。作業場所は「作業場所の切り替え」の節で決まる
 - worktree の行の後に、メニュー「worktree を作る」(説明は「名前を付けて作る」) を置く
@@ -224,7 +228,7 @@ worktree の一覧の行で Enter を押すと、いま主のウィンドウに�
 
 - 応答: 200 `{ "removedBranch": true, "movedConversationIds": ["01J..."] }`
 - 409 `conflict`: 「消す」の表の 1〜6 に当てはまる。`message` に表の文を入れ、`error.details` に `{ "reason": "uncommitted" | "unpushed" | "flow" | "running" | "locked" | "main", "count": 3, "sample": ["src/a.ts"] }` を入れる
-- 404 `not_found`: 記録が無いか、もう消してある
+- 404 `not_found`: 記録が無いか、削除とその後の片付けが全て終わっている
 
 ### PUT `/api/conversations/:id/workspace`
 
@@ -278,7 +282,8 @@ worktree の一覧の行で Enter を押すと、いま主のウィンドウに�
 | 一覧 → worktrees, conversations, issues | ユースケース | `src/server/modules/workspace/usecase/list-worktrees.ts` |
 | 作る → worktrees | ユースケース | `src/server/modules/workspace/usecase/create-worktree.ts` |
 | 消す → worktrees, conversations, issues, issue_events | ユースケース | `src/server/modules/workspace/usecase/remove-worktree.ts` |
-| git の実行 (`worktree list / add / remove / prune`、`status`、`rev-list`、`fetch`、`branch -D`) と、merge 済みの PR の先頭を取る `gh pr view` | インフラ (git と GitHub の Port) | `src/server/modules/workspace/adapter/git-cli.ts` |
+| git の実行 (`worktree list / add / remove / prune`、`status`、`rev-list`、`fetch`、先端の一致を条件にした `update-ref -d`) と、merge 済みの PR の先頭を取る `gh pr view` | インフラ (git と GitHub の Port) | `src/server/modules/workspace/adapter/git-cli.ts` |
+| 画面のサーバーの worktree 削除の途中経過と、Git の管理ディレクトリの識別情報 | インフラ | `src/server/modules/workspace/adapter/worktree-removal-storage.ts` |
 | ターミナルを開く、作業ディレクトリと送り先を決める、数の上限 | ユースケース | `src/server/modules/workspace/usecase/open-terminal.ts` |
 | ターミナルの持ち方 (擬似端末と端末の状態) | インフラ (擬似端末の Port) | `src/server/modules/workspace/adapter/pty-session.ts` |
 | `/ws/terminals/:id` の upgrade とフレームの処理 | API ハンドラ | `src/server/modules/workspace/adapter/terminal-ws.ts` |
@@ -305,7 +310,7 @@ worktree の一覧の行で Enter を押すと、いま主のウィンドウに�
 8. **状態の移り変わり**: worktree は 作った → (消す) → 消した の 2 つだけを持つ。ターミナルは 動いている → 終わった の 2 つを持つ。開発者が作った worktree は、自動では消さない (BR-059)
 9. **自動で進むこと**: アプリは、開発者の worktree を自動で消さない。終わったシェルを自動で開き直さない。git の記録だけが残った worktree の片付け (`git worktree prune`) も、開発者が消すときだけ行う
 10. **端末と画面をまたぐこと**: worktree の記録は、どの端末でも同じである。ターミナルは画面のサーバーに 1 つあり、どの端末からつないでも同じ出力と入力を共有する。大きさは最後に送った画面のものになる。開いていたターミナルの id とモード、会話を開いていない画面で選んだ worktree は、ブラウザのタブごとに持つ。会話の作業場所はサーバーに置き、どの端末でも同じにする
-11. **並びと数え方**: 一覧は main を先頭に、`git worktree list` の順 (作った順) に並べる。未コミットの変更は `git status --porcelain` の 1 行を 1 件と数える。未 push のコミットは「消す」の節の式で数える
+11. **並びと数え方**: 一覧は main を先頭に、`git worktree list` の順に並べる。未コミットの変更は `git status --porcelain` の 1 行を 1 件と数える。未 push のコミットは「消す」の節の式で数える
 
 ## テスト方針
 
