@@ -4,7 +4,14 @@ import devServer from "@hono/vite-dev-server";
 import { execSync } from "node:child_process";
 import { defineConfig } from "vite-plus";
 import type { Plugin } from "vite";
+import type { Result } from "neverthrow";
+import type { StartupError, StartupOptions } from "./src/shared/db/startup";
 import type { UpgradeHandler } from "./src/server/runtime";
+
+type RuntimeModule = {
+  initializeRuntime: (options?: StartupOptions) => Promise<Result<void, StartupError>>;
+  handleUpgrade: UpgradeHandler;
+};
 
 function webSocketUpgrade(): Plugin {
   return {
@@ -12,8 +19,10 @@ function webSocketUpgrade(): Plugin {
     async configureServer(server) {
       const httpServer = server.httpServer;
       if (httpServer === null) return;
-      const runtime = await server.ssrLoadModule("/src/server/runtime.ts");
-      httpServer.on("upgrade", runtime.handleUpgrade as UpgradeHandler);
+      const runtime = (await server.ssrLoadModule("/src/server/runtime.ts")) as RuntimeModule;
+      const initialized = await runtime.initializeRuntime();
+      if (initialized.isErr()) throw new Error(initialized.error.message);
+      httpServer.on("upgrade", runtime.handleUpgrade);
     },
   };
 }
@@ -243,7 +252,11 @@ export default defineConfig({
           name: "server",
           environment: "node",
           globals: true,
-          include: ["src/server/**/*.test.ts", "src/runner/**/*.test.ts"],
+          include: [
+            "src/server/**/*.test.ts",
+            "src/runner/**/*.test.ts",
+            "src/shared/**/*.test.ts",
+          ],
         },
       },
     ],

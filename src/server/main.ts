@@ -2,10 +2,23 @@ import { serve } from "@hono/node-server";
 import { fileURLToPath } from "node:url";
 import { createApp } from "./app";
 import { buildId } from "./build-id";
-import { attachUpgradeHandler } from "./runtime";
+import { attachUpgradeHandler, initializeRuntime } from "./runtime";
 
 const port = Number(process.env.PORT ?? 4580);
 const clientDir = fileURLToPath(new URL("../client", import.meta.url));
+
+const initialized = await initializeRuntime();
+if (initialized.isErr()) {
+  console.log(
+    JSON.stringify({
+      time: new Date().toISOString(),
+      level: "error",
+      component: "db.migrate",
+      message: initialized.error.message,
+    }),
+  );
+  process.exit(1);
+}
 
 const server = serve(
   { fetch: createApp({ clientDir, build: buildId }).fetch, port, hostname: "0.0.0.0" },
