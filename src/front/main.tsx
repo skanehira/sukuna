@@ -8,6 +8,7 @@ import { AuthenticationGuard, createIdentityLoader } from "./shell/Authenticatio
 import { createNavigation } from "./shell/navigation";
 import { createNotices } from "./shell/notices";
 import { ShellBoundary } from "./shell/ShellBoundary";
+import { createRecapApi } from "./lib/recap/api";
 import { createConversationApi } from "./lib/conversation/api";
 import { createConversationWorkspace } from "./lib/conversation/workspace";
 import type { RealtimeSocket } from "./lib/realtime";
@@ -43,8 +44,11 @@ const conversations = createConversationWorkspace(
     new WebSocket(
       `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws`,
     ) as unknown as RealtimeSocket,
+  { api: createRecapApi(window.fetch.bind(window)), storage: window.sessionStorage },
 );
 const stopConversations = conversations.start();
+const pagehide = () => conversations.pagehide();
+window.addEventListener("pagehide", pagehide);
 const visibility = () => conversations.visibility(document.visibilityState === "visible");
 document.addEventListener("visibilitychange", visibility);
 visibility();
@@ -55,6 +59,7 @@ window.addEventListener("keydown", dismissNotice);
 import.meta.hot?.dispose(() => {
   window.removeEventListener("keydown", dismissNotice);
   notices.dispose();
+  window.removeEventListener("pagehide", pagehide);
   stopConversations();
   document.removeEventListener("visibilitychange", visibility);
   dispose();

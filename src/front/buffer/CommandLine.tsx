@@ -12,9 +12,9 @@ export function CommandLine({
   const [draft, setDraft] = useState(initial);
   return (
     <div className="flex h-7 shrink-0 items-center gap-2 border-t border-line bg-surface px-4 font-mono text-[13px]">
-      <span>:</span>
+      <span>{controller.snapshot().commandPrefix ?? ":"}</span>
       <input
-        aria-label="コマンド"
+        aria-label={controller.snapshot().commandPrefix === "/" ? "検索" : "コマンド"}
         className="min-w-0 flex-1 outline-none"
         value={value}
         ref={(node) => {

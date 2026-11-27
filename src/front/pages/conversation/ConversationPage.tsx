@@ -9,10 +9,12 @@ const loading = [{ kind: "skeleton" as const, text: "読み込み中" }];
 export function ConversationPage({
   session,
   activity,
+  openAtTail = false,
   subscribe,
 }: {
   session: ConversationSession;
   activity?: ReactNode;
+  openAtTail?: boolean;
   subscribe?: (session: ConversationSession) => () => void;
 }) {
   const { data } = useSyncExternalStore(session.subscribe, session.snapshot, session.snapshot);
@@ -32,7 +34,8 @@ export function ConversationPage({
         posKey={`/conversations/${session.id}:main`}
         lines={loading}
         followTail
-        onReady={session.bind}
+        scrollPastEnd
+        onReady={(handle) => session.bind(handle, openAtTail)}
       />
       {data?.conversation.runState === "working" && activity ? (
         <div

@@ -6,6 +6,10 @@ import {
   registerConversationSwitch,
 } from "../../components/conversation/ConversationSwitch";
 import { ConversationPage } from "../../pages/conversation/ConversationPage";
+import { RecapPanel } from "../../components/recap/RecapPanel";
+import { RecapSession } from "../recap/session";
+import type { RecapApi } from "../recap/api";
+import type { TabStorage } from "../recap/read-tracking";
 import { Realtime, type RealtimeSocket } from "../realtime";
 import { parseRoute } from "../routes";
 import { ConversationApiError } from "./api";
@@ -17,11 +21,14 @@ export function createConversationWorkspace(
   controller: BufferController,
   env: ConversationEnvironment,
   socket: () => RealtimeSocket,
+  recap?: { api: RecapApi; storage: TabStorage },
 ) {
   const sessions = new Map<string, ConversationSession>();
   const active = new Set<ConversationSession>();
   const listeners = new Set<() => void>();
   let connected = true;
+  let visible = true;
+  let currentSession: ConversationSession | null = null;
   const reload = (topic: string) => {
     for (const session of active)
       if (topic === `conversation:${session.id}`)
@@ -62,11 +69,21 @@ export function createConversationWorkspace(
     realtime.shown([...active].map((session) => `conversation:${session.id}`));
     return () => {
       active.delete(session);
+      const next = parseRoute(controller.options.url ?? "/");
+      if (next.kind !== "conversation" || next.id !== session.id || next.view)
+        session.recap?.leave();
       unsubscribe();
       realtime.shown([...active].map((session) => `conversation:${session.id}`));
     };
   };
   const loadScreen: ScreenLoader = async (route) => {
+    if (
+      currentSession &&
+      (route.kind !== "conversation" || route.id !== currentSession.id || route.view)
+    ) {
+      currentSession.recap?.leave();
+      currentSession = null;
+    }
     if (route.kind === "home")
       return {
         kind: "ready",
@@ -90,15 +107,28 @@ export function createConversationWorkspace(
     let session = sessions.get(route.id);
     if (!session) {
       session = new ConversationSession(route.id, api, controller, env);
+      if (recap)
+        session.recap = new RecapSession(session, recap.api, recap.storage, (fn, ms) =>
+          env.schedule(fn, ms),
+        );
       sessions.set(route.id, session);
     }
     try {
+      currentSession = session;
+      session.recap?.visibility(visible);
       await session.load();
       return {
         kind: "ready",
         title: `会話: ${session.snapshot().data!.conversation.title}`,
         fullWindow: true,
-        content: <ConversationPage key={route.id} session={session} subscribe={subscribe} />,
+        content: (
+          <ConversationPage
+            key={route.id}
+            session={session}
+            openAtTail={new URLSearchParams(route.query).get("tail") === "1"}
+            subscribe={subscribe}
+          />
+        ),
       };
     } catch (error) {
       return {
@@ -113,7 +143,13 @@ export function createConversationWorkspace(
   return {
     loadScreen,
     connection,
-    renderRight: (view: { view: string }) => {
+    renderRight: (view: { view: string; target: string }) => {
+      if (["recent", "toc", "decisions", "recap-search"].includes(view.view)) {
+        const recap = sessions.get(view.target)?.recap;
+        return recap ? (
+          <RecapPanel key={`${view.target}:${view.view}`} recap={recap} view={view.view} />
+        ) : null;
+      }
       if (view.view !== "conversation-switch") return null;
       const route = parseRoute(controller.options.url ?? "/");
       const currentProject =
@@ -132,6 +168,11 @@ export function createConversationWorkspace(
         realtime.stop();
       };
     },
-    visibility: (visible: boolean) => realtime.visibility(visible),
+    pagehide: () => currentSession?.recap?.pagehide(),
+    visibility: (value: boolean) => {
+      visible = value;
+      currentSession?.recap?.visibility(value);
+      realtime.visibility(value);
+    },
   };
 }
