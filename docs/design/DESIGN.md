@@ -398,6 +398,7 @@ issue の状態の移り変わりは `features/issue-flow.md` の表が正本で
 
 - Git の短い参照名は、同名のタグがあると曖昧になる。新規 worktree の開始点には `refs/heads/` か `refs/remotes/origin/` で始まる完全な参照名を使う
 - `git worktree list` の出力順は作成順ではない。worktree の一覧 API は、main を先頭にした git の出力順を保つ ([Git の実装](https://github.com/git/git/blob/master/builtin/worktree.c#L1040-L1083))
+- Node.js の `existsSync` は、ファイルまでのディレクトリの探索権限がない場合も false を返す。読取りでは `readFileSync` を直接呼び、`ENOENT` だけを不存在とし、アクセス拒否はエラーにする
 - rg は `RIPGREP_CONFIG_PATH` の設定でリンクの追跡や無視の対象を変えられる。一覧と中身の検索では、子プロセスの環境からこの変数だけを除く ([公式ガイド](https://github.com/BurntSushi/ripgrep/blob/master/GUIDE.md#configuration-file))
 - ファイル名には改行も含まれる。rg の一覧は `--null`、Git の一覧は `-z` で NUL 区切りにし、改行で分けない
 - macOS では `/var` と `/private/var` のように同じディレクトリに別の絶対表記がある。記録の差分を相対パスへ直すときは、作業ディレクトリの表記と実体の表記をともに照合する

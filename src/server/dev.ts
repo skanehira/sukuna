@@ -1,4 +1,5 @@
 import { createInboxRepository, formatResetTime } from "./modules/inbox/adapter/inbox-repository";
+import { createRecapDependencies } from "./modules/recap/adapter/dependencies";
 import { createApp } from "./app";
 import { buildId } from "./build-id";
 import { createIssueDependencies } from "./modules/issue/adapter/dependencies";
@@ -42,4 +43,10 @@ export default createApp({
       getWsHub().notice({ kind: "issue", issue_id: issueId, project_id: projectId, seq: 0 }),
   ),
   worktrees: createWorktreeDependencies(getDatabase),
+  recap: createRecapDependencies(
+    () => getDatabase().db,
+    { forward: (method, path) => getRunnerLink().forward(method, path) },
+    (id) =>
+      getWsHub().notice({ kind: "conversation_parts", conversation_id: id, parts: ["recap"] }),
+  ),
 });

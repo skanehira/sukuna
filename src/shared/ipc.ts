@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { recapStateSchema } from "./recap/api";
 import { answersSchema, originSchema, runStateSchema } from "./events";
 import { timelineInputCommentSchema } from "./progress/schema";
 
@@ -77,3 +78,4 @@ export const issuePatchIpcSchema = z.strictObject({
   priority: z.enum(["high", "medium", "low"]).nullable().optional(),
   confirm_before_merge: z.boolean().optional(),
 });
+export const rebuildRecapResponseSchema = z.strictObject({ state: recapStateSchema });
