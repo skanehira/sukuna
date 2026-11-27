@@ -432,7 +432,8 @@ issue の状態の移り変わりは `features/issue-flow.md` の表が正本で
 - CodeMirror Vim は、途中まで合う追加キーより、最後まで合う組み込みキーを先に使う。`Space` と `Ctrl+w` は先頭で受け止め、キー列が完成してから Vim に渡す。`f` / `t` などが次の文字を待つ間は、その文字を Vim に直接渡す
 - 同じ worktree で `vp build` と `vp dev` を並行すると、最適化した依存の URL が古くなり、画面の読み込みが 504 になることがある。順に実行し、発生時は `vp dev --force` で再起動する
 - `vp dev` では、Hono の WebSocket の部品が使えない。WebSocket は `ws` の受け口を 1 つ作り、開発と本番の両方から同じものを呼ぶ (PoC `vite-plus-node-stack`)
-- `vp dev` のデータベースの接続・配信・WebSocket の受け口は、プロセスに 1 つのモジュールで持つ。HTTP ハンドラだけの HMR では、既存の接続を保つ。`src/server/runtime.ts` 自身や、そのモジュールが import する依存の HMR では、開発サーバーを再起動する。再評価で接続の状態が失われるためである。
+- `vp dev` のデータベースの接続・配信・WebSocket の受け口は、プロセスに 1 つのモジュールで持つ。HTTP ハンドラだけの HMR では、既存の接続と端末を保つ。`src/server/runtime.ts` やその依存を変更したときは、開発サーバーを再起動する。モジュールの再評価で接続の状態が失われるためである
+- Vite+ は SSR のモジュールローダーを閉じたあとに `closeServer` を呼ぶ。起動時に WebSocket の受け口と共有した端末の管理先を閉じ、ジョブの終了を待つ。`SIGINT` でも開発サーバーの終了処理を呼ぶ
 - ブラウザの WebSocket API は、制御フレームの Ping/Pong を公開しない。死活確認は `app` の `ping` メッセージで行う。形と間隔は `features/runtime.md`「配信」に従う (WHATWG WebSockets「Ping and Pong frames」)
 - `vp dev` では Vite が `/api` 以外のパスを配るため、本人の判定を受けるのは API だけになる。本番の起動では画面のサーバーが静的ファイルと SPA の HTML も判定し、本人でなければ拒否の HTML を返す
 - `vp dev` の `localhost` は `::1` で待ち受けることがあるため、開発用の本人の値は `127.0.0.1` と `::1` の両方を手元として扱う
@@ -443,6 +444,8 @@ issue の状態の移り変わりは `features/issue-flow.md` の表が正本で
 - `src/runner/dev.test.ts` は、子のプロセスで開発用ランナーを起動する結合テストである。`src` 全体を変異の対象にすると、Stryker の初回のテスト実行で落ちる。`stryker.config.json` の `ignorePatterns` で、Stryker の sandbox から外す。いつものテストでは流れる
 - 変異テストにかかる時間は、ファイルによって大きく変わる。28 スレッドの Mac では、`notation.ts` (jsdom の project のテストが流れる。変異 189 件) が 2 分 41 秒、`transition.ts` (node の project。変異 273 件) が 10 秒である
 - `node-pty` は、導入のあとに補助の実行ファイルへ実行権限を付けないと動かない。`postinstall` で付ける
+- `node-pty` の終了操作は、擬似端末で直接起動したプロセスだけを止める。監視役が生きている間に、macOS では制御端末、Linux ではセッションでジョブの所属を確認して止める
+- 画面のサーバーは `@xterm/headless` と `@xterm/addon-serialize` を Node.js の CommonJS ローダーで読む。端末の出力は非同期に反映される。端末の状態を書き出す前に、それまでの出力が反映されるのを待つ
 - Tailscale のローカル API のポートとトークンは、Tailscale の再起動で変わる。起動時に固定せず、認証か接続に失敗したら読み直す (PoC `tailscale-identity`)
 - 目次などの更新の実行には、題名を必ず渡す。渡さないと、題名を作る別の呼び出しが毎回走る (PoC `summary-ai-cost`)
 - Agent SDK の実行は、端末の Claude Code と同じ設定では、1 回の呼び出しごとに約 4 万 7 千トークンの固定の入力が乗る
