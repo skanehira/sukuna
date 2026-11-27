@@ -514,7 +514,7 @@ UC-001〜UC-016 の全部を対象にする。Mac Studio に常駐し、Claude C
 - 失敗 → 開発のときだけ API を別のプロセスで動かす
 
 ### PoC: 会話の記録の保存の期間
-<!-- POC_STATUS: id=session-retention, blocker=false, status=unresolved -->
+<!-- POC_STATUS: id=session-retention, blocker=false, status=verified, confidence=0.9 -->
 
 **id**: session-retention
 **目的**: Claude Code が会話の記録を消す期間を、設定で延ばせることを確かめる
@@ -572,7 +572,7 @@ UC-001〜UC-016 の全部を対象にする。Mac Studio に常駐し、Claude C
 - 累計 → 同じ実行の 1 つ前の値との差を番の値とする
 
 ### PoC: ランナーの子プロセスの後始末
-<!-- POC_STATUS: id=runner-child-cleanup, blocker=false, status=unresolved -->
+<!-- POC_STATUS: id=runner-child-cleanup, blocker=false, status=verified, confidence=0.9 -->
 
 **id**: runner-child-cleanup
 **目的**: Claude Code の子プロセスの PID を取り、ランナーの次の起動で止められることを確かめる
@@ -689,3 +689,16 @@ UC-001〜UC-016 の全部を対象にする。Mac Studio に常駐し、Claude C
 - 観測した事実: テンプレートから Cloudflare に依存する部分を外し、Node.js で動く Hono、SQLite (`better-sqlite3` と Drizzle ORM)、WebSocket (`ws`)、擬似端末 (`node-pty`) に置き換えた。`vp dev` の 1 回の起動で、SPA のホットリロードと API の再読み込みが効き、再読み込みのあともデータベースの接続と WebSocket の購読が保たれた。`vp test --run` で、画面のテスト 2 件とサーバーのテスト 2 件 (本物の SQLite と擬似端末) が 1 つの設定で通った。`vp build` の成果物を `node` で起動すると、SPA・API・WebSocket・擬似端末が 1 つのポートで動いた。レイヤの境界を破る import を 2 つ置くと `vp check` が失敗し、消すと通った。擬似端末の部品は、導入のあとに補助の実行ファイルへ実行権限を付けないと動かなかった。Drizzle ORM の安定版には Node.js 組み込みの SQLite のドライバが無かった
 - 結論: 成功基準をすべて満たした
 - 推奨アプローチ: Vite+ の 1 プロジェクトで、開発中は 1 プロセスにする。vite.config.ts に @hono/vite-dev-server を entry: 'src/server/dev.ts'、exclude: [/^(?!\/api(\/|$)).*/]、injectClientScript: false で置き、/api だけを Hono に渡す。WebSocket は Hono の upgradeWebSocket を使わず、ws の WebSocketServer({ noServer: true }) を包んだ upgrade ハンドラを 1 つ作る。開発中は自作の Vite プラグインが httpServer の 'upgrade' でそのハンドラを呼び、本番は @hono/node-server の serve() の戻り値に同じハンドラを付ける。DB 接続・イベントの配信・upgrade ハンドラはプロセスに 1 つの module (src/server/runtime.ts) に置き、API のファイルを編集しても保たれるようにする。ビルドは vite.config.ts の environments (client → dist/client、server → dist/server、consumer: 'server'、input: src/server/main.ts) と builder.buildApp で、vp build 1 回にまとめる。本番は node dist/server/main.js で、serveStatic で dist/client を配り、/api と /ws も同じポートで受ける。better-sqlite3 と node-pty は成果物に同梱せず、node_modules から読み込む (FEASIBILITY の代替案 3 と同じ形)。なので配置先には node_modules が要る。テストは test.projects で 1 つの設定にまとめる (front: jsdom + setupFiles + globals、server: node + 本物の SQLite :memory:)。SQLite のドライバは better-sqlite3 を推奨する
+
+
+### runner-child-cleanup — verified (confidence 0.9)
+- 検証日: 2026-11-27
+- 観測した事実: SDK 0.3.332 と Claude Code 2.1.332 を Mac で動かした。起動の差し替え口で子プロセスの PID を記録できた。ランナーの強制終了後も子プロセスは生きていた。次の起動の後始末でその子を停止し、PID のファイルを空にできた。停止前の記録 3 件は、再開後もすべて同じ識別子で残った。再開した AI は、停止前に伝えた合言葉を正しく答えた。
+- 結論: PID の記録で孤児の子プロセスを停止でき、同じ会話を再開できる。
+- 推奨アプローチ: `spawnClaudeCodeProcess` で起動したプロセスの PID を記録する。次の起動で、その PID のコマンドが Claude Code のものか確認してから停止する。停止後に、保存した会話の識別子と作業ディレクトリで再開する。
+
+### session-retention — verified (confidence 0.9)
+- 検証日: 2026-11-27
+- 観測した事実: `settings: { cleanupPeriodDays: 36500 }` が起動引数に入り、初期化が完了した。実行中の設定更新でも 36,500 日が受理され、`0` は拒否された。一時的な設定ディレクトリにユーザーの設定ファイルは作られなかった。
+- 結論: ユーザーの設定を書き換えずに、アプリの実行だけ保存期間を 1 年以上に延ばせる。
+- 推奨アプローチ: 会話の開始と再開で `settings: { cleanupPeriodDays: 36500 }` を渡す。これは実行単位の設定なので、端末の Claude Code の設定ファイルに書き込まない。
