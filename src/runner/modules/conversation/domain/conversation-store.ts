@@ -39,6 +39,7 @@ export type SendResult =
   | { result: "queued"; queuedId: string };
 export interface ConversationStore {
   transaction<T>(operation: () => T): T;
+  withWorkspace<T>(id: string, operation: (worktreeId: string | null) => T): T;
   get(id: string): Conversation | null;
   list(): Conversation[];
   create(conversation: Conversation): void;
@@ -55,4 +56,10 @@ export interface ConversationStore {
   reserveRelease(id: string, token: string, milliseconds: number): void;
   clearRelease(id: string, token: string): Result<void, { message: string }>;
   clearReleaseReservations(): void;
+}
+
+export class ConversationWorkspaceChanged extends Error {
+  constructor() {
+    super("作業場所が変わりました。worktree の一覧を読み直してから、もう一度操作してください");
+  }
 }

@@ -36,7 +36,7 @@ export function flowFixture() {
     },
     get deps() {
       return {
-        unitOfWork: createIssueUnitOfWork(opened.db),
+        unitOfWork: createIssueUnitOfWork(opened),
         clock: { now: () => 1000 },
         notices: {
           publish: (notice: IssueNotice) => {

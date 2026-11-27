@@ -1,3 +1,5 @@
+import { ConversationWorkspaceChanged } from "../domain/conversation-store";
+import { WorktreeActivityBusy } from "../../../../shared/workspace/worktree-activity";
 import { deliverQueue } from "./deliver-queue";
 import { start } from "./start";
 import { send } from "./send";
@@ -67,6 +69,8 @@ export type SendInput = {
 };
 export type InputAcceptance = { events: ConversationEvent[]; before: () => void };
 type Execution = {
+  cwd: string;
+  worktreeId: string | null;
   session: AgentSession;
   consuming: Promise<void>;
   ended: Promise<void>;
@@ -135,6 +139,8 @@ export class ConversationRuntime {
   ): Promise<Result<T, OperationError>> {
     const previous = this.operations.get(id) ?? Promise.resolve();
     const next = previous.then(operation).catch((error: unknown) => {
+      if (error instanceof WorktreeActivityBusy || error instanceof ConversationWorkspaceChanged)
+        return err<T, OperationError>(conflict(error.message));
       this.log(id, "会話の操作に失敗しました。", error);
       return err<T, OperationError>({
         code: "internal",
@@ -194,7 +200,7 @@ export class ConversationRuntime {
   deliverQueue = deliverQueue.bind(this);
   start = start.bind(this);
   send = send.bind(this);
-  private execution(c: Conversation): Execution {
+  private execution(c: Conversation, worktreeId: string | null): Execution {
     const opened = this.executions.get(c.id);
     if (opened) return opened;
     const session = this.options.agent.open({
@@ -210,6 +216,8 @@ export class ConversationRuntime {
       onPermission: (request) => this.askPermission(c.id, request),
     });
     const execution: Execution = {
+      cwd: c.cwd,
+      worktreeId,
       session,
       consuming: Promise.resolve(),
       ended: Promise.resolve(),
@@ -230,8 +238,7 @@ export class ConversationRuntime {
     acceptance?: InputAcceptance,
     options: { includeQueued?: boolean; interrupt?: boolean; omitMissingImages?: boolean } = {},
   ): Promise<Result<SendResult, OperationError>> {
-    const c = this.store.get(id);
-    if (!c) throw new Error("会話がありません。");
+    if (!this.store.get(id)) throw new Error("会話がありません。");
     const includeQueued = options.includeQueued ?? true;
     const queued = includeQueued ? this.store.queue(id) : [];
     const inputs = [...queued, input];
@@ -246,97 +253,115 @@ export class ConversationRuntime {
       } else images.push(image.value);
     }
     if (options.interrupt) await this.interrupt(id, "interrupt");
-    let execution: Execution;
-    try {
-      execution = this.execution(c);
-    } catch (error) {
-      this.record(id, [
-        {
-          type: "stopped",
-          payload: {
-            reason: "error",
-            detail: error instanceof Error ? error.message : "AI の実行に失敗しました。",
-          },
-        },
-      ]);
-      throw error;
-    }
-    const hasStructuredComments = inputs.some((entry) => entry.timelineComments !== undefined);
-    const legacyTexts = inputs
-      .filter((entry) => entry.timelineComments === undefined && entry.text.length > 0)
-      .map((entry) => entry.text);
-    const text = [...queued.map((q) => q.text), input.text]
-      .filter((s) => s.length > 0)
-      .join("\n\n");
-    const event: ConversationEvent = {
-      type: "user_message",
-      payload: {
-        text,
-        images: images.map(({ path, mediaType }) => ({ path, media_type: mediaType })),
-        origin: input.origin,
-        ...(hasStructuredComments
-          ? {
-              timeline_comments: inputs.flatMap((entry) => entry.timelineComments ?? []),
-              ...(legacyTexts.length ? { timeline_legacy_texts: legacyTexts } : {}),
-            }
-          : {}),
-        client_ids: [
-          ...queued.flatMap((q) => (q.clientId ? [q.clientId] : [])),
-          ...(input.clientId ? [input.clientId] : []),
-        ],
-        queued_ids: queued.map((q) => q.id),
-        client_receipts: [
-          ...queued.flatMap((q) =>
-            q.clientId
-              ? [
-                  {
-                    client_id: q.clientId,
-                    result: "queued" as const,
-                    queued_id: q.id,
-                    received_at: q.createdAt,
-                  },
-                ]
-              : [],
-          ),
-          ...(input.clientId
-            ? [
-                {
-                  client_id: input.clientId,
-                  result: "delivered" as const,
-                  received_at: this.options.clock.now(),
-                },
-              ]
-            : []),
-        ],
-      },
-    };
-    const records = this.record(id, [...(acceptance?.events ?? []), event], () => {
-      acceptance?.before();
-      if (includeQueued) this.store.dequeue(id);
-    });
-    if (queued.length) this.partsChanged(id, ["queue"]);
-    const record = records.at(-1);
-    if (!record) throw new Error("指示を記録できません。");
-    this.timers.cancel(id);
-    execution.rate = null;
-    execution.assistantError = null;
-    execution.intent = null;
-    execution.startSeq = record.seq;
-    execution.inputOrigin = input.origin;
-    execution.ended = new Promise((resolve) => {
-      execution.end = resolve;
-    });
-    execution.session.send({
-      text,
-      images: images.map(({ data, mediaType }) => ({ data, mediaType })),
-    });
-    if (missingImages)
-      this.options.notice(
+    for (;;) {
+      const result = this.store.withWorkspace(
         id,
-        `画像 ${missingImages} 件が見つからないため、外して届けました`,
-        "info",
+        (worktreeId): Result<SendResult, OperationError> | Execution => {
+          if (this.closing) return err(conflict());
+          const c = this.store.get(id);
+          if (!c) throw new Error("会話がありません。");
+          const opened = this.executions.get(id);
+          if (opened && (opened.cwd !== c.cwd || opened.worktreeId !== worktreeId)) return opened;
+          let execution: Execution;
+          try {
+            execution = this.execution(c, worktreeId);
+          } catch (error) {
+            this.record(id, [
+              {
+                type: "stopped",
+                payload: {
+                  reason: "error",
+                  detail: error instanceof Error ? error.message : "AI の実行に失敗しました。",
+                },
+              },
+            ]);
+            throw error;
+          }
+          const hasStructuredComments = inputs.some(
+            (entry) => entry.timelineComments !== undefined,
+          );
+          const legacyTexts = inputs
+            .filter((entry) => entry.timelineComments === undefined && entry.text.length > 0)
+            .map((entry) => entry.text);
+          const text = [...queued.map((q) => q.text), input.text]
+            .filter((s) => s.length > 0)
+            .join("\n\n");
+          const event: ConversationEvent = {
+            type: "user_message",
+            payload: {
+              text,
+              images: images.map(({ path, mediaType }) => ({ path, media_type: mediaType })),
+              origin: input.origin,
+              ...(hasStructuredComments
+                ? {
+                    timeline_comments: inputs.flatMap((entry) => entry.timelineComments ?? []),
+                    ...(legacyTexts.length ? { timeline_legacy_texts: legacyTexts } : {}),
+                  }
+                : {}),
+              client_ids: [
+                ...queued.flatMap((q) => (q.clientId ? [q.clientId] : [])),
+                ...(input.clientId ? [input.clientId] : []),
+              ],
+              queued_ids: queued.map((q) => q.id),
+              client_receipts: [
+                ...queued.flatMap((q) =>
+                  q.clientId
+                    ? [
+                        {
+                          client_id: q.clientId,
+                          result: "queued" as const,
+                          queued_id: q.id,
+                          received_at: q.createdAt,
+                        },
+                      ]
+                    : [],
+                ),
+                ...(input.clientId
+                  ? [
+                      {
+                        client_id: input.clientId,
+                        result: "delivered" as const,
+                        received_at: this.options.clock.now(),
+                      },
+                    ]
+                  : []),
+              ],
+            },
+          };
+          const records = this.record(id, [...(acceptance?.events ?? []), event], () => {
+            acceptance?.before();
+            if (includeQueued) this.store.dequeue(id);
+          });
+          if (queued.length) this.partsChanged(id, ["queue"]);
+          const record = records.at(-1);
+          if (!record) throw new Error("指示を記録できません。");
+          this.timers.cancel(id);
+          execution.rate = null;
+          execution.assistantError = null;
+          execution.intent = null;
+          execution.startSeq = record.seq;
+          execution.inputOrigin = input.origin;
+          execution.ended = new Promise((resolve) => {
+            execution.end = resolve;
+          });
+          execution.session.send({
+            text,
+            images: images.map(({ data, mediaType }) => ({ data, mediaType })),
+          });
+          if (missingImages)
+            this.options.notice(
+              id,
+              `画像 ${missingImages} 件が見つからないため、外して届けました`,
+              "info",
+            );
+          return ok({ result: "delivered", seq: record.seq });
+        },
       );
-    return ok({ result: "delivered", seq: record.seq });
+      if (!("session" in result)) return result;
+      result.session.close();
+      await result.consuming;
+      if (this.executions.get(id) === result) this.executions.delete(id);
+    }
   }
   private async consume(id: string, execution: Execution): Promise<void> {
     try {

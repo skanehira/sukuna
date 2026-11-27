@@ -21,6 +21,8 @@ import type { StockDependencies } from "./modules/stock/domain/ports";
 
 import { createIssueRoutes } from "./modules/issue/adapter/issue-routes";
 import type { IssueServerDeps } from "../shared/issue/ports";
+import { createWorktreeRoutes } from "./modules/workspace/adapter/worktree-routes";
+import type { WorktreeDependencies } from "./modules/workspace/domain/worktree-ports";
 
 export type IdentityOptions = {
   login: string | undefined;
@@ -40,6 +42,7 @@ export type AppOptions = {
 
   issues?: IssueServerDeps;
   inbox?: InboxDependencies;
+  worktrees?: WorktreeDependencies;
 };
 
 export function createApp(options: AppOptions): Hono<IdentityEnv> {
@@ -70,6 +73,7 @@ export function createApp(options: AppOptions): Hono<IdentityEnv> {
   if (options.workspace) app.route("/api/conversations", createWorkspaceRoutes(options.workspace));
 
   if (options.stock) app.route("/api", createStockRoutes(options.stock));
+  if (options.worktrees) app.route("/api", createWorktreeRoutes(options.worktrees));
 
   if (options.clientDir !== undefined) {
     const serveClient = serveStatic({ root: options.clientDir });

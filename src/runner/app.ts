@@ -121,7 +121,7 @@ export async function startRunnerApp(options: {
         });
     });
     const issueOps = createIssueOperations(
-      database.db,
+      database,
       { now: () => clock.now(), id: ulid },
       { publish: (notice) => changes.publish(notice) },
       {

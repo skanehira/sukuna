@@ -1,3 +1,7 @@
+import { statSync } from "node:fs";
+import { ConversationWorkspaceChanged } from "../domain/conversation-store";
+import { createWorktreeActivity } from "../../../../shared/workspace/sqlite-worktree-activity";
+import type { WorktreeActivityReservation } from "../../../../shared/workspace/worktree-activity";
 import { releaseReservationKey, RELEASE_RESERVATION_PREFIX } from "../../../../shared/ipc";
 import { Result } from "neverthrow";
 import type Database from "better-sqlite3";
@@ -13,11 +17,89 @@ import type {
 const selectConversation = `SELECT id, project_id AS projectId, kind, issue_id AS issueId, parent_conversation_id AS parentConversationId, COALESCE(title, '') AS title, session_id AS sessionId, cwd, worktree_id AS worktreeId, run_state AS runState, stop_reason AS stopReason, resets_at AS resetsAt, last_seq AS lastSeq, last_activity_at AS lastActivityAt, closed_at AS closedAt FROM conversations`;
 export class SqliteConversationStore implements ConversationStore {
   private sqlite: Database.Database;
+  private reservation: WorktreeActivityReservation | null = null;
   constructor(sqlite: Database.Database) {
     this.sqlite = sqlite;
   }
   transaction<T>(operation: () => T): T {
-    return this.sqlite.transaction(operation).immediate();
+    return this.withReservations([], () => this.sqlite.transaction(operation).immediate());
+  }
+  private withReservations<T>(ids: string[], operation: () => T): T {
+    if (this.reservation) {
+      this.reservation.acquire(ids);
+      return operation();
+    }
+    return createWorktreeActivity(this.sqlite.name).run((reservation) => {
+      this.reservation = reservation;
+      try {
+        reservation.acquire(ids);
+        return operation();
+      } finally {
+        this.reservation = null;
+      }
+    });
+  }
+  private workspace(conversation: Conversation) {
+    const { projectId, cwd, worktreeId } = conversation;
+    const rows = this.sqlite
+      .prepare(
+        "SELECT id, project_id AS projectId, path, removed_at AS removedAt FROM worktrees WHERE (project_id = ? AND path = ?) OR id = ?",
+      )
+      .all(projectId, cwd, worktreeId) as {
+      id: string;
+      projectId: string;
+      path: string;
+      removedAt: number | null;
+    }[];
+    const project = this.sqlite.prepare("SELECT path FROM projects WHERE id = ?").get(projectId) as
+      | { path: string }
+      | undefined;
+    const identified = rows.find((row) => row.id === worktreeId);
+    const atPath = rows.filter((row) => row.projectId === projectId && row.path === cwd);
+    const live = atPath.filter((row) => row.removedAt === null);
+    const targets = [
+      ...(identified ? [identified] : []),
+      ...(cwd === project?.path ? [] : live.length ? live : atPath),
+    ];
+    return {
+      ids: targets.map((row) => row.id),
+      worktreeId: targets[0]?.id ?? null,
+      valid:
+        (!worktreeId || !!identified) &&
+        targets.every(
+          (row) => row.removedAt === null && row.path === cwd && row.projectId === projectId,
+        ),
+      tracked: targets.length > 0,
+    };
+  }
+  private withValidWorkspace<T>(
+    current: () => Conversation | null,
+    operation: (worktreeId: string | null) => T,
+  ): T {
+    return this.withReservations([], () => {
+      const held = new Set<string>();
+      for (;;) {
+        const conversation = current();
+        if (!conversation) return operation(null);
+        const workspace = this.workspace(conversation);
+        const missing = workspace.ids.filter((id) => !held.has(id));
+        if (missing.length) {
+          this.reservation!.acquire(missing);
+          for (const id of missing) held.add(id);
+          continue;
+        }
+        if (
+          !workspace.valid ||
+          (workspace.tracked &&
+            !statSync(conversation.cwd, { throwIfNoEntry: false })?.isDirectory())
+        )
+          throw new ConversationWorkspaceChanged();
+        return operation(workspace.worktreeId);
+      }
+    });
+  }
+  withWorkspace<T>(id: string, operation: (worktreeId: string | null) => T): T {
+    return this.withValidWorkspace(() => this.get(id), operation);
   }
   reserveRelease(id: string, token: string, milliseconds: number): void {
     this.sqlite
@@ -52,23 +134,29 @@ export class SqliteConversationStore implements ConversationStore {
     return this.sqlite.prepare(selectConversation).all() as Conversation[];
   }
   create(c: Conversation): void {
-    this.sqlite
-      .prepare(
-        `INSERT INTO conversations (id, project_id, kind, issue_id, parent_conversation_id, title, session_id, cwd, worktree_id, run_state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        c.id,
-        c.projectId,
-        c.kind,
-        c.issueId,
-        c.parentConversationId,
-        c.title,
-        c.sessionId,
-        c.cwd,
-        c.worktreeId,
-        c.runState,
-      );
+    this.withValidWorkspace(
+      () => c,
+      () => {
+        this.sqlite
+          .prepare(
+            `INSERT INTO conversations (id, project_id, kind, issue_id, parent_conversation_id, title, session_id, cwd, worktree_id, run_state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            c.id,
+            c.projectId,
+            c.kind,
+            c.issueId,
+            c.parentConversationId,
+            c.title,
+            c.sessionId,
+            c.cwd,
+            c.worktreeId,
+            c.runState,
+          );
+      },
+    );
   }
+
   session(id: string, sessionId: string): void {
     this.sqlite.prepare("UPDATE conversations SET session_id = ? WHERE id = ?").run(sessionId, id);
   }
@@ -92,47 +180,49 @@ export class SqliteConversationStore implements ConversationStore {
     }));
   }
   append(id: string, input: ConversationEvent, now: number): StoredEvent | null {
-    const event = eventSchema.parse(input);
-    const c = this.get(id);
-    if (!c) throw new Error("会話がありません。");
-    if (
-      event.sdkUuid &&
-      this.sqlite
-        .prepare("SELECT 1 FROM conversation_events WHERE conversation_id = ? AND sdk_uuid = ?")
-        .get(id, event.sdkUuid)
-    )
-      return null;
-    const seq = c.lastSeq + 1;
-    this.sqlite
-      .prepare(
-        "INSERT INTO conversation_events (conversation_id, seq, type, payload, sdk_uuid, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-      )
-      .run(id, seq, event.type, JSON.stringify(event.payload), event.sdkUuid ?? null, now);
-    const stopReason =
-      event.type === "stopped"
-        ? event.payload.reason
-        : event.type === "user_message" || event.type === "resumed"
-          ? null
-          : c.stopReason;
-    const resetsAt =
-      event.type === "stopped"
-        ? (event.payload.resets_at ?? null)
-        : event.type === "user_message" || event.type === "resumed"
-          ? null
-          : c.resetsAt;
-    this.sqlite
-      .prepare(
-        "UPDATE conversations SET last_seq = ?, run_state = ?, stop_reason = ?, resets_at = ?, last_activity_at = ? WHERE id = ?",
-      )
-      .run(seq, nextRunState(c.runState, event), stopReason, resetsAt, now, id);
-    if (event.type === "question")
-      for (const [index, q] of event.payload.questions.entries())
+    return this.withWorkspace(id, () => {
+      const event = eventSchema.parse(input);
+      const c = this.get(id);
+      if (!c) throw new Error("会話がありません。");
+      if (
+        event.sdkUuid &&
         this.sqlite
-          .prepare(
-            "INSERT INTO questions (id, conversation_id, seq, kind, text, answered) VALUES (?, ?, ?, 'choice', ?, 0)",
-          )
-          .run(`${id}:${seq}:${index}`, id, seq, q.question);
-    return { ...event, conversationId: id, seq, createdAt: now };
+          .prepare("SELECT 1 FROM conversation_events WHERE conversation_id = ? AND sdk_uuid = ?")
+          .get(id, event.sdkUuid)
+      )
+        return null;
+      const seq = c.lastSeq + 1;
+      this.sqlite
+        .prepare(
+          "INSERT INTO conversation_events (conversation_id, seq, type, payload, sdk_uuid, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .run(id, seq, event.type, JSON.stringify(event.payload), event.sdkUuid ?? null, now);
+      const stopReason =
+        event.type === "stopped"
+          ? event.payload.reason
+          : event.type === "user_message" || event.type === "resumed"
+            ? null
+            : c.stopReason;
+      const resetsAt =
+        event.type === "stopped"
+          ? (event.payload.resets_at ?? null)
+          : event.type === "user_message" || event.type === "resumed"
+            ? null
+            : c.resetsAt;
+      this.sqlite
+        .prepare(
+          "UPDATE conversations SET last_seq = ?, run_state = ?, stop_reason = ?, resets_at = ?, last_activity_at = ? WHERE id = ?",
+        )
+        .run(seq, nextRunState(c.runState, event), stopReason, resetsAt, now, id);
+      if (event.type === "question")
+        for (const [index, q] of event.payload.questions.entries())
+          this.sqlite
+            .prepare(
+              "INSERT INTO questions (id, conversation_id, seq, kind, text, answered) VALUES (?, ?, ?, 'choice', ?, 0)",
+            )
+            .run(`${id}:${seq}:${index}`, id, seq, q.question);
+      return { ...event, conversationId: id, seq, createdAt: now };
+    });
   }
   queue(id: string): QueuedInstruction[] {
     const rows = this.sqlite
