@@ -26,6 +26,7 @@ type Journal = {
 const MIGRATIONS_TABLE = "__drizzle_migrations";
 const BREAKPOINT = "--> statement-breakpoint";
 
+// Stryker disable all: Vite は import.meta.glob の引数を文字列と object のリテラルとしてしか読めない
 const sqlFiles = import.meta.glob<string>("./migrations/*.sql", {
   query: "?raw",
   import: "default",
@@ -36,6 +37,7 @@ const journalFiles = import.meta.glob<string>("./migrations/meta/_journal.json",
   import: "default",
   eager: true,
 });
+// Stryker restore all
 
 function loadMigrations(): Migration[] {
   const journalRaw = Object.values(journalFiles)[0];

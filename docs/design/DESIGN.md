@@ -76,7 +76,7 @@ flowchart LR
 | データ | SQLite (`better-sqlite3`)、Drizzle ORM | 1 台で動かすので別のデータベースのサーバーが要らない。Drizzle ORM の安定版には Node.js 組み込みの SQLite のドライバが無い (PoC `vite-plus-node-stack`) |
 | 画面との通信 | REST の API と WebSocket (`ws`) | 操作は API、AI の出力と状態の変化の配信は WebSocket に分ける |
 | 検証と型 | Zod、neverthrow、ulid | テンプレートと同じ |
-| テスト | Vitest (`vp test`)、Testing Library、Playwright | 画面 (jsdom) とサーバー (本物の SQLite) を 1 つの設定で流せた (PoC `vite-plus-node-stack`) |
+| テスト | Vitest (`vp test`)、Testing Library、Playwright、fast-check (`@fast-check/vitest`)、Stryker | 画面 (jsdom) とサーバー (本物の SQLite) を 1 つの設定で流せた (PoC `vite-plus-node-stack`)。fast-check と Stryker は、Vitest と Vite+ の設定を変えずに、2 つの project の両方で動く |
 | 本人の判定 | Tailscale のローカル API の whois | `tailscale serve` を使わない構成で、接続元の持ち主を 1 ミリ秒未満で判定できた (PoC `tailscale-identity`) |
 | 通知 | Web Push (`web-push`、VAPID)、Service Worker | 購読・送信・ページを閉じた状態での受信・取り下げが通った (PoC `web-push-tailscale`) |
 | ターミナル | `node-pty`、xterm.js | 擬似端末がビルドの成果物から動いた (PoC `vite-plus-node-stack`) |
@@ -111,9 +111,15 @@ flowchart LR
 | ビルド | `vp build` |
 | マイグレーションの生成 | `vp exec drizzle-kit generate --dialect sqlite --schema ./src/shared/db/schema.ts --out ./src/shared/db/migrations --breakpoints` |
 | E2E | `vp run e2e` |
+| 変異テスト (全体) | `vp run mutation` |
+| 変異テスト (ファイルを指定) | `vp run mutation --mutate <パス>[,<パス>]` |
+| 変異テスト (基準から変えたファイル) | `vp run mutation:changed [<基準の ref>]` (既定は `origin/main`) |
 | 本番の起動 | `PORT=<port> node dist/server/main.js` と `node dist/runner/main.js` |
 
 - コマンドは `vp` に揃え、`pnpm`・`vite`・`vitest` を直接実行しない
+- 入出力を持たない関数で入力の組み合わせが多いものは、fast-check の property テストで性質を確かめる。ファイルは対象の隣に `<対象>.prop.test.ts` の名前で置く。性質には、対象を何もしない処理に置き換えると落ちる正の性質を 1 つ以上入れる。不変条件だけでは、何もしない処理でも通るためである
+- property テストの seed は、いつものテストでは実行のたびに変わり、落ちたテストの名前に出る。Stryker が流すときだけ、`src/test/fast-check.ts` が seed を固定する。変異ごとに入力が変わると、同じ変異でも、捕まえたかどうかが実行のたびに変わるためである
+- 変異テストの設定は `stryker.config.json` に置き、レポートは `reports/mutation/mutation.html` に出る。`mutation:changed` は `scripts/mutation-changed.sh` を呼び、基準から変えた `src` のソース (テスト・`.d.ts`・`src/test/` を除く) だけを対象にする。対象が無ければ流さずに終わる
 - worktree のセットアップ: チェックアウトの直後に `vp install` を実行する。`.env` 系のファイルは使わず、設定は環境変数で渡す
 - Playwright のセットアップ: 初回だけ `vp exec playwright install chromium` を実行してブラウザを入れる。`vp run e2e` は `e2e/start-server.sh` で `vp dev` を起動し、既に動いているサーバーには相乗りしない (`reuseExistingServer: false`)。`SUKUNA_HOME` には実行ごとの一時ディレクトリを渡し、終了時に消す。並列で流すときは `PORT=5190 vp run e2e` のようにポートをずらす
 - ポートは `--port` (開発) と環境変数 `PORT` (本番と E2E) で外から指定する。指定したポートで起動できなければ失敗させる (`--strictPort`)。並列の検証で使う基準のポートは 5180 とし、worktree ごとに 10 ずつずらして使う (5180、5190、5200)
@@ -384,7 +390,7 @@ issue の状態の移り変わりは `features/issue-flow.md` の表が正本で
 - 配置先には `node_modules` が要る。SQLite のドライバと擬似端末の部品は、ビルドの成果物に同梱しない
 - 更新: リポジトリを更新して `vp install` と `vp build` を行い、画面のサーバーだけを入れ替える。ランナーを入れ替えるのは、ランナーのコードが変わったときだけにする
 - バックアップ: SQLite のデータベースを、SQLite のバックアップの機能で写す。貼り付けた画像は含めない。復元は、2 つのプロセスを止めてから行う。手順は `features/operations.md` に書く
-- CI: GitHub Actions で `vp check`、`CI=1 vp test --run`、`vp build` を実行する
+- CI: GitHub Actions で `vp check`、`CI=1 vp test --run`、`vp build` を実行する。PR のときは、別のジョブ (`mutation`) で `vp run mutation:changed` を PR の基準のブランチに対して流す。全体を流すと PR ごとの待ち時間が長くなりすぎるので、変えたファイルだけにする。変異スコアでは PR を落とさない。今あるコードには生き残りの変異があり、そのファイルに触れた無関係の PR まで落ちるためである。`mutation` ジョブの準備 (ripgrep などの道具の導入) は `ci` ジョブと揃える。テストが呼ぶ道具が無いと、Stryker の初回のテスト実行で落ちる
 - シークレット: アプリは API キーを持たない。AI の実行は、この Mac の Claude Code のログインを使う (「未解決の論点」)
 
 ## 既知の制約
@@ -419,6 +425,10 @@ issue の状態の移り変わりは `features/issue-flow.md` の表が正本で
 - `vp dev` の `localhost` は `::1` で待ち受けることがあるため、開発用の本人の値は `127.0.0.1` と `::1` の両方を手元として扱う
 - SQLite の `PRAGMA journal_mode = WAL` はファイルに残るが、`busy_timeout` と `foreign_keys` は接続ごとの設定である。`journal_mode` と `foreign_keys` はトランザクションの中では変えられない。接続を開いた直後に 3 つとも設定する
 - ロックファイルの PID を読んでから削除する間には、別のプロセスが同じパスを取得できる。読み直すだけではこの競合を防げない。ファイルの作成・確認・削除を OS の排他の中で行う手順は `features/operations.md`「データベースのロック」に従う
+- TypeScript 7 には JS の API が無い。Stryker は既定で `tsconfig.json` をこの API で読み書きするので、`TypeError: ts.parseConfigFileTextToJson is not a function` で起動に失敗する。`stryker.config.json` の `tsconfigFile` に存在しないファイルの名前を指定して、この処理を止める。このリポジトリの tsconfig は Stryker の sandbox の外を参照しないので、書き換えは要らない
+- Vite は `import.meta.glob` の引数を、文字列と object のリテラルとしてしか読めない。Stryker が引数を変異させると、そのモジュールを import するテストが `Parse failed` で落ちる。`import.meta.glob` の呼び出しは `// Stryker disable all: <理由>` と `// Stryker restore all` で囲む
+- `src/runner/dev.test.ts` は、子のプロセスで開発用ランナーを起動する結合テストである。`src` 全体を変異の対象にすると、Stryker の初回のテスト実行で落ちる。`stryker.config.json` の `ignorePatterns` で、Stryker の sandbox から外す。いつものテストでは流れる
+- 変異テストにかかる時間は、ファイルと実行環境で大きく変わる。28 スレッドの Mac では、`notation.ts` (jsdom の project のテストが流れる。変異 189 件) が 2 分 41 秒、`transition.ts` (node の project。変異 273 件) が 10 秒である。CI では、`migrate.ts` (node の project。変異 66 件) に約 5 分かかる。`mutation` ジョブの制限時間は、jsdom の側のファイルが多い PR を見込んで 180 分にする。超えるとジョブは失敗する
 - `node-pty` は、導入のあとに補助の実行ファイルへ実行権限を付けないと動かない。`postinstall` で付ける
 - Tailscale のローカル API のポートとトークンは、Tailscale の再起動で変わる。起動時に固定せず、認証か接続に失敗したら読み直す (PoC `tailscale-identity`)
 - 目次などの更新の実行には、題名を必ず渡す。渡さないと、題名を作る別の呼び出しが毎回走る (PoC `summary-ai-cost`)
