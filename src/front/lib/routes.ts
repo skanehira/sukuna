@@ -1,4 +1,12 @@
 export type Route = { kind: string; id?: string; view?: string; thread?: string; query?: string };
+export function requestsConversationTail(route: Route): boolean {
+  return (
+    route.kind === "conversation" &&
+    !route.view &&
+    new URLSearchParams(route.query).get("tail") === "1"
+  );
+}
+
 export function parseRoute(url: string): Route {
   const [path, query] = url.split("?");
   const parts = path.split("/").filter(Boolean).map(decodeURIComponent);

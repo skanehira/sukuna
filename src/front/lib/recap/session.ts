@@ -126,7 +126,8 @@ export class RecapSession {
     }
     this.tracking.open(this.conversation.receivedThrough());
     this.tracking.cursor(this.cursorSeq());
-    if (this.position.recent && this.conversation.controller.right.current?.view !== "thread")
+    const right = this.conversation.controller.right.current?.view;
+    if (this.position.recent && right !== "thread" && right !== "conversation-switch")
       void this.open("recent", false);
   }
   private findLine(seq: number | null, lines = this.conversation.bodyLines()): number | null {

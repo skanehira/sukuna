@@ -2,7 +2,12 @@
 set -euo pipefail
 
 PORT="$1"
-SUKUNA_HOME="$(mktemp -d)"
+SUKUNA_HOME="${SUKUNA_E2E_HOME:-}"
+cleanup_home="${SUKUNA_E2E_CREATED_HOME:-}"
+if [[ -z "$SUKUNA_HOME" ]]; then
+  SUKUNA_HOME="$(mktemp -d)"
+  cleanup_home="$SUKUNA_HOME"
+fi
 SUKUNA_LOGIN="dev@example.com"
 SUKUNA_DEV_IDENTITY="dev@example.com"
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -19,7 +24,9 @@ cleanup() {
     kill "$runner_pid" 2>/dev/null || true
     wait "$runner_pid" || true
   fi
-  rm -rf "${SUKUNA_HOME:?}"
+  if [[ "$SUKUNA_HOME" == "$cleanup_home" ]]; then
+    rm -rf "${SUKUNA_HOME:?}"
+  fi
 }
 trap cleanup EXIT
 trap 'exit 130' INT

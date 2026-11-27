@@ -1,11 +1,15 @@
 import { useState, useSyncExternalStore, type ReactNode } from "react";
-import useSWR from "swr";
-import { BufferController } from "./buffer/controller";
+import useSWR, { SWRConfig } from "swr";
+import {
+  BufferController,
+  BufferControllerContext,
+  ScreenOpeningContext,
+} from "./buffer/controller";
 import { Buffer } from "./buffer/Buffer";
 import { Frame } from "./buffer/Frame";
 import { Layout } from "./buffer/Layout";
 import type { LineInfo } from "./buffer/line";
-import { routeUrl, type Route } from "./lib/routes";
+import { requestsConversationTail, routeUrl, type Route } from "./lib/routes";
 import type { NavigationPort, StorePort } from "./shell/navigation";
 import { createNavigation } from "./shell/navigation";
 import { Notices, type NoticePort } from "./shell/notices";
@@ -22,12 +26,25 @@ const missing = {
   message: "開いた対象が見つかりません。一覧から選び直してください。",
 };
 
+export type ReadyScreen = {
+  kind: "ready";
+  title: string;
+  content: ReactNode;
+  fullWindow?: boolean;
+};
 export type ScreenContent =
-  | { kind: "ready"; title: string; content: ReactNode; fullWindow?: boolean }
-  | { kind: "error"; error: { code: string; message: string } };
+  | ReadyScreen
+  | { kind: "error"; error: { code: string; message: string }; cached?: ReadyScreen };
 export type ScreenLoader = (route: Route) => Promise<ScreenContent>;
 
-class ScreenNetworkError extends Error {}
+const openingCache = { provider: () => new Map() };
+class ScreenNetworkError extends Error {
+  readonly cached: ReadyScreen | undefined;
+  constructor(message: string, cached?: ReadyScreen) {
+    super(message);
+    this.cached = cached;
+  }
+}
 
 type AppProps = {
   controller?: BufferController;
@@ -39,6 +56,7 @@ type AppProps = {
   main?: ReactNode;
   right?: ReactNode;
   renderRight?: (view: RightView) => ReactNode;
+  renderTree?: (route: Route) => ReactNode;
 };
 
 export function App({
@@ -51,13 +69,28 @@ export function App({
   main,
   right,
   renderRight,
+  renderTree,
 }: AppProps = {}) {
   const [localNavigation] = useState(() => createNavigation({ kind: "home" }, () => undefined));
   const navigation = suppliedNavigation ?? localNavigation;
   const [local] = useState(() => new BufferController({ navigate: navigation.navigate }));
   const controller = supplied ?? local;
   const route = useSyncExternalStore(navigation.subscribe, navigation.snapshot);
+  const opening = controller.screenOpening();
   const connected = useSyncExternalStore(connection.subscribe, connection.snapshot);
+  const screen = (
+    <MainWindow
+      route={route}
+      connected={connected}
+      loadScreen={loadScreen}
+      identityRecovery={identityRecovery}
+      main={main}
+      onHome={() => {
+        void navigation.navigate("/");
+      }}
+      onReload={navigation.reload}
+    />
+  );
   return (
     <div
       className="relative h-full"
@@ -71,27 +104,27 @@ export function App({
         notices={notices ? <Notices notices={notices} /> : undefined}
         renderRight={renderRight}
         tree={
-          <Frame title="sukuna" side="tree">
-            <ShellBoundary>
-              <Buffer side="tree" lines={empty} onReady={() => undefined} />
-            </ShellBoundary>
-          </Frame>
+          <ShellBoundary>
+            {renderTree ? (
+              renderTree(route)
+            ) : (
+              <Frame title="sukuna" side="tree">
+                <Buffer side="tree" lines={empty} onReady={() => undefined} />
+              </Frame>
+            )}
+          </ShellBoundary>
         }
         main={
           <>
             <div className="min-h-0 flex flex-1 flex-col">
-              <ShellBoundary key={routeUrl(route)}>
-                <MainWindow
-                  route={route}
-                  connected={connected}
-                  loadScreen={loadScreen}
-                  identityRecovery={identityRecovery}
-                  main={main}
-                  onHome={() => {
-                    void navigation.navigate("/");
-                  }}
-                  onReload={navigation.reload}
-                />
+              <ShellBoundary key={`${routeUrl(route)}:${opening}`}>
+                <ScreenOpeningContext value={opening}>
+                  {requestsConversationTail(route) ? (
+                    <SWRConfig value={openingCache}>{screen}</SWRConfig>
+                  ) : (
+                    screen
+                  )}
+                </ScreenOpeningContext>
               </ShellBoundary>
             </div>
           </>
@@ -125,16 +158,22 @@ function MainWindow({
   onHome: () => void;
   onReload: () => void;
 }) {
-  const { data, error, isLoading, mutate } = useSWR(
+  const {
+    data: loaded,
+    error,
+    isLoading,
+    mutate,
+  } = useSWR(
     loadScreen ? ["screen", routeUrl(route)] : null,
     async () => {
       const result = await loadScreen!(route);
       if (result.kind === "error" && result.error.code === "network_error")
-        throw new ScreenNetworkError(result.error.message);
+        throw new ScreenNetworkError(result.error.message, result.cached);
       return result;
     },
     { shouldRetryOnError: false },
   );
+  const data = loaded ?? (error instanceof ScreenNetworkError ? error.cached : undefined);
   const networkFailure = error
     ? {
         code: "network_error",
@@ -196,7 +235,13 @@ function MainWindow({
             onReload={reload}
           />
         ) : isLoading ? (
-          <Skeleton side="main" />
+          requestsConversationTail(route) ? (
+            <BufferControllerContext.Provider value={null}>
+              <Skeleton side="main" />
+            </BufferControllerContext.Provider>
+          ) : (
+            <Skeleton side="main" />
+          )
         ) : (
           <div className="flex min-h-0 flex-1 flex-col">
             {main ??

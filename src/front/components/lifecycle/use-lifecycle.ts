@@ -45,7 +45,7 @@ export function useBufferLines(lines: LineInfo[], missingCursorTarget?: string) 
   const current = useRef<{ handle: BufferHandle; lines: LineInfo[] } | null>(null);
   useEffect(() => {
     if (current.current && current.current.lines !== lines) {
-      current.current.handle.replaceAll(lines, missingCursorTarget);
+      current.current.handle.replaceAll(lines, { missingCursorTarget });
       current.current.lines = lines;
     }
   }, [lines, missingCursorTarget]);

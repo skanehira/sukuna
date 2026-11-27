@@ -1,12 +1,22 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { EditorView } from "@codemirror/view";
+import { StrictMode } from "react";
+import { SWRConfig } from "swr";
+import { App } from "../../App";
+import { createNavigation } from "../../shell/navigation";
+import type { RealtimeSocket } from "../../lib/realtime";
 import { BufferController } from "../../buffer/controller";
+import { createBrowserController } from "../../lib/browser";
+import { inboxFixture, response, row } from "../../lib/inbox.test-support";
+import { InboxPage } from "../inbox";
+import { Tree } from "../../components/tree";
 import { Layout } from "../../buffer/Layout";
 import { ConversationSession } from "../../lib/conversation/session";
 import { ConversationApiError, createConversationApi } from "../../lib/conversation/api";
 import type { ConversationApi, Event, Snapshot } from "../../lib/conversation/types";
 import { ConversationPage } from "./ConversationPage";
+import { createConversationWorkspace } from "../../lib/conversation/workspace";
 
 const snapshot: Snapshot = {
   conversation: {
@@ -113,11 +123,541 @@ async function mount(api = fakeApi(), events: Event[] = []) {
 function prompt(): EditorView {
   return EditorView.findFromDOM(screen.getByRole("textbox", { name: "指示" }))!;
 }
+
+const navigationTestTimeout = 15_000;
+
+it.each([
+  [true, "fresh", true, "即応", "移動なし"],
+  [false, "fresh", false, "即応", "移動なし"],
+  [true, "fresh", true, "取得失敗", "移動なし"],
+  [true, "cached", true, "即応", "移動なし"],
+  [false, "cached", false, "即応", "移動なし"],
+  [true, "ordinary", true, "即応", "移動なし"],
+  [false, "ordinary", false, "即応", "移動なし"],
+  [false, "cached", true, "即応", "移動なし"],
+  [false, "cached", true, "保留", "ツリーを選択"],
+  [false, "cached", true, "保留", "3G"],
+  [false, "cached", true, "保留", "Ctrl+o"],
+  [false, "cached", true, "保留", "離脱して再訪"],
+  [true, "cached", false, "保留", "移動なし"],
+  [false, "cached", true, "取得失敗", "移動なし"],
+] as const)(
+  "tail指定の初回working=%s・再表示=%s・再表示時working=%s・取得=%s (%s)",
+  async (initialWorking, revisit, reopenWorking, response, action) => {
+    const events: Event[] = [
+      {
+        seq: 1,
+        createdAt: 0,
+        type: "assistant_text",
+        payload: { text: "最初の行\n途中の行\n最後の行", parent_tool_use_id: null },
+      },
+    ];
+    let working = initialWorking;
+    let releaseGet = () => {};
+    const reopenedGet = new Promise<void>((resolve) => {
+      releaseGet = resolve;
+    });
+    let nextResponse: typeof response = revisit === "fresh" ? response : "即応";
+    const statesRead: Snapshot["conversation"]["runState"][] = [];
+    const get = vi.fn(async (): Promise<Snapshot> => {
+      const runState = working ? "working" : "idle";
+      const result = nextResponse;
+      nextResponse = "即応";
+      if (result === "保留") await reopenedGet;
+      if (result === "取得失敗")
+        throw new ConversationApiError(0, "network_error", "会話を取得できませんでした");
+      statesRead.push(runState);
+      return {
+        ...structuredClone(snapshot),
+        conversation: { ...snapshot.conversation, runState, lastSeq: events.length },
+      };
+    });
+    const api = fakeApi({
+      get,
+      events: async (_id, after) => ({
+        events: events.filter((event) => event.seq > after),
+        lastSeq: events.length,
+        hasMore: false,
+      }),
+    });
+    const navigation = createNavigation({ kind: "home" }, () => {});
+    const controller = new BufferController({ navigate: navigation.navigate });
+    const socket: RealtimeSocket = {
+      onopen: null,
+      onclose: null,
+      onmessage: null,
+      onerror: null,
+      send: () => {},
+      close: () => {},
+    };
+    let reportConnectionLoss = () => {};
+    const workspace = createConversationWorkspace(
+      api,
+      controller,
+      {
+        clientId: "tab",
+        id: () => "id",
+        now: () => 0,
+        schedule: (fn, ms) => {
+          if (ms === 3000) reportConnectionLoss = fn;
+          return () => {};
+        },
+      },
+      () => socket,
+    );
+    const stop = workspace.start();
+    socket.onopen?.();
+    const mounted = render(
+      <StrictMode>
+        <SWRConfig value={{ provider: () => new Map(), revalidateOnFocus: false }}>
+          <App
+            controller={controller}
+            navigation={navigation}
+            loadScreen={workspace.loadScreen}
+            connection={workspace.connection}
+          />
+        </SWRConfig>
+      </StrictMode>,
+    );
+    const open = async (url: string) => {
+      await act(async () => controller.navigate(url));
+      await screen.findByText("最後の行", { exact: true });
+      await flush();
+    };
+    const home = async () => {
+      await act(async () => controller.navigate("/"));
+      await flush();
+    };
+    try {
+      if (revisit === "fresh" && response === "取得失敗") {
+        await act(async () => controller.navigate("/conversations/c1?tail=1"));
+        expect(await screen.findByRole("alert")).toHaveTextContent("会話を取得できませんでした");
+        expect(statesRead).toEqual([]);
+        await act(async () => {
+          fireEvent.click(screen.getByRole("button", { name: "再読み込み" }));
+        });
+        await screen.findByText("最後の行", { exact: true });
+        await flush();
+      } else {
+        await open("/conversations/c1?tail=1");
+      }
+      expect(statesRead).toEqual([initialWorking ? "working" : "idle"]);
+      expect(controller.currentLine()?.text).toBe(initialWorking ? "最後の行" : "最初の行");
+      if (revisit === "fresh" && initialWorking) {
+        await act(async () => controller.jumpBack());
+        expect(controller.currentLine()?.text).toBe("最後の行");
+      }
+      if (revisit !== "fresh") {
+        act(() => main().dispatch({ selection: { anchor: main().state.doc.line(2).from } }));
+        await home();
+        if (revisit === "ordinary") {
+          await open("/conversations/c1");
+          act(() => main().dispatch({ selection: { anchor: main().state.doc.line(2).from } }));
+          await home();
+        }
+        const readCount = statesRead.length;
+        working = reopenWorking;
+        nextResponse = response;
+        if (response === "保留") {
+          await act(async () => controller.navigate("/conversations/c1?tail=1"));
+          await flush();
+          expect(screen.getByRole("status", { name: "読み込み中" })).toBeVisible();
+          expect(statesRead).toHaveLength(readCount);
+          expect(screen.queryByRole("region", { name: "会話: 予約 API" })).not.toBeInTheDocument();
+          const tree = EditorView.findFromDOM(
+            screen.getByRole("region", { name: "sukuna" }).querySelector(".cm-editor")!,
+          )!;
+          if (action === "ツリーを選択") act(() => tree.focus());
+          if (action === "離脱して再訪") {
+            await home();
+            working = false;
+            await open("/conversations/c1?tail=1");
+            expect(controller.currentLine()?.text).toBe("最初の行");
+          }
+          await act(async () => releaseGet());
+          await screen.findByText("最後の行", { exact: true });
+          await flush();
+          if (action === "ツリーを選択") {
+            expect({ hasFocus: tree.hasFocus, active: controller.snapshot().active }).toEqual({
+              hasFocus: true,
+              active: "tree",
+            });
+            act(() => controller.focus("main"));
+          }
+        } else {
+          await open("/conversations/c1?tail=1");
+        }
+        if (response === "取得失敗") {
+          expect(
+            await screen.findByText("会話を取得できませんでした", { exact: true }),
+          ).toBeVisible();
+          expect(statesRead).toHaveLength(readCount);
+          expect(controller.currentLine()?.text).toBe("最初の行");
+        } else if (action === "離脱して再訪") {
+          expect(statesRead.slice(readCount)).toEqual(["idle", "working"]);
+          expect(controller.currentLine()?.text).toBe("最初の行");
+        } else {
+          expect(statesRead.slice(readCount)).toEqual([reopenWorking ? "working" : "idle"]);
+          expect(controller.currentLine()?.text).toBe(reopenWorking ? "最後の行" : "最初の行");
+        }
+      }
+      if (action === "3G") {
+        key(main(), "3");
+        key(main(), "G", { shiftKey: true });
+      } else if (action === "Ctrl+o") {
+        controller.pushJump("main", 2);
+        await act(async () => {
+          key(main(), "o", { ctrlKey: true });
+        });
+      } else {
+        act(() => main().dispatch({ selection: { anchor: main().state.doc.line(3).from } }));
+      }
+      expect(controller.currentLine()?.text).toBe("途中の行");
+      const event: Event = {
+        seq: 2,
+        createdAt: 1,
+        type: "assistant_text",
+        payload: { text: "新しい出力", parent_tool_use_id: null },
+      };
+      events.push(event);
+      await act(async () =>
+        socket.onmessage?.({
+          data: JSON.stringify({
+            topic: "conversation:c1",
+            seq: 2,
+            type: "event",
+            payload: {
+              ...event,
+              conversation_id: "c1",
+              sdk_uuid: null,
+              created_at: event.createdAt,
+            },
+          }),
+        }),
+      );
+      await screen.findByText("新しい出力", { exact: true });
+      await flush();
+      expect(controller.currentLine()?.text).toBe("途中の行");
+      if (revisit === "fresh" || response !== "取得失敗") {
+        act(() => {
+          socket.onclose?.();
+          reportConnectionLoss();
+        });
+      }
+      const count = get.mock.calls.length;
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "再読み込み" }));
+      });
+      await waitFor(() => expect(get).toHaveBeenCalledTimes(count + 1));
+      await flush();
+      expect(controller.currentLine()?.text).toBe("途中の行");
+      if (revisit !== "fresh" && response === "取得失敗") {
+        expect(statesRead.at(-1)).toBe("working");
+        expect(
+          screen.queryByText("会話を取得できませんでした", { exact: true }),
+        ).not.toBeInTheDocument();
+      }
+    } finally {
+      await act(async () => {
+        mounted.unmount();
+        stop();
+        releaseGet();
+      });
+    }
+  },
+  navigationTestTimeout,
+);
 function main(): EditorView {
   return EditorView.findFromDOM(
     screen.getByRole("region", { name: "会話: 予約 API" }).querySelector(".cm-editor")!,
   )!;
 }
+const navigationRecords: Event[] = [
+  {
+    seq: 1,
+    createdAt: 0,
+    type: "assistant_text",
+    payload: { text: "リンクより前の行", parent_tool_use_id: null },
+  },
+  {
+    seq: 2,
+    createdAt: 1,
+    type: "tool_use",
+    payload: {
+      tool_use_id: "tool",
+      name: "mcp__sukuna__issue_create",
+      input: {},
+      parent_tool_use_id: null,
+    },
+  },
+  {
+    seq: 3,
+    createdAt: 2,
+    type: "tool_result",
+    payload: {
+      tool_use_id: "tool",
+      content: '{"issue":{"number":42}}',
+      is_error: false,
+      truncated: false,
+      bytes: 23,
+    },
+  },
+  {
+    seq: 4,
+    createdAt: 3,
+    type: "assistant_text",
+    payload: { text: "最後の行", parent_tool_use_id: null },
+  },
+];
+
+it.each(["idle", "working"] as const)(
+  "別画面で Ctrl+o を押すと %s の会話のリンク元へ戻り、再取得後も行を保つ",
+  async (runState) => {
+    const url = "/conversations/c1?tail=1";
+    const records = navigationRecords;
+    let release = () => {};
+    const delay = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const get = vi.fn(async (): Promise<Snapshot> => ({
+      ...structuredClone(snapshot),
+      conversation: { ...snapshot.conversation, runState, lastSeq: records.length },
+    }));
+    get.mockImplementationOnce(async () => ({
+      ...structuredClone(snapshot),
+      conversation: { ...snapshot.conversation, lastSeq: records.length },
+    }));
+    get.mockImplementationOnce(async () => {
+      await delay;
+      return {
+        ...structuredClone(snapshot),
+        conversation: { ...snapshot.conversation, runState, lastSeq: records.length },
+      };
+    });
+    const api = fakeApi({
+      get,
+      events: async (_id, after) => ({
+        events: records.filter((record) => record.seq > after),
+        lastSeq: records.length,
+        hasMore: false,
+      }),
+    });
+    const navigation = createNavigation({ kind: "home" }, () => {});
+    const controller = new BufferController({ navigate: navigation.navigate });
+    const workspace = createConversationWorkspace(
+      api,
+      controller,
+      { clientId: "tab", id: () => "id", now: () => 0, schedule: () => () => {} },
+      () => {
+        throw new Error("このテストでは配信へ接続しない");
+      },
+    );
+    render(
+      <StrictMode>
+        <SWRConfig value={{ provider: () => new Map(), revalidateOnFocus: false }}>
+          <App
+            controller={controller}
+            navigation={navigation}
+            loadScreen={workspace.loadScreen}
+            connection={{ snapshot: () => false, subscribe: () => () => {} }}
+          />
+        </SWRConfig>
+      </StrictMode>,
+    );
+    await act(() => controller.navigate(url));
+    await screen.findByText("最後の行", { exact: true });
+    await openLine("● issue_create()");
+    expect(controller.options.url).toBe("/issues/42");
+    const tree = EditorView.findFromDOM(
+      screen.getByRole("region", { name: "sukuna" }).querySelector(".cm-editor")!,
+    )!;
+    act(() => tree.focus());
+    await act(async () => key(tree, "o", { ctrlKey: true }));
+    expect(await screen.findByRole("status", { name: "読み込み中" })).toBeVisible();
+    expect(controller.options.url).toBe(url);
+    expect(get).toHaveBeenCalledTimes(2);
+    await act(async () => release());
+    await screen.findByText("最後の行", { exact: true });
+    await flush();
+    expect(main().hasFocus).toBe(true);
+    expect(controller.currentLine()?.text).toBe("● issue_create()");
+
+    fireEvent.click(screen.getByRole("button", { name: "再読み込み" }));
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(3));
+    await flush();
+    expect(controller.currentLine()?.text).toBe("● issue_create()");
+  },
+  navigationTestTimeout,
+);
+it.each([
+  ["一覧へ戻る", "通常表示より先", "working", "最後の行"],
+  ["一覧へ戻る", "通常表示より後", "working", "最後の行"],
+  ["同じURLを開く", "通常表示より後", "working", "最後の行"],
+  ["Ctrl+oを続ける", "通常表示より後", "working", "最後の行"],
+  ["ブラウザで戻って進む", "通常表示より後", "idle", "リンクより前の行"],
+] as const)(
+  "Ctrl+oの読み込み中に%sとき、元のGETが%sでも通常表示の位置を保つ (%s)",
+  async (cancel, oldResponse, runState, expected) => {
+    const url = "/conversations/c1?tail=1";
+    const path = () => `${window.location.pathname}${window.location.search}`;
+    const previousUrl = path();
+    const previousState = window.history.state;
+    window.sessionStorage.clear();
+    window.history.replaceState(null, "", "/");
+    const navigation = createNavigation({ kind: "home" }, () => {});
+    const { controller, dispose } = createBrowserController(window, navigation.open);
+    const inboxTitle = "会話: 作業中の予約 API";
+    const { store } = inboxFixture(
+      response(
+        row({
+          id: "c1",
+          key: "conversation:c1",
+          title: inboxTitle,
+          section: "working",
+          reason: "working",
+        }),
+      ),
+    );
+    let releaseOldGet = () => {};
+    const oldGet = new Promise<void>((resolve) => {
+      releaseOldGet = resolve;
+    });
+    const completedGets: number[] = [];
+    const get = vi.fn(async (): Promise<Snapshot> => {
+      const index = get.mock.calls.length;
+      if (index === 2) await oldGet;
+      completedGets.push(index);
+      return {
+        ...structuredClone(snapshot),
+        conversation: {
+          ...snapshot.conversation,
+          runState: index < 3 ? "idle" : runState,
+          lastSeq: navigationRecords.length,
+        },
+      };
+    });
+    const workspace = createConversationWorkspace(
+      fakeApi({
+        get,
+        events: async (_id, after) => ({
+          events: navigationRecords.filter((record) => record.seq > after),
+          lastSeq: navigationRecords.length,
+          hasMore: false,
+        }),
+      }),
+      controller,
+      { clientId: "tab", id: () => "id", now: () => 0, schedule: () => () => {} },
+      () => {
+        throw new Error("このテストでは配信へ接続しない");
+      },
+    );
+    const mounted = render(
+      <StrictMode>
+        <SWRConfig value={{ provider: () => new Map(), revalidateOnFocus: false }}>
+          <App
+            controller={controller}
+            navigation={navigation}
+            loadScreen={async (route) =>
+              route.kind === "home"
+                ? {
+                    kind: "ready",
+                    title: "一覧",
+                    fullWindow: true,
+                    content: <InboxPage store={store} controller={controller} />,
+                  }
+                : workspace.loadScreen(route)
+            }
+            renderTree={(route) => <Tree store={store} route={route} />}
+          />
+        </SWRConfig>
+      </StrictMode>,
+    );
+    const editor = (name: string) =>
+      EditorView.findFromDOM(screen.getByRole("region", { name }).querySelector(".cm-editor")!)!;
+    const enterInboxRow = async () => {
+      const row = await screen.findByText(inboxTitle, { exact: true });
+      const view = editor("一覧");
+      await act(async () => {
+        view.dispatch({ selection: { anchor: view.posAtDOM(row) } });
+        view.focus();
+        fireEvent.keyDown(view.contentDOM, { key: "Enter" });
+      });
+      expect(path()).toBe(url);
+    };
+    try {
+      await enterInboxRow();
+      await screen.findByText("最後の行", { exact: true });
+      await openLine("● issue_create()");
+      expect(path()).toBe("/issues/42");
+      await screen.findByRole("alert");
+      const tree = editor("sukuna");
+      await act(async () => {
+        tree.focus();
+        fireEvent.keyDown(tree.contentDOM, { key: "o", ctrlKey: true });
+      });
+      expect(await screen.findByRole("status", { name: "読み込み中" })).toBeVisible();
+      expect(path()).toBe(url);
+      expect(completedGets).toEqual([1]);
+      expect(get).toHaveBeenCalledTimes(2);
+
+      if (cancel === "一覧へ戻る") {
+        const home = within(screen.getByRole("region", { name: "sukuna" })).getByText("一覧", {
+          exact: true,
+        });
+        const line = tree.posAtDOM(home);
+        await act(async () => {
+          tree.dispatch({ selection: { anchor: line } });
+          fireEvent.keyDown(tree.contentDOM, { key: "Enter" });
+        });
+        expect(path()).toBe("/");
+        if (oldResponse === "通常表示より先") await act(async () => releaseOldGet());
+        await enterInboxRow();
+      } else if (cancel === "同じURLを開く") {
+        await act(async () => controller.navigate(url));
+        expect(path()).toBe(url);
+      } else if (cancel === "Ctrl+oを続ける") {
+        await act(async () => {
+          fireEvent.keyDown(tree.contentDOM, { key: "o", ctrlKey: true });
+        });
+        expect(path()).toBe("/");
+        await enterInboxRow();
+      } else {
+        const traverse = async (direction: "back" | "forward", expectedPath: string) => {
+          await act(async () => {
+            const changed = new Promise<void>((resolve) => {
+              window.addEventListener("popstate", () => resolve(), { once: true });
+            });
+            window.history[direction]();
+            await changed;
+          });
+          expect(path()).toBe(expectedPath);
+        };
+        await traverse("back", "/issues/42");
+        await traverse("forward", url);
+      }
+
+      await screen.findByText("最後の行", { exact: true });
+      const cursorLine = () => main().state.doc.lineAt(main().state.selection.main.head).text;
+      expect(completedGets).toEqual(oldResponse === "通常表示より先" ? [1, 2, 3] : [1, 3]);
+      expect(cursorLine()).toBe(expected);
+      await act(async () => releaseOldGet());
+      await flush();
+      expect(completedGets).toEqual(oldResponse === "通常表示より先" ? [1, 2, 3] : [1, 3, 2]);
+      expect(cursorLine()).toBe(expected);
+    } finally {
+      await act(async () => {
+        mounted.unmount();
+        dispose();
+        store.dispose();
+        releaseOldGet();
+        window.history.replaceState(previousState, "", previousUrl);
+        window.sessionStorage.clear();
+      });
+    }
+  },
+  navigationTestTimeout,
+);
+
 function key(view: EditorView, key: string, extra = {}) {
   act(() => {
     fireEvent.keyDown(view.contentDOM, { key, ...extra });
@@ -780,3 +1320,77 @@ describe("会話の画面", () => {
     ]);
   });
 });
+
+it(
+  "通常の会話購読で届くdelta一件を一度表示し、保存済みイベントへ重複せず置き換える",
+  async () => {
+    const controller = new BufferController({ url: "/conversations/c1" });
+    const navigation = createNavigation({ kind: "conversation", id: "c1" }, () => {});
+    const socket: RealtimeSocket = {
+      onopen: null,
+      onclose: null,
+      onmessage: null,
+      onerror: null,
+      send: () => {},
+      close: () => {},
+    };
+    const settingsChanged = vi.fn<() => void>();
+    const workspace = createConversationWorkspace(
+      fakeApi(),
+      controller,
+      { clientId: "tab", id: () => "id", now: () => 0, schedule: () => () => {} },
+      () => socket,
+      { settingsChanged },
+    );
+    const stop = workspace.start();
+    socket.onopen?.();
+    const mounted = render(
+      <SWRConfig value={{ provider: () => new Map() }}>
+        <App controller={controller} navigation={navigation} loadScreen={workspace.loadScreen} />
+      </SWRConfig>,
+    );
+    const receive = async (message: unknown) => {
+      act(() => socket.onmessage?.({ data: JSON.stringify(message) }));
+      await flush();
+    };
+    const expected = "AI\n独立試験の途中出力";
+    try {
+      await screen.findByRole("region", { name: "会話: 予約 API" });
+      await receive({
+        topic: "conversation:c1",
+        seq: 0,
+        type: "delta",
+        payload: { text: "独立試験の途中出力" },
+      });
+      await waitFor(() => expect(main().state.doc.lines).toBe(2));
+      const interim = main().state.doc.toString();
+      await receive({
+        topic: "conversation:c1",
+        seq: 1,
+        type: "event",
+        payload: {
+          type: "assistant_text",
+          payload: { text: "独立試験の途中出力", parent_tool_use_id: null },
+          conversation_id: "c1",
+          seq: 1,
+          created_at: 1,
+          sdk_uuid: null,
+        },
+      });
+      await waitFor(() => expect(main().state.doc.toString()).toBe(expected));
+      expect([interim, main().state.doc.toString()]).toEqual([expected, expected]);
+      const before = settingsChanged.mock.calls.length;
+      await receive({
+        topic: "app",
+        seq: 0,
+        type: "settings_changed",
+        payload: { keymap: "updated" },
+      });
+      expect(settingsChanged).toHaveBeenCalledTimes(before + 1);
+    } finally {
+      mounted.unmount();
+      stop();
+    }
+  },
+  navigationTestTimeout,
+);

@@ -283,7 +283,7 @@ export class ConversationSession {
     );
     this.refreshTail();
     if (this.recap) this.recap.bound(handle);
-    else if (openAtTail)
+    else if (openAtTail && this.state.data?.conversation.runState === "working")
       handle.jumpTo(Math.max(0, this.bodyLines().length - 1), { remember: false });
   };
   private append(event: Event, lines: LineInfo[], clearReply = false): void {

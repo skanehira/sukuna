@@ -1,10 +1,25 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { StrictMode } from "react";
+import { SWRConfig } from "swr";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { getCM } from "@replit/codemirror-vim";
 import { EditorView } from "@codemirror/view";
 import { Buffer, type BufferHandle } from "./Buffer";
+import { App } from "../App";
+import {
+  ConversationSwitch,
+  registerConversationSwitch,
+} from "../components/conversation/ConversationSwitch";
+import { Tree } from "../components/tree";
+import { createConversationApi } from "../lib/conversation/api";
+import { createBrowserController } from "../lib/browser";
+import { inboxFixture } from "../lib/inbox.test-support";
+import { InboxPage } from "../pages/inbox";
+import { ProjectPage } from "../pages/project";
+import { createNavigation } from "../shell/navigation";
 import { Layout } from "./Layout";
 import { Frame } from "./Frame";
+import { Skeleton } from "../shell/loading";
 import { BufferController } from "./controller";
 import type { KeymapConfig } from "./keymap/registry";
 import type { LineInfo } from "./line";
@@ -86,6 +101,27 @@ function register(controller: BufferController, name: string, run = vi.fn(), ext
   });
   return run;
 }
+
+it("Vim検索の入力欄はフォーカスを保ち、検索のEnterでは行を開かない", () => {
+  const navigate = vi.fn();
+  const controller = new BufferController({ navigate });
+  const { views } = mount(controller, [
+    { kind: "text", text: "先頭", target: { url: "/first" } },
+    { kind: "text", text: "予約A", target: { url: "/a" } },
+    { kind: "text", text: "予約B", target: { url: "/b" } },
+  ]);
+  const view = views[1];
+  key(view, "/");
+  const input = view.dom.querySelector<HTMLInputElement>(".cm-vim-panel input")!;
+  expect(input).toHaveFocus();
+  fireEvent.input(input, { target: { value: "予約" } });
+  fireEvent.keyDown(input, { key: "Enter", keyCode: 13 });
+  key(view, "n");
+  expect(controller.currentLine()?.text).toBe("予約B");
+  expect(navigate.mock.calls).toEqual([]);
+  key(view, "Enter");
+  expect(navigate.mock.calls).toEqual([["/b"]]);
+});
 
 describe("メニューと確認", () => {
   it("カーソルの行と番号で選んだ行を実行し、無い番号は知らせる", async () => {
@@ -420,6 +456,41 @@ describe("別画面へのジャンプ", () => {
     expect(view.state.doc.toString()).toBe("一\n二\n三");
     expect(view.state.doc.lineAt(view.state.selection.main.head).number).toBe(3);
   });
+  it("読み込み表示は主ウィンドウのフォーカスを受け取り、保存済みの位置とジャンプを本文へ渡す", async () => {
+    const url = "/conversations/c1";
+    const position = { line: 2, column: 0, topLine: 2 };
+    const controller = new BufferController({ url: "/issues/i1" });
+    controller.positions.setPosition(`${url}:main:main`, position);
+    controller.jumps.push({ url, window: "main", line: 1 });
+    const first = mount(controller, [{ kind: "text", text: "issue" }]);
+    controller.options.navigate = () =>
+      first.rerender(<Layout controller={controller} main={<Skeleton side="main" />} />);
+
+    await act(async () => key(first.views[1], "o", true));
+    expect(screen.getByRole("status", { name: "読み込み中" })).toContainElement(
+      document.activeElement as HTMLElement,
+    );
+    expect(controller.positions.position(`${url}:main:main`)).toEqual(position);
+    first.rerender(
+      <Layout
+        controller={controller}
+        main={
+          <Buffer
+            side="main"
+            lines={[
+              { kind: "text", text: "一" },
+              { kind: "text", text: "二" },
+              { kind: "text", text: "三" },
+            ]}
+            onReady={() => {}}
+          />
+        }
+      />,
+    );
+    expect(controller.currentLine()?.text).toBe("二");
+    expect(screen.getByRole("textbox", { name: "バッファ" })).toHaveFocus();
+    expect(controller.positions.position(`${url}:main:main`)).toEqual(position);
+  });
 });
 
 describe("バッファの検索から戻る", () => {
@@ -638,4 +709,257 @@ describe("保存した記法で動作を呼ぶ", () => {
     expect(run).toHaveBeenCalledTimes(1);
     expect(getCM(views[1])?.state.vim?.inputState.keyBuffer).toEqual([]);
   });
+});
+
+it("左のツリーでプロジェクトを開き、別の行へ移動してから Ctrl+o で戻ると開いた行に戻る", async () => {
+  window.history.replaceState(null, "", "/");
+  window.sessionStorage.clear();
+  const { store } = inboxFixture();
+  const navigation = createNavigation({ kind: "home" }, () => {});
+  const { controller, dispose } = createBrowserController(window, navigation.open);
+  const mounted = render(
+    <StrictMode>
+      <SWRConfig value={{ provider: () => new Map() }}>
+        <App
+          controller={controller}
+          navigation={navigation}
+          renderTree={(route) => <Tree store={store} route={route} />}
+          loadScreen={async (route) =>
+            route.kind === "home"
+              ? {
+                  kind: "ready",
+                  title: "一覧",
+                  fullWindow: true,
+                  content: <InboxPage store={store} controller={controller} />,
+                }
+              : {
+                  kind: "ready",
+                  title: "プロジェクト",
+                  fullWindow: true,
+                  content: (
+                    <ProjectPage
+                      store={store}
+                      id="p"
+                      controller={controller}
+                      withdraw={async () => {
+                        throw Error("not used");
+                      }}
+                    />
+                  ),
+                }
+          }
+        />
+      </SWRConfig>
+    </StrictMode>,
+  );
+  const currentLine = (view: EditorView) =>
+    view.state.doc.lineAt(view.state.selection.main.head).text;
+  try {
+    await act(async () => {});
+    expect(screen.getByRole("region", { name: "一覧" })).toBeVisible();
+    const tree = screen.getByRole("region", { name: "sukuna" });
+    await within(tree).findByText("shop-api", { exact: true, selector: ".cm-kind-heading" });
+    const view = EditorView.findFromDOM(tree.querySelector(".cm-editor")!)!;
+    const key = async (value: string, ctrlKey = false) => {
+      await act(async () => fireEvent.keyDown(view.contentDOM, { key: value, ctrlKey }));
+    };
+    act(() => {
+      view.focus();
+      const line = view.state.doc.line(2);
+      view.dispatch({ selection: { anchor: line.from } });
+    });
+    expect(currentLine(view)).toBe("shop-api");
+    await key("Enter");
+    expect(window.location.pathname).toBe("/projects/p");
+    expect(screen.getByRole("region", { name: "shop-api" })).toBeVisible();
+    act(() => {
+      view.focus();
+      const line = view.state.doc.line(3);
+      view.dispatch({ selection: { anchor: line.from } });
+    });
+    expect(currentLine(view)).toBe("  会話: 予約 API の壁打ち");
+    await key("o", true);
+    expect(window.location.pathname).toBe("/");
+    expect(screen.getByRole("region", { name: "一覧" })).toBeVisible();
+    expect(currentLine(view)).toBe("shop-api");
+    await key("Enter");
+    expect(screen.getByRole("region", { name: "shop-api" })).toBeVisible();
+    act(() => {
+      view.focus();
+      view.dispatch({ selection: { anchor: view.state.doc.line(3).from } });
+    });
+    await key("Enter");
+    expect(window.location.pathname).toBe("/conversations/c");
+    act(() => view.dispatch({ selection: { anchor: view.state.doc.line(2).from } }));
+    await key("o", true);
+    expect(window.location.pathname).toBe("/projects/p");
+    expect(currentLine(view)).toBe("  会話: 予約 API の壁打ち");
+  } finally {
+    await act(async () => {
+      mounted.unmount();
+      dispose();
+      store.dispose();
+    });
+  }
+}, 15000);
+
+it("開いたままの右の切り替え画面から別会話へ移動して、Ctrl+o で元の右の行へ戻る", async () => {
+  const path = "/conversations/c1";
+  window.history.replaceState(null, "", path);
+  window.sessionStorage.clear();
+  const navigation = createNavigation({ kind: "conversation", id: "c1" }, () => {});
+  const { controller, dispose } = createBrowserController(window, navigation.open);
+  const api = createConversationApi(async () =>
+    Response.json({
+      projects: [
+        {
+          id: "p",
+          name: "shop-api",
+          conversations: [
+            { id: "c1", title: "最初の会話" },
+            { id: "c2", title: "別の会話" },
+            { id: "c3", title: "三番目の会話" },
+          ],
+          issues: [],
+        },
+      ],
+    }),
+  );
+  const unregister = registerConversationSwitch(controller);
+  const mounted = render(
+    <StrictMode>
+      <SWRConfig value={{ provider: () => new Map() }}>
+        <App
+          controller={controller}
+          navigation={navigation}
+          loadScreen={async ({ id }) => ({
+            kind: "ready",
+            title: "会話 " + id,
+            content: (
+              <Buffer side="main" lines={[{ kind: "text", text: id ?? "" }]} onReady={() => {}} />
+            ),
+          })}
+          renderRight={(view) =>
+            view.view === "conversation-switch" ? (
+              <ConversationSwitch api={api} controller={controller} />
+            ) : null
+          }
+        />
+      </SWRConfig>
+    </StrictMode>,
+  );
+  const getEditor = (region: HTMLElement) =>
+    EditorView.findFromDOM(region.querySelector(".cm-editor")!)!;
+  const currentLine = (view: EditorView) =>
+    view.state.doc.lineAt(view.state.selection.main.head).text;
+  const key = async (view: EditorView, value: string, ctrlKey = false) => {
+    await act(async () => fireEvent.keyDown(view.contentDOM, { key: value, ctrlKey }));
+  };
+  const choose = (view: EditorView, text: string) => {
+    const element = within(
+      screen.getByRole("region", { name: "会話を始める・切り替える" }),
+    ).getByText(text, { exact: true });
+    act(() => {
+      view.focus();
+      view.dispatch({ selection: { anchor: view.posAtDOM(element) } });
+    });
+    expect(currentLine(view)).toBe(text);
+  };
+  try {
+    const main = getEditor(await screen.findByRole("region", { name: "会話 c1" }));
+    act(() => main.focus());
+    await key(main, " ");
+    await key(main, "n");
+    const right = await screen.findByRole("region", { name: "会話を始める・切り替える" });
+    await within(right).findByText("会話: 別の会話", { exact: true });
+    const view = getEditor(right);
+    choose(view, "会話: 別の会話");
+    await key(view, "Enter");
+    expect(window.location.pathname).toBe("/conversations/c2");
+    await screen.findByRole("region", { name: "会話 c2" });
+    expect(getEditor(screen.getByRole("region", { name: "会話を始める・切り替える" }))).toBe(view);
+    choose(view, "会話: 三番目の会話");
+    await key(view, "o", true);
+    expect(window.location.pathname).toBe(path);
+    await screen.findByRole("region", { name: "会話 c1" });
+    expect(currentLine(view)).toBe("会話: 別の会話");
+    await key(view, "Enter");
+    await screen.findByRole("region", { name: "会話 c2" });
+    choose(view, "会話: 三番目の会話");
+    await key(view, "Enter");
+    await screen.findByRole("region", { name: "会話 c3" });
+    choose(view, "会話: 最初の会話");
+    await key(view, "o", true);
+    expect(window.location.pathname).toBe("/conversations/c2");
+    expect(currentLine(view)).toBe("会話: 三番目の会話");
+  } finally {
+    mounted.unmount();
+    unregister();
+    dispose();
+  }
+}, 15000);
+
+it("Ctrl+o の遷移中に右の表示が置き換わると、別の表示へ履歴を適用しない", async () => {
+  const controller = new BufferController({ url: "/conversations/c1" });
+  const result = render(
+    <Layout
+      controller={controller}
+      main={<Buffer side="main" lines={[{ kind: "text", text: "本文" }]} onReady={() => {}} />}
+      right={
+        <Frame title="元の右" side="right">
+          <Buffer
+            viewName="original"
+            side="right"
+            lines={[
+              { kind: "text", text: "先頭" },
+              { kind: "text", text: "別の会話", target: { url: "/conversations/c2" } },
+            ]}
+            onReady={() => {}}
+          />
+        </Frame>
+      }
+    />,
+  );
+  const original = EditorView.findFromDOM(
+    screen.getByRole("region", { name: "元の右" }).querySelector(".cm-editor")!,
+  )!;
+  act(() => {
+    original.focus();
+    original.dispatch({ selection: { anchor: original.state.doc.line(2).from } });
+  });
+  key(original, "Enter");
+  expect(controller.options.url).toBe("/conversations/c2");
+  let finish = () => {};
+  const pending = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  controller.options.navigate = () => pending;
+  key(original, "o", true);
+  result.rerender(
+    <Layout
+      controller={controller}
+      main={<Skeleton side="main" />}
+      right={
+        <Frame title="別の右" side="right">
+          <Buffer
+            key="replacement"
+            viewName="replacement"
+            side="right"
+            lines={[
+              { kind: "text", text: "別の先頭" },
+              { kind: "text", text: "別の末尾" },
+            ]}
+            onReady={() => {}}
+          />
+        </Frame>
+      }
+    />,
+  );
+  await act(async () => finish());
+  const replacement = EditorView.findFromDOM(
+    screen.getByRole("region", { name: "別の右" }).querySelector(".cm-editor")!,
+  )!;
+  expect(controller.options.url).toBe("/conversations/c1");
+  expect(replacement.state.doc.toString()).toBe("別の先頭\n別の末尾");
+  expect(replacement.state.doc.lineAt(replacement.state.selection.main.head).text).toBe("別の先頭");
 });

@@ -64,9 +64,29 @@ test("API fixtureを使うUIブラウザ確認: キーだけで会話を始め�
     const path = new URL(request.url()).pathname;
     if (path === "/api/me" || path === "/api/health" || path === "/api/settings")
       return route.continue();
+    if (path === "/api/inbox")
+      return route.fulfill({
+        json: {
+          sections: [
+            { name: "decision", rows: [] },
+            { name: "instruction", rows: [] },
+            { name: "working", rows: [] },
+          ],
+        },
+      });
     if (path === "/api/projects")
       return route.fulfill({
-        json: { projects: [{ id: "ui-project", name: "shop-api", conversations: [], issues: [] }] },
+        json: {
+          projects: [
+            {
+              id: "ui-project",
+              name: "shop-api",
+              flowPaused: false,
+              conversations: [],
+              issues: [],
+            },
+          ],
+        },
       });
     if (path === "/api/conversations")
       return route.fulfill({ status: 201, json: { conversation: snapshot.conversation } });

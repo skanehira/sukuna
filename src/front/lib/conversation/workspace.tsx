@@ -1,5 +1,5 @@
 import { conversationActionHelp, conversationCommands } from "./keymap";
-import type { ScreenLoader } from "../../App";
+import type { ReadyScreen, ScreenLoader } from "../../App";
 import type { ServerMessage } from "../../../shared/ws";
 import type { RightView } from "../../buffer/right-window";
 import { listDeleteAction } from "../../components/lifecycle/ConversationList";
@@ -18,10 +18,11 @@ import { recapActions, recapCommands, recapItemActions } from "../recap/keymap";
 import type { RecapApi } from "../recap/api";
 import type { TabStorage } from "../recap/read-tracking";
 import { Realtime, type RealtimeSocket } from "../realtime";
-import { parseRoute } from "../routes";
+import { parseRoute, requestsConversationTail } from "../routes";
 import { ConversationApiError } from "./api";
 import { ConversationSession, type ConversationEnvironment } from "./session";
 import type { ConversationApi } from "./types";
+import type { InboxStore } from "../inbox-store";
 
 export function createConversationWorkspace(
   api: ConversationApi,
@@ -32,13 +33,16 @@ export function createConversationWorkspace(
     recap,
     lifecycle: lifecycleOptions,
     settingsChanged,
+    inbox,
   }: {
     recap?: { api: RecapApi; storage: TabStorage };
     lifecycle?: LifecycleOptions;
     settingsChanged?: () => void;
+    inbox?: Pick<InboxStore, "reload" | "receive">;
   } = {},
 ) {
   const sessions = new Map<string, ConversationSession>();
+  const loadedSessions = new WeakSet<ConversationSession>();
   const active = new Set<ConversationSession>();
   const shown = new Map<string, number>();
   const listeners = new Set<() => void>();
@@ -49,6 +53,7 @@ export function createConversationWorkspace(
   const reload = (topic: string) => {
     if (topic === "app") settingsChanged?.();
     changes.get(topic)?.forEach((receive) => receive());
+    if (topic === "inbox") void inbox?.reload();
     for (const session of active)
       if (topic === `conversation:${session.id}`)
         void session
@@ -71,6 +76,7 @@ export function createConversationWorkspace(
     reload,
     gap: reload,
     message: (message) => {
+      inbox?.receive(message);
       if (message.topic === "app" && message.type === "settings_changed") settingsChanged?.();
       active.forEach((session) => session.receive(message));
       if (message.type !== "resync")
@@ -140,6 +146,19 @@ export function createConversationWorkspace(
       unshow();
     };
   };
+  const conversationScreen = (session: ConversationSession, openAtTail: boolean): ReadyScreen => ({
+    kind: "ready",
+    title: `会話: ${session.snapshot().data!.conversation.title}`,
+    fullWindow: true,
+    content: (
+      <ConversationPage
+        key={session.id}
+        session={session}
+        subscribe={subscribe}
+        openAtTail={openAtTail}
+      />
+    ),
+  });
   const loadScreen: ScreenLoader = async (route) => {
     if (
       currentSession &&
@@ -179,30 +198,24 @@ export function createConversationWorkspace(
         );
       sessions.set(route.id, session);
     }
+    const openAtTail = requestsConversationTail(route);
     try {
       currentSession = session;
       session.recap?.visibility(visible);
       await session.load();
-      return {
-        kind: "ready",
-        title: `会話: ${session.snapshot().data!.conversation.title}`,
-        fullWindow: true,
-        content: (
-          <ConversationPage
-            key={route.id}
-            session={session}
-            openAtTail={new URLSearchParams(route.query).get("tail") === "1"}
-            subscribe={subscribe}
-          />
-        ),
-      };
+      loadedSessions.add(session);
+      return conversationScreen(session, openAtTail);
     } catch (error) {
+      const code = error instanceof ConversationApiError ? error.code : "network_error";
       return {
         kind: "error",
         error: {
-          code: error instanceof ConversationApiError ? error.code : "network_error",
+          code,
           message: error instanceof Error ? error.message : "会話を取得できませんでした",
         },
+        ...(code === "network_error" && openAtTail && loadedSessions.has(session)
+          ? { cached: conversationScreen(session, false) }
+          : {}),
       };
     }
   };
@@ -241,6 +254,7 @@ export function createConversationWorkspace(
         ...(recap ? Object.values(recapCommands) : []),
       ]);
       const unsubscribeApp = settingsChanged ? realtime.subscribe("app") : undefined;
+      const unsubscribeInbox = inbox ? realtime.subscribe("inbox") : undefined;
       realtime.start();
       return () => {
         unregister();
@@ -248,6 +262,7 @@ export function createConversationWorkspace(
         removeActionHelp();
         removeCommandHelp();
         unsubscribeApp?.();
+        unsubscribeInbox?.();
         realtime.stop();
       };
     },

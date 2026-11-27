@@ -40,7 +40,7 @@ export function ConversationSwitch({
             text: error ? "会話の一覧を取得できませんでした" : "読み込み中",
           },
         ];
-    handle.current?.replaceAll(lines);
+    handle.current?.replaceAll(lines, { ready: data !== undefined });
     const removers =
       data?.flatMap((project) =>
         [false, ...(project.id === currentProject ? [true] : [])].map((worktree) =>
@@ -68,6 +68,7 @@ export function ConversationSwitch({
   return (
     <Frame title="会話を始める・切り替える" side="right">
       <Buffer
+        ready={false}
         side="right"
         viewName="conversation-switch"
         lines={[]}

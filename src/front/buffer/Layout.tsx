@@ -43,7 +43,9 @@ export function Layout({
     <BufferControllerContext value={controller}>
       <div
         className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-surface"
+        onPointerDownCapture={controller.recordInteraction}
         onKeyDownCapture={(event) => {
+          controller.recordInteraction();
           if (controller.answer(event.nativeEvent)) {
             event.preventDefault();
             event.stopPropagation();

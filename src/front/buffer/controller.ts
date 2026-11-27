@@ -46,8 +46,11 @@ export type WindowHandle = {
   view: string;
   name: string;
   posKey: string;
-  temporary?: boolean;
   url: string;
+  opening?: number;
+  temporary?: boolean;
+  identity?: object;
+  ready?(): boolean;
   scrollCursor(): void;
 };
 export type Mode =
@@ -82,6 +85,9 @@ export type ControllerOptions = {
   clipboard?: ClipboardPort;
   notify?(message: string, kind: "error" | "info"): void;
 };
+type WindowRegistration = { handle: WindowHandle; initialized: boolean };
+type PendingJump = { opening: number; jump: Jump; target?: object; interaction: number };
+
 export class BufferController {
   readonly actions = new ActionRegistry();
   readonly commands = new CommandRegistry();
@@ -92,7 +98,7 @@ export class BufferController {
   rightClosed = false;
   private state: BufferSnapshot;
   private listeners = new Set<() => void>();
-  private windows = new Map<string, WindowHandle>();
+  private windows = new Map<string, WindowRegistration>();
   private configured: KeymapEntry[] = [];
   private bindings = defaultKeymap;
   private keymapVersion = 0;
@@ -109,7 +115,9 @@ export class BufferController {
   private origin = "main";
   private promptOrigin = "main";
   private promptDraft = "";
-  private restoreJump: Jump | null = null;
+  private opening = 0;
+  private interaction = 0;
+  private restoration: PendingJump | null = null;
   constructor(options: ControllerOptions = {}) {
     this.options = { ...options };
     this.positions = options.positions ?? new PositionStore();
@@ -180,9 +188,15 @@ export class BufferController {
     };
   };
   update(patch: Partial<BufferSnapshot>): void {
+    const before = this.state.command === null ? this.state.active : "command";
     this.state = { ...this.state, ...patch, version: this.state.version + 1 };
+    const after = this.state.command === null ? this.state.active : "command";
+    if (before !== after) this.recordInteraction();
     this.listeners.forEach((listener) => listener());
   }
+  recordInteraction = (): void => {
+    this.interaction += 1;
+  };
   entries(): KeymapEntry[] {
     return this.bindings;
   }
@@ -231,16 +245,19 @@ export class BufferController {
     this.options.notify?.(message, kind);
     this.update({ notice: { message, kind } });
   };
-  registerWindow(side: string, handle: WindowHandle): () => void {
-    this.windows.set(side, handle);
+  private window(side: string): WindowHandle | undefined {
+    return this.windows.get(side)?.handle;
+  }
+  registerWindow(side: string, handle: WindowHandle, initialize?: () => void): () => void {
+    const registration = { handle, initialized: false };
+    this.windows.set(side, registration);
     if (!handle.temporary) {
       const stored = this.positions.position(handle.posKey);
       if (stored) handle.place(stored);
-      if (this.restoreJump?.window === side && this.restoreJump.url === handle.url) {
-        this.placeJump(this.restoreJump);
-        this.restoreJump = null;
-      }
     }
+    initialize?.();
+    registration.initialized = true;
+    this.restoreWindow(side);
     if (this.state.active === side) this.focus(side);
     this.update({});
     return () => {
@@ -248,8 +265,11 @@ export class BufferController {
         this.positions.setPosition(handle.posKey, handle.position());
         this.positions.flush();
       }
-      if (this.windows.get(side) === handle) this.windows.delete(side);
+      if (this.windows.get(side) === registration) this.windows.delete(side);
     };
+  }
+  windowChanged(side: string, handle: WindowHandle): void {
+    if (this.window(side) === handle) this.restoreWindow(side);
   }
   registerPromptFocus(focus: () => void): () => void {
     this.promptFocus = focus;
@@ -262,7 +282,7 @@ export class BufferController {
       if (!this.state.prompt) return;
       this.promptFocus?.();
     } else {
-      const target = this.windows.get(side);
+      const target = this.window(side);
       if (!target) return;
       target.focus();
     }
@@ -277,17 +297,17 @@ export class BufferController {
   windowName(): string {
     return this.state.active === "prompt"
       ? (this.state.prompt?.label ?? "入力欄")
-      : (this.windows.get(this.state.active)?.name ?? this.state.active);
+      : (this.window(this.state.active)?.name ?? this.state.active);
   }
   currentLine(side = this.state.active): LineInfo | undefined {
-    const window = this.windows.get(side);
+    const window = this.window(side);
     return window?.lines()[window.position().line];
   }
   windowPosition(side: string): SavedPosition | undefined {
-    return this.windows.get(side)?.position();
+    return this.window(side)?.position();
   }
   context(side = this.state.active): ActionContext {
-    const window = this.windows.get(side);
+    const window = this.window(side);
     return { window: side, view: window?.view ?? "", line: window?.position().line ?? 0 };
   }
   async run(name: string, context = this.context()): Promise<void> {
@@ -346,7 +366,7 @@ export class BufferController {
   }
   open(): void {
     const side = this.state.active;
-    const handle = this.windows.get(side);
+    const handle = this.window(side);
     if (!handle || this.pending.has(side)) return;
     const lines = handle.lines();
     const number = this.state.number;
@@ -381,10 +401,7 @@ export class BufferController {
     return this.pending.has(side);
   }
   numberHint(): Hint[] {
-    const chosen = menuAt(
-      this.windows.get(this.state.active)?.lines() ?? [],
-      Number(this.state.number),
-    );
+    const chosen = menuAt(this.window(this.state.active)?.lines() ?? [], Number(this.state.number));
     return [
       [
         `${this.state.number} Enter`,
@@ -421,7 +438,7 @@ export class BufferController {
         ["Esc", "やめる"],
       ];
     if (this.state.number) return this.numberHint();
-    const handle = this.windows.get(this.state.active);
+    const handle = this.window(this.state.active);
     const lines = handle?.lines() ?? [];
     const line = lines[handle?.position().line ?? 0];
     if (line?.kind === "menu" && line.action?.startsWith("conversation.choice."))
@@ -493,8 +510,7 @@ export class BufferController {
         commands: this.commands,
         notify: this.notify,
         quit: () => (this.right.current ? this.closeRight() : this.back()),
-        jump: (line) =>
-          this.windows.get(this.state.active)?.place({ line, column: 0, topLine: line }),
+        jump: (line) => this.window(this.state.active)?.place({ line, column: 0, topLine: line }),
         save: (entry) => this.proposeKeymap(entry, this.context(this.origin)),
       });
     } catch (error) {
@@ -601,7 +617,7 @@ export class BufferController {
       mode: "INSERT",
       active: "prompt",
     });
-    for (const handle of this.windows.values()) handle.scrollCursor();
+    for (const { handle } of this.windows.values()) handle.scrollCursor();
   }
   closePrompt(text = this.promptDraft): void {
     const spec = this.state.prompt;
@@ -637,6 +653,7 @@ export class BufferController {
     }
   }
   openRight(view: RightView): void {
+    this.cancelWindowRestoration("right");
     this.rightClosed = false;
     this.right.open(view);
     this.positions.setRight(this.right.state());
@@ -644,21 +661,30 @@ export class BufferController {
     this.focus("right");
   }
   closeRight(): void {
+    this.cancelWindowRestoration("right");
     this.rightClosed = true;
     this.right.close();
     this.positions.setRight(this.right.state());
     this.update({});
-    this.focus("main");
+    this.focusMain();
+  }
+  private focusMain(): void {
+    if (this.window("main")) this.focus("main");
+    else {
+      this.positions.setActive("main");
+      this.update({ active: "main" });
+    }
   }
   private previousRight(): void {
     if (this.state.active !== "right") return;
+    this.cancelWindowRestoration("right");
     this.right.back();
     this.positions.setRight(this.right.state());
     this.update({});
     if (!this.right.current) {
       this.rightClosed = true;
       this.update({});
-      this.focus("main");
+      this.focusMain();
     }
   }
   private back(): void {
@@ -668,21 +694,27 @@ export class BufferController {
     }
     if (!this.options.back?.()) this.notify("これより前の画面はありません");
   }
-  changeScreen(url: string): void {
+  screenOpening(): number {
+    return this.opening;
+  }
+  changeScreen(url: string, jump: Jump | null = null): void {
     if (url !== this.options.url) {
       this.commandRevision++;
       this.commandRetry = null;
       this.closePrompt();
       if (this.state.confirmation) this.update({ confirmation: null });
     }
+    this.opening += 1;
     this.options.url = url;
+    this.restoration = jump ? this.pendingJump(jump) : null;
   }
   navigate(url: string): void | Promise<void> {
     this.changeScreen(url);
     return this.options.navigate?.(url);
   }
   pushJump(side: string, line: number): void {
-    const handle = this.windows.get(side);
+    const handle = this.window(side);
+    if (handle?.temporary) return;
     const info = handle?.lines()[line];
     this.jumps.push({
       url: this.options.url ?? "/",
@@ -691,23 +723,56 @@ export class BufferController {
       ...(info?.id ? { id: info.id } : {}),
     });
   }
-  private placeJump(jump: Jump): void {
-    const handle = this.windows.get(jump.window);
-    if (!handle || handle.temporary || handle.url !== jump.url) {
-      this.restoreJump = jump;
+  private pendingJump(jump: Jump): PendingJump {
+    const handle = jump.window === "main" ? undefined : this.window(jump.window);
+    return {
+      opening: this.opening,
+      jump,
+      target: handle?.identity ?? handle,
+      interaction: this.interaction,
+    };
+  }
+  private cancelWindowRestoration(side: string): void {
+    if (this.restoration?.jump.window === side) this.restoration = null;
+  }
+  private restoreWindow(side: string): void {
+    const pending = this.restoration;
+    const registration = this.windows.get(side);
+    if (!pending || !registration) return;
+    const { handle, initialized } = registration;
+    const { jump, opening, target } = pending;
+    if (
+      opening !== this.opening ||
+      !initialized ||
+      handle.temporary ||
+      handle.ready?.() === false ||
+      (handle.opening !== undefined && handle.opening !== opening) ||
+      jump.window !== side ||
+      (target !== undefined ? target !== (handle.identity ?? handle) : jump.url !== handle.url)
+    )
       return;
-    }
+    this.restoration = null;
     const found = jump.id ? handle.lines().findIndex((line) => line.id === jump.id) : -1;
+    if (pending.interaction === this.interaction) this.focus(side);
     handle.place({ line: found >= 0 ? found : jump.line, column: 0, topLine: jump.line });
-    this.focus(jump.window);
   }
   async jumpBack(): Promise<void> {
+    let opening = this.opening;
+    let pending: PendingJump | null = null;
     await this.jumps.back(this.options.url ?? "/", {
-      open: async (url) => {
-        await this.navigate(url);
+      open: (url, jump) => {
+        this.changeScreen(url, jump);
+        opening = this.opening;
+        pending = this.restoration;
+        return this.options.navigate?.(url);
       },
-      place: (jump) => this.placeJump(jump),
+      place: (jump) => {
+        if (this.opening !== opening || (pending !== null && this.restoration !== pending)) return;
+        if (pending === null) this.restoration = this.pendingJump(jump);
+        this.restoreWindow(jump.window);
+      },
     });
   }
 }
 export const BufferControllerContext = createContext<BufferController | null>(null);
+export const ScreenOpeningContext = createContext<number | undefined>(undefined);

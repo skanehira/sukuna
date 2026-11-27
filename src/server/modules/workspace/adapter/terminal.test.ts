@@ -18,7 +18,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node-pty";
-import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { WebSocket } from "ws";
 import {
   terminalOpenedSchema,
@@ -81,6 +81,7 @@ describe("ターミナル API と WebSocket", () => {
   let server: ReturnType<typeof serve>;
   let baseUrl: string;
   let sessions: ReturnType<typeof createPtySessions>;
+  let terminalPid: number;
   let clients: WebSocket[];
   let rawOutput: string[];
   let rawListeners: Set<(data: string) => void>;
@@ -186,6 +187,7 @@ describe("ターミナル API と WebSocket", () => {
       env: { HOME: root, PATH: "/usr/bin:/bin", SHELL: "/bin/sh", SUKUNA_TEST: "private-fixture" },
       spawn: (...args) => {
         const pty = spawn(...args);
+        terminalPid = pty.pid;
         pty.onData((data) => {
           rawOutput.push(data);
           for (const listener of rawListeners) listener(data);
@@ -638,6 +640,51 @@ describe("ターミナル API と WebSocket", () => {
       signal: 9,
     });
   });
+
+  it.each([
+    { exits: true, status: 200 },
+    { exits: false, status: 500 },
+  ])(
+    "停止シグナルが EPERM のときに端末が終了するかで削除結果を決める ($exits)",
+    async ({ exits, status }) => {
+      const client = connect(await openId());
+      await client.connected;
+      client.send({ type: "input", data: "printf '\\n%s%s\\n' ready- to-close\r" });
+      let output = "";
+      await client.wait(
+        (frame) => frame.type === "output" && (output += frame.data).includes("ready-to-close"),
+      );
+
+      const kill = process.kill.bind(process);
+      const signal = vi.spyOn(process, "kill").mockImplementation((target, name) => {
+        if (target !== -terminalPid || name !== "SIGSTOP") return kill(target, name);
+        if (exits) kill(target, "SIGKILL");
+        throw Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+      });
+      try {
+        const deleted = await request("/api/worktrees/w", "DELETE");
+        expect(signal).toHaveBeenCalledWith(-terminalPid, "SIGSTOP");
+        expect(deleted.status).toBe(status);
+        if (exits) {
+          expect(await deleted.json()).toEqual({ removedBranch: false, movedConversationIds: [] });
+          expect(await client.wait(({ type }) => type === "exit")).toEqual({
+            type: "exit",
+            code: expect.any(Number),
+            signal: 9,
+          });
+          expect((await open()).status).toBe(404);
+        } else {
+          expect(await deleted.json()).toEqual({
+            error: { code: "internal", message: "worktree の操作に失敗しました" },
+          });
+          expect(kill(terminalPid, 0)).toBe(true);
+        }
+      } finally {
+        signal.mockRestore();
+      }
+    },
+    10_000,
+  );
 
   it.each([
     {
