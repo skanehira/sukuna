@@ -242,3 +242,41 @@ export function createWorktreeGit(git: GitRunner, gh: GhRunner): WorktreeGitPort
     },
   };
 }
+
+import type { PrGitPort } from "../../flow/domain/pr-ports";
+import { parsePrDiff } from "../../flow/domain/pr-view";
+export function createPrGitCli(runner: GitRunner = createGitCli()): PrGitPort {
+  return {
+    async read(cwd, branch, baseBranch) {
+      const head = await runner.run(["rev-parse", "--verify", `refs/heads/${branch}^{commit}`], {
+        cwd,
+      });
+      if (head.exitCode !== 0)
+        return err({
+          code: "conflict",
+          message: "実装のブランチが見つかりません。読み直してください。",
+        });
+      const diff = await runner.run(
+        [
+          "diff",
+          "--no-ext-diff",
+          "--no-color",
+          `refs/heads/${baseBranch}...${head.stdout.trim()}`,
+          "--",
+        ],
+        { cwd },
+      );
+      if (diff.exitCode !== 0)
+        return err({
+          code: "internal",
+          message: "実装のブランチの差分を取得できませんでした。git の状態を確かめてください。",
+        });
+      return ok({
+        branch,
+        baseBranch,
+        headSha: head.stdout.trim(),
+        files: parsePrDiff(diff.stdout),
+      });
+    },
+  };
+}

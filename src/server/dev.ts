@@ -4,6 +4,7 @@ import { createApp } from "./app";
 import { buildId } from "./build-id";
 import { createIssueDependencies } from "./modules/issue/adapter/dependencies";
 import {
+  getPrDependencies,
   getDatabase,
   getRunnerLink,
   getWsHub,
@@ -22,6 +23,7 @@ export default createApp({
   build: buildId,
   workspace,
   inbox: { repository: createInboxRepository(() => getDatabase().db), resetTime: formatResetTime },
+  pr: getPrDependencies(),
   progress: getProgressDependencies(),
   conversations: getConversationDependencies(),
   stock: createStockDependencies({

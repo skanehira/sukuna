@@ -24,6 +24,9 @@ export class SqliteConversationStore implements ConversationStore {
   transaction<T>(operation: () => T): T {
     return this.withReservations([], () => this.sqlite.transaction(operation).immediate());
   }
+  withWorktreeReservation<T>(operation: (reservation: WorktreeActivityReservation) => T): T {
+    return this.withReservations([], () => operation(this.reservation!));
+  }
   private withReservations<T>(ids: string[], operation: () => T): T {
     if (this.reservation) {
       this.reservation.acquire(ids);

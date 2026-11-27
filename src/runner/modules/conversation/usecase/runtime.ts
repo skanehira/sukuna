@@ -355,13 +355,13 @@ export class ConversationRuntime {
               id,
               [...(acceptance?.events ?? []), event],
               () => {
+                acceptance?.before();
                 try {
                   execution = this.execution(c, worktreeId);
                 } catch (error) {
                   openingError = { cause: error };
                   throw error;
                 }
-                acceptance?.before();
                 if (includeQueued)
                   this.store.dequeue(
                     id,
