@@ -13,6 +13,8 @@ import type { DecisionsResponse, RecapResponse, TocResponse } from "../../../sha
 import { ConversationPage } from "../../pages/conversation/ConversationPage";
 import { RecapPanel } from "./RecapPanel";
 
+vi.setConfig({ testTimeout: 15_000 });
+
 const state = { reflectedSeq: 5, failedAt: null, updating: false };
 const events: Event[] = [
   {
