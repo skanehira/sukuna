@@ -255,7 +255,8 @@ node dist/server/install.js update
 - 保存する行の `context` は 4 つ (`normal`・`visual`・`prompt`・`terminal`) である。コマンドで作るのは、`:map` と `:unmap` の `normal` の行と、`:tmap` と `:tunmap` の `terminal` の行である
 - ターミナルの入力から Normal へ戻るキー (既定 `Ctrl+]`、動作 `terminal.normal`) も割り当ての項目で、`context` が `terminal` の行で保存する (BR-061)
 - コマンドの書き方と読み取り (場所の指定、キーの書き方、動作の名前の確かめ) は `features/buffer-ui.md` が行う。読めないときのお知らせも同書に従う
-- 画面は、新しい行を今の `entries` の末尾に足して、`PUT /api/settings/keymap` で丸ごと送る。200 を受けたらすぐに今の割り当てを作り直す。新しいキーはその場で効き、ヘルプも作り直す
+- 画面は最新の `entries` の末尾に変更を足し、`PUT /api/settings/keymap` で丸ごと送る。画面は 200 の応答で割り当てとヘルプを更新する
+- コマンドで変更するときは、画面が取得時の `X-Keymap-Revision` を `If-Match` で送る。保存前に別の端末が変更した場合は読み直し、重なりを判定し直す
 - サーバーは保存したら、配信の `app` の `settings_changed` を全部の接続へ送る (`features/runtime.md`「配信」)。ほかのタブと端末は `GET /api/settings` を読み直し、割り当てを作り直す (BR-071)
 - 2 つの端末で同時に変えたときは、後から保存したほうを残す
 
@@ -263,8 +264,8 @@ node dist/server/install.js update
 
 - 重なりは、`features/buffer-ui.md` の重なりの判定で求める。同じ `context` で、キーが同じか、一方がもう一方の先頭に当たる割り当て (例: `<Space>s` と `<Space>sa`) が当たる
 - 重なりがあれば、保存の前に確認の行を出す。文は「<キー> は「<動作>」に使われています。新しい割り当てを使いますか? (y: 新しい割り当て / n: 今のまま)」とする。重なりが複数なら「、」で並べる (UC-015 E2)
-- y なら、重なった割り当てを外す行と新しい行を合わせて保存する。n なら何も変えない
-- サーバーは `entries` の形だけを確かめ、重なりは確かめない。動作の一覧は画面にあり、重なりの確認は画面が保存の前に行うためである
+- y なら、画面は最新の割り当てを読み直す。未承認の重なりがあれば確認を出し直す。承認済みなら、外す行と新しい行を合わせて保存する。n なら何も変えない
+- 動作の一覧を持つ画面が重なりを判定する。サーバーは `entries` の形と、指定された版が現在の値と一致することを確かめる
 
 ### ヘルプの画面
 
@@ -317,7 +318,7 @@ BR-072 は、次の作りで満たす。
 
 ### GET /api/settings
 
-アプリの設定を返す。
+アプリの設定を返す。応答ヘッダーの `X-Keymap-Revision` は、本文の `keymap` の版を表す。
 
 ```json
 {
@@ -352,8 +353,10 @@ BR-072 は、次の作りで満たす。
 { "entries": [ { "keys": "<Space>T", "context": "normal", "to": { "action": "timeline.open" } } ] }
 ```
 
-- 応答: 200 で、保存した `keymap` (`{ "version": 1, "entries": [...] }`) を返す
-- 失敗: 行の形が `features/buffer-ui.md` の `KeymapEntry` に合わないか、`keys` が空なら 400 `invalid_input`
+- `If-Match` を指定する場合は、`GET /api/settings` の `X-Keymap-Revision` をそのまま使う。サーバーは SQLite の同じトランザクションで版を照合してから保存する
+- 200 で、保存した `keymap` (`{ "version": 1, "entries": [...] }`) を返す。ヘッダーを省いた場合は、渡された `entries` で置き換える
+- 行が `features/buffer-ui.md` の `KeymapEntry` に合わないか、`keys` が空なら 400 `invalid_input` を返す
+- 指定した版が現在の版と異なるときは 412 `keymap_changed` を返し、保存と配信を見送る
 
 ### POST /api/backup/restore
 
