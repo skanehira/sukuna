@@ -1,3 +1,7 @@
+import { createImageFiles } from "../../../../runner/modules/conversation/adapter/image-files";
+import type { AgentPort } from "../../../../runner/modules/conversation/domain/agent-port";
+import type { Clock } from "../../../../runner/modules/conversation/domain/clock";
+import { createWorkspaceAgent, WorkspaceClock } from "./worktree-conversation-test-support";
 import { openDatabase } from "../../../../shared/db/open";
 import { createWorktreeActivity } from "../../../../shared/workspace/sqlite-worktree-activity";
 import { WorktreeActivityBusy } from "../../../../shared/workspace/worktree-activity";
@@ -790,6 +794,7 @@ describe("worktree API", () => {
       const runtime = new ConversationRuntime({
         store: new SqliteConversationStore(runnerDb.sqlite),
         agent: new ScriptedAgent({ rules: [], fallback: [{ hold: true }] }),
+        images: createImageFiles(home),
         clock: systemClock,
         id: () => "new-conversation",
         uuid: () => "new-session",
@@ -890,14 +895,20 @@ describe("worktree API", () => {
     },
   );
 
-  function ipcRunner() {
+  function ipcRunner(
+    agent: AgentPort & Pick<ScriptedAgent, "opened"> = new ScriptedAgent({
+      rules: [],
+      fallback: [{ hold: true }],
+    }),
+    clock: Clock = systemClock,
+  ) {
     const runnerDb = openDatabase(home);
-    const agent = new ScriptedAgent({ rules: [], fallback: [{ hold: true }] });
     let nextId = 0;
     const runtime = new ConversationRuntime({
       store: new SqliteConversationStore(runnerDb.sqlite),
       agent,
-      clock: systemClock,
+      images: createImageFiles(home),
+      clock,
       id: () => `new-c-${++nextId}`,
       uuid: () => "new-session",
       log: () => {},
@@ -908,6 +919,17 @@ describe("worktree API", () => {
       runnerDb,
       agent,
       runtime,
+      async until(predicate: () => boolean) {
+        if (predicate()) return;
+        await new Promise<void>((resolve) => {
+          const off = runtime.subscribe(() => {
+            if (predicate()) {
+              off();
+              resolve();
+            }
+          });
+        });
+      },
       async post(path: string, body: unknown) {
         const response = await ipc.request(path, {
           method: "POST",
@@ -922,6 +944,333 @@ describe("worktree API", () => {
       },
     };
   }
+
+  it.each(
+    (["scripted", "sdk"] as const).flatMap((backend) =>
+      ["success", "stopped", "queue", "failed", "usage", "timer", "keep", "released"].map(
+        (mode) => ({ backend, mode }),
+      ),
+    ),
+  )(
+    "$backend は worktree 削除後の $mode を現在の作業場所と同じセッションで実行する",
+    async ({ backend, mode }) => {
+      const path = add("cached-session");
+      record("w", path, "cached-session");
+      const observed = createWorkspaceAgent(backend);
+      const clock = new WorkspaceClock();
+      const runner = ipcRunner(observed.agent, clock);
+      try {
+        expect(
+          await runner.post("/conversations", {
+            project_id: "p",
+            kind: "chat",
+            cwd: path,
+            worktree_id: "w",
+            title: "続きの作業",
+          }),
+        ).toEqual({ status: 200, body: { conversation_id: "new-c-1" } });
+        let client = 0;
+        const send = (text: string, images: string[] = []) =>
+          runner.post("/conversations/new-c-1/messages", {
+            text,
+            images,
+            interrupt: false,
+            client_id: `input-${++client}`,
+            origin: "developer",
+          });
+        const first =
+          mode === "stopped" || mode === "queue"
+            ? "first-hold"
+            : mode === "failed"
+              ? "first-failed"
+              : mode === "usage" || mode === "timer"
+                ? "first-usage"
+                : "first-success";
+        expect(await send(first)).toEqual({ status: 200, body: { result: "delivered", seq: 1 } });
+        await runner.until(() =>
+          runner.runtime.store.events("new-c-1").some((event) => event.type === "tool_result"),
+        );
+        const initialTool = runner.runtime.store
+          .events("new-c-1")
+          .find((event) => event.type === "tool_result");
+        expect(initialTool?.payload).toEqual({
+          tool_use_id: expect.any(String),
+          content: `${path}\n`,
+          is_error: false,
+          bytes: Buffer.byteLength(`${path}\n`),
+          truncated: false,
+        });
+        const image = Buffer.from([137, 80, 78, 71]);
+        const images = join(home, "images", "new-c-1");
+        mkdirSync(images, { recursive: true });
+        writeFileSync(join(images, "one.png"), image);
+        if (first === "first-hold") {
+          const busy = await request("/api/worktrees/w", "DELETE");
+          expect(busy.status).toBe(409);
+          if (mode === "queue")
+            expect(await send("queued", ["one"])).toEqual({
+              status: 200,
+              body: { result: "queued", queued_id: "new-c-2" },
+            });
+          expect((await runner.post("/conversations/new-c-1/stop", {})).status).toBe(200);
+        } else
+          await runner.until(() => runner.runtime.store.get("new-c-1")?.runState !== "working");
+        const sessionId = runner.runtime.store.get("new-c-1")?.sessionId;
+        expect(sessionId).toBe("new-session");
+        if (mode === "released")
+          expect((await runner.post("/conversations/new-c-1/release", {})).status).toBe(200);
+        if (mode !== "keep") {
+          const removed = await request("/api/worktrees/w", "DELETE");
+          expect({ status: removed.status, body: await removed.json() }).toEqual({
+            status: 200,
+            body: { removedBranch: false, movedConversationIds: ["new-c-1"] },
+          });
+          expect(existsSync(path)).toBe(false);
+        }
+        if (mode === "timer") {
+          expect(clock.timers.size).toBe(1);
+          await clock.advance(69000);
+        } else if (mode === "usage" || mode === "failed") {
+          expect((await runner.post("/conversations/new-c-1/resume", {})).status).toBe(200);
+        } else if (mode === "queue") {
+          expect((await runner.post("/conversations/new-c-1/queue/deliver", {})).status).toBe(200);
+        } else expect((await send("again", ["one"])).status).toBe(200);
+        await runner.until(() => runner.runtime.store.get("new-c-1")?.runState !== "working");
+        const target = mode === "keep" ? path : cwd;
+        const results = runner.runtime.store
+          .events("new-c-1")
+          .filter((event) => event.type === "tool_result");
+        expect(results.map((event) => event.payload)).toEqual([
+          {
+            tool_use_id: expect.any(String),
+            content: `${path}\n`,
+            is_error: false,
+            bytes: Buffer.byteLength(`${path}\n`),
+            truncated: false,
+          },
+          {
+            tool_use_id: expect.any(String),
+            content: `${target}\n`,
+            is_error: false,
+            bytes: Buffer.byteLength(`${target}\n`),
+            truncated: false,
+          },
+        ]);
+        expect(
+          observed.opened.map((params) => ({
+            cwd: params.cwd,
+            resume: params.resume,
+            sessionId: params.sessionId,
+          })),
+        ).toEqual([
+          { cwd: path, resume: false, sessionId },
+          ...(mode === "keep" ? [] : [{ cwd: target, resume: true, sessionId }]),
+        ]);
+        expect({
+          queue: runner.runtime.store.queue("new-c-1"),
+          timers: clock.timers.size,
+          sessionId: runner.runtime.store.get("new-c-1")?.sessionId,
+        }).toEqual({ queue: [], timers: 0, sessionId });
+        if (!["usage", "failed", "timer"].includes(mode))
+          expect(observed.delivered.at(-1)).toEqual({
+            text: mode === "queue" ? "queued" : "again",
+            images: [{ data: image, mediaType: "image/png" }],
+          });
+      } finally {
+        await runner.close();
+      }
+    },
+  );
+
+  it.each(
+    (["scripted", "sdk"] as const).flatMap((backend) =>
+      ["same-path-new-id", "same-path-cwd-only", "move-while-closing", "remove-while-closing"].map(
+        (change) => ({
+          backend,
+          change,
+        }),
+      ),
+    ),
+  )("$backend は実行の終了待ちの後に作業場所を確かめ直す: $change", async ({ backend, change }) => {
+    const path = add("close-target");
+    record("w", path, "close-target");
+    const observed = createWorkspaceAgent(backend);
+    const runner = ipcRunner(observed.agent, new WorkspaceClock());
+    let finishClose: (() => void) | undefined;
+    let didClose: () => void;
+    const closing = new Promise<void>((resolve) => {
+      didClose = resolve;
+    });
+    observed.delayClose((finish) => {
+      finishClose = finish;
+      didClose();
+    });
+    const relocate = (path: string, worktreeId: string) =>
+      createWorktreeActivity(runner.runnerDb.sqlite.name).run((reservation) => {
+        reservation.acquire([worktreeId]);
+        runner.runnerDb.sqlite
+          .transaction(() => {
+            runner.runnerDb.sqlite
+              .prepare("UPDATE conversations SET cwd=?,worktree_id=? WHERE id='new-c-1' AND cwd=?")
+              .run(path, change === "same-path-cwd-only" ? null : worktreeId, cwd);
+          })
+          .immediate();
+      });
+    try {
+      expect(
+        (
+          await runner.post("/conversations", {
+            project_id: "p",
+            kind: "chat",
+            cwd: path,
+            worktree_id: change === "same-path-cwd-only" ? null : "w",
+            title: "終了待ち",
+          })
+        ).status,
+      ).toBe(200);
+      const send = (text: string, images: string[] = []) =>
+        runner.post("/conversations/new-c-1/messages", {
+          text,
+          images,
+          interrupt: false,
+          client_id: text,
+          origin: "developer",
+        });
+      expect((await send("first-hold")).status).toBe(200);
+      await runner.until(() =>
+        runner.runtime.store.events("new-c-1").some((event) => event.type === "tool_result"),
+      );
+      const image = Buffer.from([137, 80, 78, 71]);
+      mkdirSync(join(home, "images", "new-c-1"), { recursive: true });
+      writeFileSync(join(home, "images", "new-c-1", "one.png"), image);
+      expect(await send("queued", ["one"])).toEqual({
+        status: 200,
+        body: { result: "queued", queued_id: "new-c-2" },
+      });
+      expect((await runner.post("/conversations/new-c-1/stop", {})).status).toBe(200);
+      expect((await request("/api/worktrees/w", "DELETE")).status).toBe(200);
+      if (change.startsWith("same-path")) {
+        const replacement = await create("close-target");
+        if (replacement.id === null) throw new Error("作成した worktree の id がありません");
+        relocate(replacement.path, replacement.id);
+      }
+      const pending = runner.post("/conversations/new-c-1/queue/deliver", {});
+      await Promise.race([
+        closing,
+        pending.then(() => {
+          throw new Error("別の worktree では実行を閉じてから配達してください");
+        }),
+      ]);
+      expect({
+        opened: observed.opened.length,
+        closed: observed.closed,
+        queue: runner.runtime.store.queue("new-c-1"),
+      }).toEqual({
+        opened: 1,
+        closed: [0],
+        queue: [
+          {
+            id: "new-c-2",
+            conversationId: "new-c-1",
+            text: "queued",
+            images: ["one"],
+            position: 1,
+            clientId: "queued",
+            createdAt: 1000,
+          },
+        ],
+      });
+      let target = change.startsWith("same-path") ? path : cwd;
+      if (!change.startsWith("same-path")) {
+        const next = add("closing-next");
+        record("next", next, "closing-next");
+        relocate(next, "next");
+        if (change === "remove-while-closing") {
+          const removed = await request(
+            "/api/worktrees/next",
+            "DELETE",
+            undefined,
+            undefined,
+            (deps) => ({
+              ...deps,
+              removals: {
+                ...deps.removals,
+                async save(project, id, plan) {
+                  const saved = await deps.removals.save(project, id, plan);
+                  finishClose!();
+                  expect(await pending).toEqual({
+                    status: 409,
+                    body: {
+                      error: {
+                        code: "conflict",
+                        message:
+                          "worktree を削除しています。完了してから、もう一度操作してください",
+                      },
+                    },
+                  });
+                  return saved;
+                },
+              },
+            }),
+          );
+          expect({ status: removed.status, body: await removed.json() }).toEqual({
+            status: 200,
+            body: { removedBranch: false, movedConversationIds: ["new-c-1"] },
+          });
+          expect((await runner.post("/conversations/new-c-1/queue/deliver", {})).status).toBe(200);
+        } else {
+          target = next;
+          finishClose!();
+          expect((await pending).status).toBe(200);
+        }
+      } else {
+        finishClose!();
+        expect((await pending).status).toBe(200);
+      }
+      await runner.until(() => runner.runtime.store.get("new-c-1")?.runState === "idle");
+      expect(
+        observed.opened.map((params) => ({
+          cwd: params.cwd,
+          sessionId: params.sessionId,
+          resume: params.resume,
+        })),
+      ).toEqual([
+        { cwd: path, sessionId: "new-session", resume: false },
+        { cwd: target, sessionId: "new-session", resume: true },
+      ]);
+      expect(observed.delivered).toEqual([
+        { text: "first-hold", images: [] },
+        { text: "queued", images: [{ data: image, mediaType: "image/png" }] },
+      ]);
+      const results = runner.runtime.store
+        .events("new-c-1")
+        .filter((event) => event.type === "tool_result");
+      expect(results.map((event) => event.payload)).toEqual([
+        {
+          tool_use_id: expect.any(String),
+          content: `${path}\n`,
+          is_error: false,
+          bytes: Buffer.byteLength(`${path}\n`),
+          truncated: false,
+        },
+        {
+          tool_use_id: expect.any(String),
+          content: `${target}\n`,
+          is_error: false,
+          bytes: Buffer.byteLength(`${target}\n`),
+          truncated: false,
+        },
+      ]);
+      expect({
+        queue: runner.runtime.store.queue("new-c-1"),
+        cached: runner.runtime.executions.size,
+      }).toEqual({ queue: [], cached: 1 });
+    } finally {
+      finishClose?.();
+      observed.delayClose((finish) => finish());
+      await runner.close();
+    }
+  });
 
   it.each(
     ["save", "clear", "after"].flatMap((stage) =>

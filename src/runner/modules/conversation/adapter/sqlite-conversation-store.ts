@@ -63,6 +63,7 @@ export class SqliteConversationStore implements ConversationStore {
     ];
     return {
       ids: targets.map((row) => row.id),
+      worktreeId: targets[0]?.id ?? null,
       valid:
         (!worktreeId || !!identified) &&
         targets.every(
@@ -71,12 +72,15 @@ export class SqliteConversationStore implements ConversationStore {
       tracked: targets.length > 0,
     };
   }
-  private withValidWorkspace<T>(current: () => Conversation | null, operation: () => T): T {
+  private withValidWorkspace<T>(
+    current: () => Conversation | null,
+    operation: (worktreeId: string | null) => T,
+  ): T {
     return this.withReservations([], () => {
       const held = new Set<string>();
       for (;;) {
         const conversation = current();
-        if (!conversation) return operation();
+        if (!conversation) return operation(null);
         const workspace = this.workspace(conversation);
         const missing = workspace.ids.filter((id) => !held.has(id));
         if (missing.length) {
@@ -90,11 +94,11 @@ export class SqliteConversationStore implements ConversationStore {
             !statSync(conversation.cwd, { throwIfNoEntry: false })?.isDirectory())
         )
           throw new ConversationWorkspaceChanged();
-        return operation();
+        return operation(workspace.worktreeId);
       }
     });
   }
-  withWorkspace<T>(id: string, operation: () => T): T {
+  withWorkspace<T>(id: string, operation: (worktreeId: string | null) => T): T {
     return this.withValidWorkspace(() => this.get(id), operation);
   }
   reserveRelease(id: string, token: string, milliseconds: number): void {

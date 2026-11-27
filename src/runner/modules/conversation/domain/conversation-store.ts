@@ -39,7 +39,7 @@ export type SendResult =
   | { result: "queued"; queuedId: string };
 export interface ConversationStore {
   transaction<T>(operation: () => T): T;
-  withWorkspace<T>(id: string, operation: () => T): T;
+  withWorkspace<T>(id: string, operation: (worktreeId: string | null) => T): T;
   get(id: string): Conversation | null;
   list(): Conversation[];
   create(conversation: Conversation): void;
