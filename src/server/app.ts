@@ -14,6 +14,9 @@ import { createResolveIdentity } from "./modules/identity/usecase/resolve-identi
 import { createWorkspaceRoutes } from "./modules/workspace/adapter/http";
 import type { WorkspaceDependencies } from "./modules/workspace/domain/ports";
 
+import { createStockRoutes } from "./modules/stock/adapter/http";
+import type { StockDependencies } from "./modules/stock/domain/ports";
+
 export type IdentityOptions = {
   login: string | undefined;
   devIdentity: string | undefined;
@@ -28,6 +31,7 @@ export type AppOptions = {
   workspace?: WorkspaceDependencies;
   progress?: ProgressDependencies;
   messages?: MessageDependencies;
+  stock?: StockDependencies;
 };
 
 export function createApp(options: AppOptions): Hono<IdentityEnv> {
@@ -52,6 +56,8 @@ export function createApp(options: AppOptions): Hono<IdentityEnv> {
   });
 
   if (options.workspace) app.route("/api/conversations", createWorkspaceRoutes(options.workspace));
+
+  if (options.stock) app.route("/api", createStockRoutes(options.stock));
 
   if (options.clientDir !== undefined) {
     const serveClient = serveStatic({ root: options.clientDir });

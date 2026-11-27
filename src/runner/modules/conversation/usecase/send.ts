@@ -8,6 +8,13 @@ export function send(
   id: string,
   input: SendInput,
 ): Promise<Result<SendResult, OperationError>> {
+  if (this.releases.has(id)) {
+    if (input.clientId) {
+      const prior = this.store.duplicate(id, input.clientId, this.options.clock.now() - 600000);
+      if (prior) return Promise.resolve(ok(prior));
+    }
+    return Promise.resolve(err(conflict()));
+  }
   return this.serial(id, () => sendUnlocked.call(this, id, input));
 }
 export async function sendUnlocked(

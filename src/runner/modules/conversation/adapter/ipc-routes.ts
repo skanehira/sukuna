@@ -3,6 +3,7 @@ import type { Result } from "neverthrow";
 import { z } from "zod";
 import {
   answerSchema,
+  completeReleaseSchema,
   forkConversationSchema,
   permissionSchema,
   sendMessageSchema,
@@ -137,6 +138,10 @@ export function createIpcRoutes(
     ),
   );
   route("/conversations/:id/release", empty, (id) => runtime.release(id));
+  route("/conversations/:id/release/reserve", empty, (id) => runtime.releases.reserve(id));
+  route("/conversations/:id/release/complete", completeReleaseSchema, (id, p) =>
+    Promise.resolve(runtime.releases.complete(id, p.token).map(() => ({}))),
+  );
   app.get("/conversations/:id/commands", async (c) =>
     c.json({
       commands: await runtime.commands(c.req.param("id")),

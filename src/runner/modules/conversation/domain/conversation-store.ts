@@ -1,3 +1,4 @@
+import type { Result } from "neverthrow";
 import type {
   ConversationEvent,
   RunState,
@@ -51,4 +52,7 @@ export interface ConversationStore {
   finishAnswers(id: string, questionSeq: number): void;
   clearStaleQuestions(id: string): void;
   saveRateLimit(value: unknown): void;
+  reserveRelease(id: string, token: string, milliseconds: number): void;
+  clearRelease(id: string, token: string): Result<void, { message: string }>;
+  clearReleaseReservations(): void;
 }

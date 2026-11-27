@@ -65,3 +65,8 @@ export const runnerNoticeSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 export type RunnerNotice = z.infer<typeof runnerNoticeSchema>;
+
+export const releaseReservationSchema = z.object({ token: z.string().min(1) });
+export const completeReleaseSchema = z.object({ token: z.string().min(1) });
+export const RELEASE_RESERVATION_PREFIX = "runner-release:";
+export const releaseReservationKey = (id: string) => `${RELEASE_RESERVATION_PREFIX}${id}`;

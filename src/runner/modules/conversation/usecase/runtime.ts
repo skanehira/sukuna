@@ -7,6 +7,7 @@ import { fork } from "./fork";
 import { answer } from "./answers";
 import { permission } from "./permissions";
 import { release } from "./release";
+import { ReleaseReservations } from "./release-reservations";
 import { err, ok, type Result } from "neverthrow";
 import type {
   AgentPort,
@@ -88,6 +89,7 @@ export class ConversationRuntime {
   readonly store: ConversationStore;
   readonly tools: AppToolRegistry;
   readonly timers: UsageLimitTimer;
+  readonly releases: ReleaseReservations;
   executions = new Map<string, Execution>();
   private operations = new Map<string, Promise<unknown>>();
   private projectCommands = new Map<string, { name: string; description: string }[]>();
@@ -99,6 +101,7 @@ export class ConversationRuntime {
     this.store = options.store;
     this.tools = options.tools ?? new AppToolRegistry();
     this.timers = new UsageLimitTimer(options.clock);
+    this.releases = new ReleaseReservations(this);
   }
   subscribe(listener: (signal: RuntimeSignal) => void | Promise<void>): () => void {
     this.listeners.add(listener);
@@ -388,7 +391,12 @@ export class ConversationRuntime {
       )
         void this.serial(id, () => {
           const state = this.store.get(id)?.runState;
-          if (!this.closing && state === "idle" && this.store.queue(id).length)
+          if (
+            !this.closing &&
+            state === "idle" &&
+            this.store.get(id)?.closedAt === null &&
+            this.store.queue(id).length
+          )
             this.deliver(id, { text: "", images: [], origin: "queued" });
           return Promise.resolve(ok(undefined));
         });
@@ -471,6 +479,7 @@ export class ConversationRuntime {
     if (this.closing) return;
     this.closing = true;
     this.timers.clear();
+    this.releases.clear();
     await Promise.all(
       [...this.executions].map(async ([id, execution]) => {
         if (activeStates.includes(this.store.get(id)?.runState ?? "idle"))
