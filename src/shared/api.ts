@@ -5,3 +5,21 @@ export const healthResponseSchema = z.strictObject({
 });
 
 export type HealthResponse = z.infer<typeof healthResponseSchema>;
+
+export const meResponseSchema = z.strictObject({
+  login: z.string(),
+  device: z.string(),
+  build: z.string(),
+});
+
+export type MeResponse = z.infer<typeof meResponseSchema>;
+
+export const errorResponseSchema = z.strictObject({
+  error: z.strictObject({
+    code: z.string(),
+    message: z.string(),
+    details: z.record(z.string(), z.unknown()).optional(),
+  }),
+});
+
+export type ErrorResponse = z.infer<typeof errorResponseSchema>;

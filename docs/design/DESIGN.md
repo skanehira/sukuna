@@ -129,7 +129,7 @@ flowchart LR
 | `SUKUNA_RUNNER_SOCKET` | ランナーのソケットのパス |
 | `SUKUNA_AGENT`、`SUKUNA_AGENT_SCRIPT` | Agent SDK を偽物に差し替える指定と、その台本 |
 | `SUKUNA_GH` | `gh` を偽物に差し替える指定 |
-| `SUKUNA_DEV_IDENTITY` | 開発と E2E で、127.0.0.1 からの接続を本人として扱う指定 |
+| `SUKUNA_DEV_IDENTITY` | 開発と E2E で、手元 (`127.0.0.1` と `::1`) からの接続を本人として扱う指定 |
 | `SUKUNA_LOG_LEVEL` | ログの細かさ |
 | `NODE_ENV` | `production` のときを本番の起動とする。本番の起動では、偽物の指定と `SUKUNA_DEV_IDENTITY` があると起動を失敗させる |
 
@@ -403,6 +403,8 @@ issue の状態の移り変わりは `features/issue-flow.md` の表が正本で
 - CodeMirror のエディターの状態は、開くときに 1 度だけ作る。追記と行の書き換えは transaction の dispatch で行い、状態を作り直さない。読み取り専用は、追記用の印が付いた transaction だけを通す形で作る (PoC `codemirror-vim-buffer`)
 - `vp dev` では、Hono の WebSocket の部品が使えない。WebSocket は `ws` の受け口を 1 つ作り、開発と本番の両方から同じものを呼ぶ (PoC `vite-plus-node-stack`)
 - `vp dev` で API のファイルを編集しても、データベースの接続・配信・WebSocket の受け口は作り直さない。プロセスに 1 つのモジュールに置く
+- `vp dev` では Vite が `/api` 以外のパスを配るため、本人の判定を受けるのは API だけになる。本番の起動では画面のサーバーが静的ファイルと SPA の HTML も判定し、本人でなければ拒否の HTML を返す
+- `vp dev` の `localhost` は `::1` で待ち受けることがあるため、開発用の本人の値は `127.0.0.1` と `::1` の両方を手元として扱う
 - `node-pty` は、導入のあとに補助の実行ファイルへ実行権限を付けないと動かない。`postinstall` で付ける
 - Tailscale のローカル API のポートとトークンは、Tailscale の再起動で変わる。起動時に固定せず、認証か接続に失敗したら読み直す (PoC `tailscale-identity`)
 - 目次などの更新の実行には、題名を必ず渡す。渡さないと、題名を作る別の呼び出しが毎回走る (PoC `summary-ai-cost`)

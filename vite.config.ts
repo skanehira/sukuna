@@ -1,6 +1,7 @@
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import devServer from "@hono/vite-dev-server";
+import { execSync } from "node:child_process";
 import { defineConfig } from "vite-plus";
 import type { Plugin } from "vite";
 import type { UpgradeHandler } from "./src/server/runtime";
@@ -19,7 +20,25 @@ function webSocketUpgrade(): Plugin {
 
 const isTest = Boolean(process.env.VITEST);
 
+function createBuildId(): string {
+  const now = new Date();
+  const date = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
+  let revision: string;
+  try {
+    revision = execSync("git rev-parse --short HEAD", { encoding: "utf8" }).trim();
+  } catch {
+    revision = "unknown";
+  }
+  return `${date}-${revision}`;
+}
+
+const buildId = createBuildId();
+
 export default defineConfig({
+  define: {
+    __SUKUNA_BUILD_ID__: JSON.stringify(buildId),
+  },
+
   plugins: [
     react(),
     tailwindcss(),
