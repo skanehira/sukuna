@@ -75,7 +75,7 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 画面のサーバーは、起動時にデータベースを開いてマイグレーションを当て、API と `/ws` の待ち受けを始める。構成は FEASIBILITY.md「PoC 結果 > vite-plus-node-stack」の推奨アプローチに従う。
 
 - `/ws` は、`ws` の `WebSocketServer({ noServer: true })` を包んだ upgrade の受け口を 1 つ作る。開発 (`vp dev`) では自作の Vite プラグインが `upgrade` でこれを呼び、本番では `serve()` の戻り値に同じ受け口を付ける
-- データベースの接続、配信、ランナーとのつながりは、プロセスに 1 つのモジュール `src/server/runtime.ts` に置く。`vp dev` で API のファイルを編集しても作り直さない (DESIGN.md「既知の制約」)
+- データベースの接続、配信、ランナーとのつながりは、プロセスに 1 つのモジュール `src/server/runtime.ts` に置く。`vp dev` で HTTP ハンドラだけを再評価するときは、既存の接続を保つ。`src/server/runtime.ts` 自身か、同モジュールが import する依存を再評価するときは、開発サーバーを再起動する (DESIGN.md「既知の制約」)。
 
 画面のサーバーは、ランナーのソケットに、つながるまで 1 秒ごとに接続を試す。
 
