@@ -19,6 +19,7 @@ import { saveDraft } from "../usecase/save-draft";
 import { saveAnswers, sendAnswers } from "../usecase/answers";
 import { editQueue, cancelQueue } from "../usecase/edit-queue";
 import { uploadImage } from "../usecase/upload-image";
+import { resumeConversation } from "../usecase/resume";
 import type { Context } from "hono";
 const invalid = { code: "invalid_input", message: "入力を確認してください。" };
 function respond(
@@ -194,6 +195,9 @@ export function createConversationRoutes(deps: ConversationDependencies) {
       ? wire(c, result)
       : c.json({ runState: "stopped" }, 202);
   });
+  app.post("/conversations/:id/resume", async (c) =>
+    wire(c, await resumeConversation(c.req.param("id"), deps)),
+  );
   app.post("/conversations/:id/permissions/:requestId", async (c) => {
     const input = await body(c, permissionDecisionSchema);
     if (!input.success) return c.json({ error: invalid }, 400);

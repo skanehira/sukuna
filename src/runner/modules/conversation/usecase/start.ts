@@ -1,7 +1,7 @@
 import { ConversationWorkspaceChanged } from "../domain/conversation-store";
 import { WorktreeActivityBusy } from "../../../../shared/workspace/worktree-activity";
 import { err, ok, type Result } from "neverthrow";
-import type { ConversationRuntime, OperationError } from "./runtime";
+import type { ConversationRuntime, DeliveryError } from "./runtime";
 import type { ConversationKind } from "../domain/conversation-store";
 export async function start(
   this: ConversationRuntime,
@@ -16,7 +16,7 @@ export async function start(
     parentConversationId?: string | null;
     sessionId?: string;
   },
-): Promise<Result<{ conversationId: string }, OperationError>> {
+): Promise<Result<{ conversationId: string }, DeliveryError>> {
   const id = this.options.id();
   try {
     this.store.transaction(() =>

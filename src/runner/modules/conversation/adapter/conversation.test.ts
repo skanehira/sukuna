@@ -476,7 +476,9 @@ it.each(["developer", "usage_limit", "flow"] as const)(
     await f.runtime.send(id, send("one"));
     await f.runtime.send(id, send("two"));
     await f.runtime.stop(id);
-    f.runtime.record(id, [{ type: "stopped", payload: { reason: "error" } }]);
+    f.runtime.record(id, [
+      { type: "stopped", payload: { reason: by === "usage_limit" ? "usage_limit" : "error" } },
+    ]);
     const queue = f.store.queue(id);
     await f.runtime.resume(id, by);
     expect({ sent: agent.sent.map((m) => m.text), queue: f.store.queue(id) }).toEqual({

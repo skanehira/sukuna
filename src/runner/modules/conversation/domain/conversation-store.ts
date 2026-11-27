@@ -52,6 +52,7 @@ export interface ConversationStore {
   create(conversation: Conversation): void;
   session(id: string, sessionId: string): void;
   events(id: string): StoredEvent[];
+  latestStopSeq(id: string): number | null;
   append(id: string, event: ConversationEvent, now: number): StoredEvent | null;
   queue(id: string): QueuedInstruction[];
   enqueue(instruction: QueuedInstruction): void;

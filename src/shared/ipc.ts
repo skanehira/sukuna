@@ -3,6 +3,9 @@ import { recapStateSchema } from "./recap/api";
 import { answersSchema, originSchema, runStateSchema } from "./events";
 import { timelineInputCommentSchema } from "./progress/schema";
 
+export const RUNNER_IPC_TIMEOUT_MS = 10_000;
+export const RUNNER_IPC_DEADLINE_HEADER = "x-sukuna-ipc-deadline";
+
 export const startConversationSchema = z.object({
   project_id: z.string().min(1),
   kind: z.enum(["chat", "triage", "design", "impl", "thread"]),

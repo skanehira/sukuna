@@ -1,5 +1,5 @@
 import { err, ok, type Result } from "neverthrow";
-import type { ConversationRuntime, InputAcceptance, OperationError } from "./runtime";
+import type { ConversationRuntime, DeliveryError, InputAcceptance } from "./runtime";
 import type { SendResult } from "../domain/conversation-store";
 import type { SendInput } from "./runtime";
 import { activeStates, conflict } from "./runtime";
@@ -8,7 +8,7 @@ export function send(
   id: string,
   input: SendInput,
   accepted?: (fresh: boolean) => void,
-): Promise<Result<SendResult, OperationError>> {
+): Promise<Result<SendResult, DeliveryError>> {
   if (this.releases.has(id)) {
     if (input.clientId) {
       const prior = this.store.duplicate(id, input.clientId, this.options.clock.now() - 600000);
@@ -27,7 +27,7 @@ export async function sendUnlocked(
   input: SendInput,
   acceptance?: InputAcceptance,
   accepted?: (fresh: boolean) => void,
-): Promise<Result<SendResult, OperationError>> {
+): Promise<Result<SendResult, DeliveryError>> {
   let c = this.store.get(id);
   if (!c) return err({ code: "not_found", message: "会話が見つかりません。" });
   if (this.closing) return err(conflict());
@@ -53,7 +53,7 @@ export async function sendUnlocked(
     const queue = this.store.queue(id);
     const queuedId = this.options.id();
     this.record(id, acceptance?.events ?? [], () => {
-      acceptance?.before();
+      acceptance?.before?.();
       this.store.enqueue({
         id: queuedId,
         conversationId: id,

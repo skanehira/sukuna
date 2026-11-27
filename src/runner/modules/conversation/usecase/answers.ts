@@ -1,5 +1,5 @@
 import { err, ok, type Result } from "neverthrow";
-import type { ConversationRuntime, OperationError } from "./runtime";
+import type { ConversationRuntime, DeliveryError } from "./runtime";
 import type { Answers } from "../../../../shared/events";
 import { conflict } from "./runtime";
 import { sendUnlocked } from "./send";
@@ -8,7 +8,7 @@ export function answer(
   id: string,
   requestId: string,
   answers: Answers,
-): Promise<Result<{ result: "answered" | "delivered" | "queued"; seq?: number }, OperationError>> {
+): Promise<Result<{ result: "answered" | "delivered" | "queued"; seq?: number }, DeliveryError>> {
   return this.serial(id, async () => {
     const question = this.store
       .events(id)

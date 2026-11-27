@@ -1,10 +1,10 @@
 import { err, ok, type Result } from "neverthrow";
-import { activeStates, conflict, type ConversationRuntime, type OperationError } from "./runtime";
+import { activeStates, conflict, type ConversationRuntime, type DeliveryError } from "./runtime";
 
 export function deliverQueue(
   this: ConversationRuntime,
   id: string,
-): Promise<Result<{ seq: number }, OperationError>> {
+): Promise<Result<{ seq: number }, DeliveryError>> {
   return this.serial(id, async () => {
     const conversation = this.store.get(id);
     if (

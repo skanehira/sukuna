@@ -27,7 +27,7 @@ const stepSchema = z.union([
       errorCode: z.string().nullable().optional(),
     }),
   }),
-  z.object({ end: z.string() }),
+  z.object({ end: z.string(), terminal_reason: z.string().optional() }),
 ]);
 export const agentScriptSchema = z.object({
   rules: z.array(z.object({ match: z.string(), steps: z.array(stepSchema) })),
