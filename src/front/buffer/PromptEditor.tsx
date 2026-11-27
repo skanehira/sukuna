@@ -21,14 +21,21 @@ export function PromptEditor({
   const host = useRef<HTMLDivElement | null>(null);
   const [mode, setMode] = useState("INSERT");
   const [candidate, setCandidate] = useState(-1);
+  const initial = useRef(spec);
+  const [query, setQuery] = useState(() => controller.promptText());
+  const commands = spec.commands?.filter((command) => command.name.startsWith(query.trimEnd()));
+  const candidates = commands?.map((command) => command.name) ?? spec.candidates ?? [];
   const [completing, setCompleting] = useState(() => /^\/\S*$/.test(controller.promptText()));
   useEffect(() => {
     if (!host.current) return;
+    const spec = initial.current;
     const text = controller.promptText();
     let cycling = false;
     let changingCompletion = false;
     let index = -1;
     let submitting = false;
+    let externalChange = false;
+    let completionCandidates: string[] = [];
     const view = new EditorView({
       parent: host.current,
       state: EditorState.create({
@@ -50,6 +57,8 @@ export function PromptEditor({
             if (update.docChanged) {
               const text = update.state.doc.toString();
               controller.setPromptDraft(text);
+              setQuery(text);
+              if (!externalChange) spec.change?.(text);
               setCompleting(changingCompletion || /^\/\S*$/.test(text));
               if (!changingCompletion) {
                 cycling = false;
@@ -60,6 +69,12 @@ export function PromptEditor({
           }),
         ],
       }),
+    });
+    const removeUpdate = controller.registerPromptUpdate((text) => {
+      if (view.state.doc.toString() === text) return;
+      externalChange = true;
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
+      externalChange = false;
     });
     const cm = getCM(view)!;
     const syncMode = () => {
@@ -105,9 +120,10 @@ export function PromptEditor({
       } else if (token === "<Tab>") {
         consumed = true;
         const text = view.state.doc.toString();
-        if ((cycling || /^\/\S*$/.test(text)) && spec.candidates?.length) {
-          index = (index + 1) % spec.candidates.length;
-          const candidate = `${spec.candidates[index]} `;
+        if (!cycling) completionCandidates = spec.commands?.filter((command) => command.name.startsWith(text)).map((command) => command.name) ?? spec.candidates ?? [];
+        if ((cycling || /^\/\S*$/.test(text)) && completionCandidates.length) {
+          index = (index + 1) % completionCandidates.length;
+          const candidate = `${completionCandidates[index]} `;
           changingCompletion = true;
           view.dispatch({
             changes: { from: 0, to: text.length, insert: candidate },
@@ -148,6 +164,7 @@ export function PromptEditor({
     view.dispatch({ selection: { anchor: view.state.doc.length } });
     controller.focus("prompt");
     return () => {
+      removeUpdate();
       removeFocus();
       removeKeys();
       cm.off("vim-mode-change", syncMode);
@@ -156,7 +173,7 @@ export function PromptEditor({
       view.dom.removeEventListener("focusin", focus);
       view.destroy();
     };
-  }, [controller, spec]);
+  }, [controller]);
   return (
     <div
       className={`mx-2 mb-2 shrink-0 rounded-lg border ${active ? "border-accent" : "border-line"} bg-raised shadow-lg`}
@@ -177,23 +194,25 @@ export function PromptEditor({
           {spec.quote.length > 5 ? <div>…ほか {spec.quote.length - 5} 行</div> : null}
         </div>
       ) : null}
-      {completing && spec.candidates?.length ? (
+      {completing && candidates.length ? (
         <div
           aria-label="スキルの候補"
           className="flex gap-3 overflow-hidden px-3 pt-2 font-mono text-[13px]"
         >
-          {spec.candidates.map((text, index) => (
+          {candidates.map((text, index) => (
             <span
               key={text}
               className={index === Math.max(0, candidate) ? "text-accent" : "text-muted"}
             >
-              {text}
+              {text}{commands ? ` ${commands[index].description.split("\n")[0]}` : ""}
             </span>
           ))}
           <span className="text-muted">Tab で選ぶ</span>
         </div>
       ) : null}
+      {completing && spec.commands?.length === 0 ? <div className="px-3 pt-2 text-[13px] text-muted">最初の指示を送ると候補が出ます</div> : null}
       <div ref={host} />
+      {spec.unsent ? <div className="px-3 pb-2 text-[13px] text-wait">未送信: {spec.unsent}</div> : null}
       <div className="px-3 pb-2 text-xs text-muted">
         {mode === "INSERT" || mode === "REPLACE"
           ? `Esc Normal へ (${spec.verb}のは Normal から)`

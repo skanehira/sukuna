@@ -27,6 +27,9 @@ export type PromptSpec = {
   initialText?: string;
   allowEmpty?: boolean;
   candidates?: string[];
+  commands?: { name: string; description: string }[];
+  unsent?: string;
+  change?(text: string): void;
   quote?: string[];
   images?: number;
   submit(text: string): void | Promise<void>;
@@ -92,6 +95,7 @@ export class BufferController {
   private pending = new Set<string>();
   private status = new Map<string, string>();
   private hints = new Map<string, Hint[]>();
+  private promptUpdate: ((text: string) => void) | null = null;
   private promptFocus: (() => void) | null = null;
   private origin = "main";
   private promptOrigin = "main";
@@ -248,6 +252,10 @@ export class BufferController {
       ? (this.state.prompt?.label ?? "入力欄")
       : (this.windows.get(this.state.active)?.name ?? this.state.active);
   }
+  currentLine(): LineInfo | undefined {
+    const window = this.windows.get(this.state.active);
+    return window?.lines()[window.position().line];
+  }
   context(side = this.state.active): ActionContext {
     const window = this.windows.get(side);
     return { window: side, view: window?.view ?? "", line: window?.position().line ?? 0 };
@@ -375,6 +383,7 @@ export class BufferController {
     const handle = this.windows.get(this.state.active);
     const lines = handle?.lines() ?? [];
     const line = lines[handle?.position().line ?? 0];
+    if (line?.kind === "menu" && line.action?.startsWith("conversation.choice.")) return [["open", "この選択肢を選ぶ (もう一度で外す)"], ["番号 Enter", "番号で選ぶ"], ["prompt.open", "入力"]];
     if (line?.kind === "menu") return [["open", "実行する"]];
     const hints = this.hints.get(handle?.view ?? "") ?? [];
     return lines.some((line) => line.kind === "menu")
@@ -445,6 +454,17 @@ export class BufferController {
       this.notify(error instanceof Error ? error.message : "コマンドの実行に失敗しました", "error");
     }
   }
+  registerPromptUpdate(update: (text: string) => void): () => void {
+    this.promptUpdate = update;
+    return () => { if (this.promptUpdate === update) this.promptUpdate = null; };
+  }
+  replacePromptText(text: string): void {
+    this.promptDraft = text;
+    this.promptUpdate?.(text);
+  }
+  patchPrompt(patch: Partial<PromptSpec>): void {
+    if (this.state.prompt) this.update({ prompt: { ...this.state.prompt, ...patch } });
+  }
   promptText(): string {
     return this.promptDraft;
   }
@@ -482,7 +502,7 @@ export class BufferController {
     try {
       if (interrupt && spec.interrupt) await spec.interrupt(text);
       else await spec.submit(text);
-      if (this.state.prompt !== spec || this.state.promptId !== promptId) return true;
+      if (this.state.promptId !== promptId) return true;
       this.update({ prompt: null, mode: "NORMAL" });
       this.focus(this.promptOrigin);
       return true;

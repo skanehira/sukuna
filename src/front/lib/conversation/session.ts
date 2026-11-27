@@ -1,0 +1,355 @@
+import type { Answers } from "../../../shared/events";
+import { eventSchema } from "../../../shared/events";
+import type { ServerMessage } from "../../../shared/ws";
+import type { BufferHandle } from "../../buffer/Buffer";
+import type { BufferController, PromptSpec } from "../../buffer/controller";
+import type { LineInfo } from "../../buffer/line";
+import { DraftSync } from "./draft-sync";
+import { ConversationApiError } from "./api";
+import { eventLines, stoppedText } from "./lines";
+import type { ConversationApi, Event, QueueItem, Snapshot } from "./types";
+
+export type ConversationEnvironment = {
+  clientId: string; id(): string; now(): number;
+  schedule(callback: () => void, ms: number): () => void;
+};
+type QuestionEvent = Extract<Event, { type: "question" }>;
+type Block = { event: Event; lines: LineInfo[] };
+export class ConversationSession {
+  private state: { data: Snapshot | null; version: number } = { data: null, version: 0 };
+  private listeners = new Set<() => void>();
+  private handle: BufferHandle | null = null;
+  private blocks: Block[] = [];
+  private events: Event[] = [];
+  private question: QuestionEvent | null = null;
+  private reply = "";
+  private expanded = new Set<number>();
+  private removers: (() => void)[] = [];
+  private draft: DraftSync;
+  private cancelSave: (() => void) | null = null;
+  private messageId: string | null = null;
+  private undo: QueueItem | null = null;
+  private queueEditing: QueueItem | null = null;
+  private answered = new Set<number>();
+  private online = true;
+  constructor(readonly id: string, readonly api: ConversationApi, readonly controller: BufferController, private env: ConversationEnvironment) {
+    this.draft = new DraftSync(env.clientId, null);
+  }
+  snapshot = () => this.state;
+  subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
+  private emit(): void { this.state = { ...this.state, version: this.state.version + 1 }; this.listeners.forEach((listener) => listener()); }
+  async load(): Promise<string> {
+    const data = await this.api.get(this.id);
+    if (!this.state.data) {
+      this.state = { ...this.state, data };
+      this.draft = new DraftSync(this.env.clientId, data.draft);
+    } else this.adopt(data);
+    let after = this.events.at(-1)?.seq ?? 0;
+    let more = true;
+    while (more) {
+      const page = await this.api.events(this.id, after);
+      for (const event of [...page.events].sort((a, b) => a.seq - b.seq)) this.receiveEvent(event);
+      more = page.hasMore;
+      const next = page.events.at(-1)?.seq ?? after;
+      if (more && next <= after) throw new Error("会話の続きが読み込めませんでした");
+      after = next;
+    }
+    this.refreshTail(); this.emit(); return this.id;
+  }
+  private adopt(data: Snapshot): void {
+    this.state = { ...this.state, data };
+    const result = this.draft.receive(data.draft);
+    if (result.notice) this.controller.notify(result.notice);
+    if (result.replaced && this.controller.snapshot().prompt?.label === "指示") this.controller.replacePromptText(this.draft.content().text);
+    this.refreshPrompt(); this.refreshTail(); this.emit();
+  }
+  async refresh(): Promise<void> { this.adopt(await this.api.get(this.id)); }
+  connect(): () => void {
+    const oldPrompt = this.controller.options.prompt;
+    this.controller.options.prompt = () => this.prompt();
+    this.action("agent.stop", "AI を止める", async () => {
+      await this.api.stop(this.id);
+      this.controller.notify(`会話: ${this.state.data!.conversation.title} の AI を止めました。作業は保存され、指示待ちになります`);
+      await this.refresh();
+    });
+    this.action("conversation.resume", "再開する", async () => { await this.api.resume(this.id); await this.refresh(); });
+    this.action("conversation.queue.send", "届く前の指示を送る", async () => { await this.send("", false); });
+    this.action("item.delete", "預けた指示を取り消す", () => this.deleteQueue());
+    this.action("item.edit", "預けた指示を直す", () => this.editQueue());
+    this.action("item.undo", "預けた指示を戻す", async () => {
+      const item = this.undo;
+      if (!item) return;
+      if (item.stockItemId) await this.api.sendStock(this.id, item.stockItemId);
+      else await this.api.send(this.id, { text: item.text, images: item.images, mode: "send", clientMessageId: this.env.id() });
+      this.undo = null; await this.refresh();
+    });
+    this.action("diff.expand", "差分を開く", () => this.fold(false));
+    this.action("diff.collapse", "差分を畳む", () => this.fold(true));
+    this.action("conversation.answers.send", "回答をまとめて送る", () => this.sendAnswers(false));
+    this.action("conversation.answers.confirm", "回答を送る", () => this.sendAnswers(true));
+    this.action("conversation.answered", "送った回答", () => { this.controller.notify("この質問には、回答を送ってあります"); });
+    this.removers.push(this.controller.commands.register({ name: "stop", label: "AI を止める", run: () => this.controller.run("agent.stop") }));
+    this.removers.push(this.controller.commands.register({ name: "images", label: "画像を外す", run: async (args) => {
+      if (args.join(" ") !== "clear") throw new Error("使い方: :images clear");
+      this.editDraft(this.draft.content().text, []); await this.saveDraft();
+    } }));
+    this.installQuestionActions();
+    this.controller.setHints("conversation", [["prompt.open", "入力"], ["conversation.switch", "会話を切り替える"]]);
+    return () => {
+      this.cancelSave?.();
+      this.controller.closePrompt();
+      if (this.draft.dirty()) void this.saveDraft();
+      this.controller.options.prompt = oldPrompt;
+      this.removers.splice(0).forEach((remove) => remove());
+      this.handle = null;
+    };
+  }
+  private action(name: string, label: string, run: () => void | Promise<void>, confirm?: string): void {
+    this.removers.push(this.controller.actions.register({ name, label, group: "会話", where: "会話", views: ["conversation"], ...(confirm ? { confirm } : {}), run }));
+  }
+  bind = (handle: BufferHandle): void => {
+    this.handle = handle;
+    handle.replaceAll(this.blocks.length || this.question || this.state.data?.queue.length ? this.blocks.flatMap((block) => block.lines) : [{ kind: "note", text: "i で指示を書いて送ると、AI が作業を始めます。" }]);
+    this.refreshTail();
+  };
+  private append(event: Event, lines: LineInfo[], clearReply = false): void {
+    if (this.blocks.length === 0) this.handle?.replaceAll([]);
+    this.blocks.push({ event, lines });
+    this.handle?.append(lines, clearReply ? ["reply"] : []);
+  }
+  private replaceBlock(block: Block, lines: LineInfo[]): void {
+    const index = this.blocks.indexOf(block);
+    const from = this.blocks.slice(0, index).reduce((sum, block) => sum + block.lines.length, 0);
+    this.handle?.replace(from, from + block.lines.length, lines);
+    block.lines = lines;
+  }
+  receiveEvent(event: Event): void {
+    if (this.events.some((previous) => previous.seq === event.seq)) return;
+    this.events.push(event);
+    if (event.type === "question") { this.archiveQuestion(); this.question = event; this.installQuestionActions(); this.refreshTail(); this.emit(); return; }
+    if (event.type === "answer" || event.type === "user_message" && event.payload.origin !== "answer_text" && event.payload.origin !== "resume") {
+      if (event.type === "answer") {
+        if (this.question) this.answered.add(this.question.seq);
+        if (this.state.data) this.state.data.pendingAnswers = null;
+      }
+      this.archiveQuestion(event.type === "answer" ? event.payload.answers : {});
+    }
+    if (event.type === "assistant_text" || event.type === "turn_end") this.reply = "";
+    const data = this.state.data;
+    if (!data) return;
+    if (event.type === "tool_result") {
+      const use = this.blocks.find((block) => block.event.type === "tool_use" && block.event.payload.tool_use_id === event.payload.tool_use_id);
+      if (use) this.replaceBlock(use, eventLines(use.event, this.id, data.conversation.cwd, event.payload.content));
+    }
+    if (event.type === "diff") this.action(`conversation.diff.${event.seq}`, "差分を開く", () => this.expandDiff(event.seq, true));
+    this.append(event, eventLines(event, this.id, data.conversation.cwd), event.type === "assistant_text" || event.type === "turn_end");
+    this.refreshTail(); this.emit();
+  }
+  private archiveQuestion(answers: Answers = {}): void {
+    if (!this.question) return;
+    const question = this.question;
+    this.question = null;
+    this.handle?.setTail("question", []);
+    this.append(question, this.questionLines(question, answers, true));
+  }
+  delta(text: string): void {
+    if (!this.blocks.length) this.handle?.replaceAll([]);
+    this.reply += text; this.refreshTail();
+  }
+  private questionLines(question: QuestionEvent, answers: Answers, sent: boolean): LineInfo[] {
+    const lines = question.payload.questions.flatMap((item, index): LineInfo[] => {
+      const answer = answers[index];
+      const choices = item.options.map((option, choice): LineInfo => {
+        const selected = answer?.choices.includes(option.label) ?? false;
+        const description = selected ? sent ? "✓ 送った回答" : "✓ 選んだ (まだ送っていない)" : "この選択肢を選ぶ";
+        return { kind: "menu", text: `${option.label}  ${description}`, cols: [option.label, description], action: sent ? "conversation.answered" : `conversation.choice.${index}.${choice}`, done: selected, seq: question.seq };
+      });
+      return [
+        { kind: "ask", text: `Q${index + 1}. ${item.question}`, seq: question.seq }, ...choices,
+        ...(sent ? [] : [{ kind: "menu" as const, text: `Q${index + 1} に文章で答える`, action: `conversation.answer.${index}`, seq: question.seq }]),
+        ...(answer?.text ? [{ kind: "text" as const, text: `→ あなたの回答${sent ? "" : " (まだ送っていない)"}: ${answer.text}`, seq: question.seq }] : []),
+      ];
+    });
+    if (!sent) {
+      const count = Object.values(answers).filter((answer) => answer.choices.length || answer.text?.trim()).length;
+      const total = question.payload.questions.length;
+      const description = count === total ? "1 通にまとめて AI に届く" : `答えていない質問が ${total - count} 件ある`;
+      lines.push({ kind: "menu", text: `回答をまとめて送る (${count} / ${total} 件)  ${description}`, cols: [`回答をまとめて送る (${count} / ${total} 件)`, description], action: "conversation.answers.send", main: true });
+    }
+    return lines;
+  }
+  private installQuestionActions(): void {
+    this.question?.payload.questions.forEach((item, index) => {
+      item.options.forEach((option, choice) => this.action(`conversation.choice.${index}.${choice}`, "選択肢を選ぶ", async () => {
+        const current = this.state.data?.pendingAnswers?.answers ?? {};
+        const answer = current[index] ?? { choices: [], text: null };
+        const choices = answer.choices.includes(option.label) ? answer.choices.filter((label) => label !== option.label) : item.multi_select ? [...answer.choices, option.label] : [option.label];
+        await this.saveAnswers({ ...current, [index]: { ...answer, choices } });
+      }));
+      this.action(`conversation.answer.${index}`, "文章で答える", () => {
+        this.controller.openPrompt({ label: `Q${index + 1} への回答`, target: this.state.data!.conversation.title, verb: "決める", initialText: this.state.data?.pendingAnswers?.answers[index]?.text ?? "", submit: async (text) => {
+          const current = this.state.data?.pendingAnswers?.answers ?? {};
+          await this.saveAnswers({ ...current, [index]: { choices: current[index]?.choices ?? [], text } });
+          this.controller.notify("回答を書きました。「回答をまとめて送る」で送ります");
+        }, close: () => {} });
+      });
+    });
+  }
+  private async saveAnswers(answers: Answers): Promise<void> {
+    if (!this.question || !this.state.data) return;
+    const result = await this.api.saveAnswers(this.id, this.question.seq, answers);
+    this.state.data = { ...this.state.data, pendingAnswers: result.pendingAnswers };
+    this.refreshTail(); this.emit();
+  }
+  private async sendAnswers(confirmed: boolean): Promise<void> {
+    if (!this.question) return;
+    const answers = this.state.data?.pendingAnswers?.answers ?? {};
+    const count = Object.values(answers).filter((answer) => answer.choices.length || answer.text?.trim()).length;
+    if (!count) { this.controller.notify("回答がまだありません。選択肢を選ぶか、文章で答えてください"); return; }
+    const missing = this.question.payload.questions.length - count;
+    if (missing && !confirmed) {
+      this.action("conversation.answers.confirm", "回答を送る", () => this.sendAnswers(true), `答えていない質問が ${missing} 件あります。このまま送りますか?`);
+      await this.controller.run("conversation.answers.confirm"); return;
+    }
+    try { await this.api.sendAnswers(this.id, confirmed); }
+    catch (error) {
+      if (error instanceof ConversationApiError && error.code === "unanswered_questions" && !confirmed) {
+        this.action("conversation.answers.confirm", "回答を送る", () => this.sendAnswers(true), `答えていない質問が ${missing} 件あります。このまま送りますか?`);
+        await this.controller.run("conversation.answers.confirm"); return;
+      }
+      throw error;
+    }
+    this.controller.notify(`回答 ${count} 件を 1 通にまとめて送りました`);
+  }
+  private refreshTail(): void {
+    const data = this.state.data;
+    if (!data) return;
+    this.handle?.setTail("reply", this.reply ? [{ kind: "speaker", text: "AI" }, ...this.reply.split("\n").map((text): LineInfo => ({ kind: "text", text }))] : []);
+    const questionLines = this.question ? this.questionLines(this.question, data.pendingAnswers?.questionSeq === this.question.seq ? data.pendingAnswers.answers : {}, false) : [];
+    const permission = data.pendingPermission;
+    if (permission) {
+      questionLines.push({ kind: "ask", text: `許可の確認: ${permission.toolName}(${permission.summary})` });
+      for (const [decision, label] of [["allow", "許可する"], ["deny", "拒否する"]] as const) {
+        this.action(`conversation.permission.${decision}`, label, async () => { await this.api.permission(this.id, permission.requestId, decision); await this.refresh(); });
+        questionLines.push({ kind: "menu", text: label, action: `conversation.permission.${decision}` });
+      }
+    }
+    this.handle?.setTail("question", questionLines);
+    const queued = [...data.queue].sort((a, b) => a.position - b.position).map((item): LineInfo => ({ kind: "queued", text: `届く前の指示: ${item.text.split("\n")[0]}`, id: `queue:${item.id}` }));
+    if (data.queue.length && !this.working()) queued.push({ kind: "menu", text: "届く前の指示を送る", action: "conversation.queue.send" });
+    const { runState, stopReason, resetsAt, closedAt } = data.conversation;
+    if (["failed", "usage_limited"].includes(runState) || runState === "stopped" && stopReason === "restarted") {
+      if (!this.events.some((event) => event.type === "stopped")) queued.push({ kind: "note", text: stoppedText(stopReason ?? "error", undefined, resetsAt, closedAt !== null), tone: "wait" });
+      queued.push({ kind: "menu", text: runState === "usage_limited" && closedAt === null ? "いま再開する" : "再開する", action: "conversation.resume" });
+    }
+    this.handle?.setTail("queue", queued);
+  }
+  private working(): boolean { return ["working", "waiting_answer", "waiting_permission"].includes(this.state.data?.conversation.runState ?? "idle"); }
+  private prompt(): PromptSpec {
+    const content = this.draft.content();
+    return { label: "指示", target: `会話: ${this.state.data!.conversation.title}`, verb: "送る", initialText: content.text, images: content.images.length, commands: this.state.data!.commands, allowEmpty: true,
+      change: (text) => this.editDraft(text),
+      submit: (text) => this.send(text, false), interrupt: (text) => this.send(text, true),
+      close: (text) => {
+        if (text !== this.draft.content().text) this.editDraft(text);
+        void this.saveDraft();
+        if (text || this.draft.content().images.length) this.controller.notify("書きかけを残しました。i で続きを書けます");
+      }, paste: (files) => { void this.paste(files).catch((error: unknown) => this.controller.notify(this.reason(error), "error")); },
+    };
+  }
+  private editDraft(text: string, images = this.draft.content().images): void {
+    this.messageId = null;
+    this.draft.edit({ text, images }, this.env.now());
+    this.cancelSave?.();
+    this.cancelSave = this.env.schedule(() => { void this.saveDraft(); }, 500);
+    this.refreshPrompt();
+    if (!text && !images.length) this.controller.patchPrompt({ unsent: undefined });
+  }
+  private refreshPrompt(): void { if (this.controller.snapshot().prompt?.label === "指示") this.controller.patchPrompt({ images: this.draft.content().images.length }); }
+  async saveDraft(): Promise<void> {
+    this.cancelSave?.(); this.cancelSave = null;
+    if (!this.online || !this.draft.dirty()) return;
+    const request = this.draft.request();
+    try {
+      const result = await this.api.saveDraft(this.id, request);
+      if (this.draft.saved(request, result.draft) && !result.applied) {
+        this.controller.replacePromptText(this.draft.content().text);
+        this.controller.notify("別の端末で書いた内容に置き換わりました");
+      }
+    } catch (error) { this.controller.notify(this.reason(error), "error"); }
+  }
+  private async send(text: string, interrupt: boolean): Promise<void> {
+    const images = this.draft.content().images;
+    if (!text.trim() && !images.length && !this.state.data?.queue.length) throw new Error("内容が空です。書いてから送ってください");
+    this.cancelSave?.();
+    try {
+      if (!this.online) throw new Error("サーバーにつながりません");
+      if (this.queueEditing) {
+        await this.api.editQueue(this.id, this.queueEditing.id, { text, images });
+        this.queueEditing = null;
+      } else {
+        this.messageId ??= this.env.id();
+        const queueCount = this.state.data?.queue.length ?? 0;
+        const result = await this.api.send(this.id, { text, images, mode: interrupt ? "interrupt" : "send", clientMessageId: this.messageId });
+        this.controller.notify(result.result === "queued" ? "預けました。今の作業が終わると届きます" : interrupt && this.working() ? queueCount ? `AI を止めて、届く前の指示 ${queueCount} 件と一緒にすぐに送りました` : "AI を止めて、すぐに送りました" : images.length ? `画像 ${images.length} 件と一緒に送りました` : "送りました");
+      }
+      this.draft = new DraftSync(this.env.clientId, null); this.messageId = null;
+      this.controller.patchPrompt({ unsent: undefined });
+      void this.refresh().catch((error: unknown) => this.controller.notify(this.reason(error), "error"));
+    } catch (error) {
+      this.controller.patchPrompt({ unsent: this.reason(error) }); throw error;
+    }
+  }
+  private async paste(files: File[]): Promise<void> {
+    for (const file of files) {
+      if (!["image/png", "image/jpeg", "image/gif", "image/webp"].includes(file.type) || file.size > 5 * 1024 * 1024) throw new Error("画像は PNG・JPEG・GIF・WebP、1 枚 5 MB までです");
+      if (this.draft.content().images.length >= 20) throw new Error("画像は 1 通に 20 枚までです");
+      const { image } = await this.api.upload(this.id, file);
+      this.editDraft(this.draft.content().text, [...this.draft.content().images, image.id]);
+    }
+  }
+  private selectedQueue(): QueueItem | undefined {
+    const line = this.controller.currentLine();
+    return this.state.data?.queue.find((item) => `queue:${item.id}` === line?.id);
+  }
+  private async deleteQueue(): Promise<void> {
+    const item = this.selectedQueue();
+    if (!item) return;
+    try {
+      await this.api.deleteQueue(this.id, item.id); this.undo = item;
+      if (!item.stockItemId) this.draft.edit({ text: item.text, images: item.images }, this.env.now());
+      if (this.state.data) this.state.data = { ...this.state.data, queue: this.state.data.queue.filter((queued) => queued.id !== item.id) };
+      this.refreshTail(); this.emit(); this.controller.notify("預けた指示を取り消しました。u で戻せます");
+    } catch (error) { if (error instanceof ConversationApiError && error.status === 404) { await this.refresh(); this.controller.notify("すでに届きました"); } else throw error; }
+  }
+  private editQueue(): void {
+    const item = this.selectedQueue();
+    if (!item) return;
+    this.queueEditing = item;
+    this.draft.edit({ text: item.text, images: item.images }, this.env.now());
+    this.controller.openPrompt(this.prompt());
+  }
+  private fold(collapse: boolean): void {
+    let offset = 0;
+    for (const block of this.blocks) {
+      if (this.controller.context().line >= offset && this.controller.context().line < offset + block.lines.length && block.event.type === "diff") { this.expandDiff(block.event.seq, !collapse); return; }
+      offset += block.lines.length;
+    }
+  }
+  private expandDiff(seq: number, open: boolean): void {
+    const block = this.blocks.find((block) => block.event.seq === seq);
+    if (!block || !this.state.data) return;
+    if (open) this.expanded.add(seq); else this.expanded.delete(seq);
+    this.replaceBlock(block, eventLines(block.event, this.id, this.state.data.conversation.cwd, null, open));
+  }
+  receive(message: ServerMessage): void {
+    if (message.topic !== `conversation:${this.id}`) return;
+    if (message.type === "delta") this.delta(message.payload.text);
+    else if (message.type === "event") {
+      const value = eventSchema.safeParse(message.payload);
+      if (value.success) this.receiveEvent({ ...value.data, seq: message.seq, createdAt: message.payload.created_at });
+    } else if (message.type === "state" || message.type === "changed") void this.refresh().catch((error: unknown) => this.controller.notify(this.reason(error), "error"));
+  }
+  connection(online: boolean): void { this.online = online; if (online) void this.saveDraft(); }
+  private reason(error: unknown): string { return error instanceof Error ? error.message : "操作に失敗しました"; }
+}
