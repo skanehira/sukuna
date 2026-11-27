@@ -242,7 +242,7 @@ export default defineConfig({
           name: "front",
           environment: "jsdom",
           globals: true,
-          setupFiles: ["./src/test/setup.ts"],
+          setupFiles: ["./src/test/setup.ts", "./src/test/fast-check.ts"],
           include: ["src/front/**/*.test.{ts,tsx}"],
         },
       },
@@ -252,6 +252,7 @@ export default defineConfig({
           name: "server",
           environment: "node",
           globals: true,
+          setupFiles: ["./src/test/fast-check.ts"],
           include: [
             "src/server/**/*.test.ts",
             "src/runner/**/*.test.ts",
