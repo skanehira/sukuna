@@ -372,7 +372,8 @@ SDK のメッセージは、まず Port の出力 (「Agent SDK を包む Port�
 
 ### 届く前の指示と番の終わり
 
-- 番が `success` で終わったとき、`queued_instructions` に行があれば、`position` の順に 1 通にまとめて届ける。削除と `user_message` の追加は 1 つのトランザクションで行う (DESIGN.md「トランザクション境界」)
+- 番が `success` で終わったとき、`queued_instructions` に行があれば、`position` の順に 1 通にまとめて届ける
+- 画像を準備したあと、配達を確定するトランザクションの中で、控えた指示の ID・本文・画像 ID・順序・受付情報・相談コメント・ストック参照を照合する。一致したときだけ実行を開き、指示の削除と `user_message` の追加、`stock_items.sent_seq` の更新を行う。変わっていれば確定せずにトランザクションを抜け、現在の作業場所と最新の指示・画像でやり直す (DESIGN.md「トランザクション境界」)
 - 番が `stopped` で終わったときは届けない (BR-088)。開発者が `queue/deliver` か、指示の送信で届ける
 - SDK の `priority` は使わない。届けるのは番の終わりを受けてからだけにする (FEASIBILITY.md「PoC 結果 > agent-sdk-interrupt」)
 
@@ -507,7 +508,9 @@ type TokenUsage = { inputTokens: number; outputTokens: number; cacheCreationInpu
 | 候補の一覧 | 実行中なら `supportedCommands()`。実行が無ければ、同じプロジェクトで最後に受けた `init` の一覧を返す |
 | 1 回きりの呼び出し | `query` を `tools: []`、`settingSources: []`、`persistSession: false`、`maxTurns: 1`、`effort: "low"` と `title` を付けて呼び、最後の発言の文字を返す (FEASIBILITY.md「PoC 結果 > summary-ai-cost」)。目次などの更新 (`features/recap.md`) が使う |
 
-1 つの会話の実行 (`AgentSession`) は、最初の指示を送るときに開き、会話を手放すまで開いたままにする。番が終わっても閉じない。ランナーは会話ごとに操作を 1 列に並べて処理し、同じ会話の実行を 2 つ開かない。
+1 つの会話の実行 (`AgentSession`) は、最初の指示を送るときに開き、番が終わっても閉じない。会話を手放すときか、作業場所が変わったときに閉じる。作業場所が変わったときは、古い出力の消費を終えてから、保存した会話の識別子で現在の作業場所に開き直す。ランナーは会話ごとに操作を 1 列に並べて処理し、同じ会話の実行を 2 つ開かない。
+
+配達直前に、worktree の共有排他の中で作業場所を確かめ、検証で得た worktree の識別子を実行に使う。古い実行を閉じて出力の消費を待つ間は、共有排他を外す。待機後は作業場所と届く前の指示・画像を読み直し、終了中なら配達しない。共有排他の範囲は `features/worktree-terminal.md`「実装の配置」に従う。
 
 #### アプリのツールの受け渡し
 
