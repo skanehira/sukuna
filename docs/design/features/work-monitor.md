@@ -277,7 +277,8 @@ issue の担当の会話について、作業の状況とタイムラインを�
 
 - `activity` は、担当の会話が `working` でないときは `null` にする。`stage` の値は `review`・`pr`・`ci`・`merge`・`implement`・`triage`・`design`・`reply` のどれかである
 - `timeline` は、担当の会話が無いとき、`session_id` がまだ無いとき、ファイルが無いときは `null` にする。ファイルがあって木が 0 本のときは `trees` を空にして返す
-- `trees` は足した順、`tasks` は木ごとに深さ優先の順、`history` は古い順、`reports` は新しい順、`comments` は古い順に返す
+- `trees` は足した順、`tasks` は木ごとに深さ優先の順に返す
+- `history` と `reports` は新しい順、`comments` は古い順に返す
 - `status` の値は、プラグインと同じ `pending`・`in_progress`・`completed`・`blocked` である
 - `readError` は、ファイルが読めないときに理由の文を入れる。そのとき `timeline` は前に読めた中身か `null` にする
 - 失敗: issue が無ければ 404 `not_found`

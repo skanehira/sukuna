@@ -289,24 +289,44 @@ describe("進捗の API と SQLite・タイムラインファイル", () => {
     });
   });
 
-  it("会話の相談をファイルのコメントと合成する", async () => {
+  it.each([
+    ["t", "作業"],
+    ["t", "CSV「BOM」の扱い"],
+    ["task 1", "作業"],
+    ["task[1].*", "作業"],
+  ])("ID %s・題名 %s の会話の相談をファイルのコメントと合成する", async (taskId, title) => {
     seedConversation();
     database.db
       .insert(conversationEvents)
-      .values({
-        conversationId: "chat",
-        seq: 3,
-        type: "user_message",
-        payload: { origin: "developer", text: "タイムラインのタスク t「作業」について: 確認" },
-        createdAt: 300,
-      })
+      .values([
+        {
+          conversationId: "chat",
+          seq: 3,
+          type: "user_message",
+          payload: {
+            origin: "developer",
+            text: `タイムラインのタスク ${taskId}「${title}」について: 確認`,
+          },
+          createdAt: 300,
+        },
+        {
+          conversationId: "chat",
+          seq: 4,
+          type: "user_message",
+          payload: {
+            origin: "developer",
+            text: `タイムラインのタスク ${taskId}「変更前の${title}」について: 会話だけの相談`,
+          },
+          createdAt: 400,
+        },
+      ])
       .run();
     writeFileSync(
       join(home, "timeline/sessions/chat.json"),
       JSON.stringify({
         ...file,
-        comments: [{ at: 300, taskId: "t", text: "確認" }],
-        journal: [{ at: 1, toolUseId: "t", ops: [{ op: "add", id: "t", title: "作業" }] }],
+        comments: [{ at: 300, taskId, text: "確認" }],
+        journal: [{ at: 1, toolUseId: "t", ops: [{ op: "add", id: taskId, title }] }],
       }),
     );
     const response = await app().request(
@@ -315,19 +335,63 @@ describe("進捗の API と SQLite・タイムラインファイル", () => {
       incomingWith("127.0.0.1", 1234),
     );
     const body = progressResponseSchema.parse(await response.json());
-    expect({
-      status: response.status,
-      comments: body.timeline?.comments,
-      activity: body.activity,
-    }).toEqual({
+    expect({ status: response.status, body }).toEqual({
       status: 200,
-      comments: [{ at: 300, taskId: "t", text: "確認" }],
-      activity: {
-        stage: "reply",
-        stageLabel: "応答",
-        stageStartedAt: 300,
-        lastAction: "応答を作成中",
-        lastActionAt: null,
+      body: {
+        conversationId: "chat",
+        activity: {
+          stage: "reply",
+          stageLabel: "応答",
+          stageStartedAt: 400,
+          lastAction: "応答を作成中",
+          lastActionAt: null,
+        },
+        timeline: {
+          defaultTreeId: taskId,
+          trees: [
+            {
+              id: taskId,
+              title,
+              status: "pending",
+              completed: 0,
+              parts: { pending: 1, in_progress: 0, completed: 0, blocked: 0 },
+              leaves: { total: 1, pending: 1, in_progress: 0, completed: 0, blocked: 0 },
+              startedAt: 1,
+            },
+          ],
+          tasks: [
+            {
+              id: taskId,
+              parent: null,
+              title,
+              status: "pending",
+              weight: 1,
+              completed: 0,
+              units: "0 / 1",
+            },
+          ],
+          history: [
+            {
+              at: 1,
+              taskId,
+              title,
+              from: null,
+              to: "pending",
+              weight: 1,
+              completedBefore: 0,
+              completedAfter: 0,
+              description: null,
+              note: null,
+              agentId: null,
+            },
+          ],
+          reports: [],
+          comments: [
+            { at: 300, taskId, text: "確認" },
+            { at: 400, taskId, text: "会話だけの相談" },
+          ],
+        },
+        readError: null,
       },
     });
   });

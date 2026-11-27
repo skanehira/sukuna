@@ -62,7 +62,7 @@ export function replayTimeline(
     });
   return {
     defaultTreeId:
-      trees.find((tree) => tree.leaves.in_progress > 0)?.id ?? trees.at(-1)?.id ?? null,
+      trees.find((tree) => tree.status === "in_progress")?.id ?? trees.at(-1)?.id ?? null,
     trees,
     tasks: ordered.map((task) => {
       const measure = measureTask(tasks, task.id);

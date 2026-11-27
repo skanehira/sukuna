@@ -197,4 +197,24 @@ describe("タイムラインの復元", () => {
       starts: timeline.trees.map((tree) => tree.startedAt),
     }).toEqual({ selected: "active", starts: [null, null] });
   });
+
+  it("完了と未着手の子が混在する進行中の木も最新の未着手の木より優先する", () => {
+    const timeline = replayTimeline({
+      version: 1,
+      journal: [
+        {
+          at: 10,
+          toolUseId: "plan",
+          ops: [
+            { op: "add", id: "active" },
+            { op: "add", id: "done", parent: "active", status: "completed" },
+            { op: "add", id: "pending", parent: "active" },
+            { op: "add", id: "last" },
+          ],
+        },
+      ],
+      reports: [],
+    });
+    expect(timeline.defaultTreeId).toBe("active");
+  });
 });

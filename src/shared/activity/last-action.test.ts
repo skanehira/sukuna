@@ -4,7 +4,7 @@ import { formatLastAction, lastActionInTurn } from "./last-action";
 describe("最後にしたこと", () => {
   it.each<[string, unknown, string]>([
     ["Bash", { command: "npm test -- csv\necho next" }, "Bash(npm test -- csv)"],
-    ...["Read", "Edit", "Write"].map((name) => [
+    ...["Read", "Edit", "Write"].map((name): [string, unknown, string] => [
       name,
       { file_path: "/work/src/a.ts" },
       `${name}(src/a.ts)`,

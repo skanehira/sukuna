@@ -17,11 +17,9 @@ export function buildTimelineComments(
       typeof payload.text !== "string"
     )
       continue;
-    const matches = [
-      ...payload.text.matchAll(/^タイムラインのタスク ([^\s]+)「[^\n]*?」について: /gm),
-    ];
+    const matches = [...payload.text.matchAll(/^タイムラインのタスク [^\n]*?」について: /gm)];
     for (const [index, match] of matches.entries()) {
-      if (match[1] !== taskId) continue;
+      if (!match[0].startsWith(`タイムラインのタスク ${taskId}「`)) continue;
       const text = payload.text
         .slice(match.index + match[0].length, matches[index + 1]?.index)
         .trimEnd();
