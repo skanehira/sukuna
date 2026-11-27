@@ -1,10 +1,12 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { createProgressRepository } from "./modules/conversation/adapter/progress-repository";
+import { createMessageRepository } from "./modules/conversation/adapter/message-repository";
+import type { MessageDependencies } from "./modules/conversation/domain/message-port";
 import { createTimelineFilePort } from "./modules/conversation/adapter/timeline-file";
 import type { ProgressDependencies } from "./modules/conversation/domain/progress-port";
 import { WebSocketServer } from "ws";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { RunnerLink } from "./runner-link";
 import { WsHub } from "./ws-hub";
 import { createLogger, type Logger } from "../shared/log";
@@ -114,15 +116,6 @@ export function getDatabase(): OpenedDatabase {
   return database;
 }
 
-export function getRunnerLink(): RunnerLink {
-  if (!runner) throw new Error("ランナーとの接続が初期化されていません");
-  return runner;
-}
-export function getWsHub(): WsHub {
-  if (!hub) throw new Error("配信が初期化されていません");
-  return hub;
-}
-
 let progressDependencies: ProgressDependencies | undefined;
 
 export function getProgressDependencies(): ProgressDependencies {
@@ -134,4 +127,16 @@ export function getProgressDependencies(): ProgressDependencies {
     }),
   };
   return progressDependencies;
+}
+
+export function getRunnerLink(): RunnerLink {
+  if (!runner) throw new Error("ランナーとの接続が初期化されていません");
+  return runner;
+}
+export function getMessageDependencies(): MessageDependencies {
+  return { runner: getRunnerLink(), repository: createMessageRepository(getDatabase().db) };
+}
+export function getWsHub(): WsHub {
+  if (!hub) throw new Error("配信が初期化されていません");
+  return hub;
 }

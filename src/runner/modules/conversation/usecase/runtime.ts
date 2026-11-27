@@ -24,8 +24,12 @@ import type { ConversationEvent, StoredEvent, Origin, RunState } from "../../../
 import { AppToolRegistry } from "./app-tool-registry";
 import { UsageLimitTimer } from "./usage-limit-timer";
 import { recordRateLimit } from "./record-rate-limit";
+import type { TimelineInputComment } from "../../../../shared/progress/schema";
 
-export type OperationError = { code: "conflict" | "not_found" | "internal"; message: string };
+export type OperationError = {
+  code: "conflict" | "not_found" | "internal" | "invalid_input";
+  message: string;
+};
 export type RuntimeSignal = { conversationId: string } & (
   | { type: "event"; event: StoredEvent }
   | { type: "turnEnded"; startSeq: number; endSeq: number; subtype: string }
@@ -56,6 +60,7 @@ export type SendInput = {
   clientId?: string;
   interrupt?: boolean;
   origin: Origin;
+  timelineComments?: TimelineInputComment[];
 };
 export type InputAcceptance = { events: ConversationEvent[]; before: () => void };
 type Execution = {
@@ -238,6 +243,11 @@ export class ConversationRuntime {
       throw error;
     }
     const queued = includeQueued ? this.store.queue(id) : [];
+    const inputs = [...queued, input];
+    const hasStructuredComments = inputs.some((entry) => entry.timelineComments !== undefined);
+    const legacyTexts = inputs
+      .filter((entry) => entry.timelineComments === undefined && entry.text.length > 0)
+      .map((entry) => entry.text);
     const text = [...queued.map((q) => q.text), input.text]
       .filter((s) => s.length > 0)
       .join("\n\n");
@@ -247,6 +257,12 @@ export class ConversationRuntime {
         text,
         images: [],
         origin: input.origin,
+        ...(hasStructuredComments
+          ? {
+              timeline_comments: inputs.flatMap((entry) => entry.timelineComments ?? []),
+              ...(legacyTexts.length ? { timeline_legacy_texts: legacyTexts } : {}),
+            }
+          : {}),
         client_ids: [
           ...queued.flatMap((q) => (q.clientId ? [q.clientId] : [])),
           ...(input.clientId ? [input.clientId] : []),

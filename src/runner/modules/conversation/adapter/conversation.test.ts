@@ -13,6 +13,7 @@ import { ConversationRuntime, type RuntimeSignal } from "../usecase/runtime";
 import type { AgentScript } from "../../../../shared/agent-script";
 import type { Clock } from "../domain/clock";
 import { recover } from "../usecase/recover";
+import { createIpcRoutes } from "./ipc-routes";
 
 class TestClock implements Clock {
   time = 100000;
@@ -99,6 +100,303 @@ const holdScript: AgentScript = {
   rules: [{ match: "^hold", steps: [{ text: "作業中" }, { hold: true }] }],
   fallback: [{ text: "完了" }, { end: "success" }],
 };
+
+describe("タイムライン相談の配達", () => {
+  it.each([false, true])(
+    "旧入力・構造化空配列・非空=%sの相談を順にまとめ、原文と元の受付結果を保つ",
+    async (nonempty) => {
+      const f = fixture(holdScript);
+      const id = await f.start("chat", "hold");
+      await f.until(id, () => f.store.events(id).some((e) => e.type === "assistant_text"));
+      const legacy = "タイムラインのタスク a「b」について: 旧相談\n";
+      const ignored = "タイムラインのタスク a「b」について: 相談として扱わない\n";
+      const structured = nonempty
+        ? [
+            { task_id: "c", text: "  相談1\n" },
+            { task_id: "d", text: "相談2\n\n" },
+          ]
+        : [];
+      const first = (await f.runtime.send(id, send(legacy, "legacy")))._unsafeUnwrap();
+      await f.runtime.send(id, { ...send(ignored, "empty"), timelineComments: [] });
+      await f.runtime.send(id, {
+        ...send("表示用の文", "structured"),
+        timelineComments: structured,
+      });
+      await f.runtime.send(id, send("末尾の指示", "last", true));
+      await f.until(id, () => f.store.get(id)?.runState === "idle");
+      const event = f.store
+        .events(id)
+        .filter((e) => e.type === "user_message")
+        .at(-1);
+      expect(event?.payload).toEqual({
+        text: `${legacy}\n\n${ignored}\n\n表示用の文\n\n末尾の指示`,
+        images: [],
+        origin: "interrupt",
+        timeline_comments: structured,
+        timeline_legacy_texts: [legacy, "末尾の指示"],
+        client_ids: ["legacy", "empty", "structured", "last"],
+        queued_ids: ["id-2", "id-3", "id-4"],
+        client_receipts: [
+          { client_id: "legacy", result: "queued", queued_id: "id-2", received_at: 100000 },
+          { client_id: "empty", result: "queued", queued_id: "id-3", received_at: 100000 },
+          { client_id: "structured", result: "queued", queued_id: "id-4", received_at: 100000 },
+          { client_id: "last", result: "delivered", received_at: 100000 },
+        ],
+      });
+      expect({
+        repeat: (await f.runtime.send(id, send("再送", "legacy")))._unsafeUnwrap(),
+        queue: f.store.queue(id),
+        sent: f.agent.sent.map((message) => message.text),
+      }).toEqual({
+        repeat: first,
+        queue: [],
+        sent: ["hold", `${legacy}\n\n${ignored}\n\n表示用の文\n\n末尾の指示`],
+      });
+    },
+  );
+
+  it("配達の記録が失敗したら構造化キューを残し、成功時に一度だけ配達する", async () => {
+    const f = fixture(holdScript);
+    const id = await f.start("chat", "hold");
+    await f.until(id, () => f.store.events(id).some((e) => e.type === "assistant_text"));
+    const timelineComments = [{ task_id: "a", text: "本文" }];
+    const queued = (
+      await f.runtime.send(id, {
+        ...send("相談", "consult"),
+        images: ["existing-image"],
+        timelineComments,
+      })
+    )._unsafeUnwrap();
+    await f.runtime.stop(id);
+    const before = {
+      queue: f.store.queue(id),
+      events: f.store.events(id),
+      sent: [...f.agent.sent],
+    };
+    expect(before.queue).toEqual([
+      {
+        id: "id-2",
+        conversationId: id,
+        text: "相談",
+        images: ["existing-image"],
+        timelineComments,
+        position: 1,
+        clientId: "consult",
+        createdAt: 100000,
+      },
+    ]);
+    f.database.sqlite.exec(
+      "CREATE TRIGGER reject_consult BEFORE INSERT ON conversation_events WHEN NEW.type = 'user_message' BEGIN SELECT RAISE(ABORT, 'reject consultation'); END",
+    );
+    const failed = await f.runtime.deliverQueue(id);
+    expect({
+      error: failed._unsafeUnwrapErr(),
+      queue: f.store.queue(id),
+      events: f.store.events(id),
+      sent: f.agent.sent,
+    }).toEqual({
+      error: { code: "internal", message: "会話の操作に失敗しました。もう一度操作してください。" },
+      ...before,
+    });
+    f.database.sqlite.exec("DROP TRIGGER reject_consult");
+    const delivered = await f.runtime.deliverQueue(id);
+    await f.until(id, () => f.store.get(id)?.runState === "idle");
+    expect({
+      delivered: delivered.isOk(),
+      queue: f.store.queue(id),
+      repeat: (await f.runtime.send(id, send("再送", "consult")))._unsafeUnwrap(),
+      sent: f.agent.sent.map((message) => message.text),
+      comments: f.store
+        .events(id)
+        .flatMap((event) =>
+          event.type === "user_message" ? (event.payload.timeline_comments ?? []) : [],
+        ),
+    }).toEqual({
+      delivered: true,
+      queue: [],
+      repeat: queued,
+      sent: ["hold", "相談"],
+      comments: timelineComments,
+    });
+  });
+
+  it.each([null, {}, [{ task_id: 1, text: "本文" }], [{ task_id: "a" }]])(
+    "構造化相談 %j の形が不正ならIPCで400を返し入力を保存しない",
+    async (timelineComments) => {
+      const f = fixture(holdScript);
+      const id = await f.start();
+      const response = await createIpcRoutes(f.runtime, () => {}).request(
+        `/conversations/${id}/messages`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            text: "相談",
+            images: [],
+            interrupt: false,
+            client_id: "bad",
+            origin: "developer",
+            timeline_comments: timelineComments,
+          }),
+        },
+      );
+      expect({
+        status: response.status,
+        body: await response.json(),
+        events: f.store.events(id),
+        queue: f.store.queue(id),
+      }).toEqual({
+        status: 400,
+        body: { error: { code: "invalid_input", message: "入力を確認してください。" } },
+        events: [],
+        queue: [],
+      });
+    },
+  );
+  it.each(
+    (["direct", "manual", "interrupt", "success"] as const).flatMap((mode) =>
+      [false, true].map((empty) => ({ mode, empty })),
+    ),
+  )(
+    "構造化相談をIPCから$mode・空=$emptyで配達し、本文・受付結果・保存を保つ",
+    async ({ mode, empty }) => {
+      const f = fixture(
+        mode === "success"
+          ? {
+              rules: [
+                {
+                  match: "^start",
+                  steps: [
+                    {
+                      ask: [
+                        {
+                          question: "続けますか",
+                          header: "確認",
+                          options: [],
+                          multi_select: false,
+                        },
+                      ],
+                    },
+                    { end: "success" },
+                  ],
+                },
+              ],
+              fallback: [{ text: "完了" }, { end: "success" }],
+            }
+          : holdScript,
+      );
+      const id = await f.start(
+        "chat",
+        mode === "direct" ? undefined : mode === "success" ? "start" : "hold",
+      );
+      if (mode !== "direct")
+        await f.until(id, () =>
+          f.store
+            .events(id)
+            .some((e) => e.type === (mode === "success" ? "question" : "assistant_text")),
+        );
+      const routes = createIpcRoutes(f.runtime, () => {});
+      const timelineComments = empty
+        ? []
+        : [
+            { task_id: "a「b\n", text: "  本文\nタイムラインのタスク a「b」について: 引用  \n" },
+            { task_id: "", text: "\n" },
+          ];
+      const text = "タイムラインのタスク a「b」について: \n";
+      const interruptedComments = empty ? [] : [{ task_id: "other", text: "割り込みの相談" }];
+      const request = async (clientId: string, interrupt = false, comments = timelineComments) => {
+        const response = await routes.request(`/conversations/${id}/messages`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            text,
+            images: [],
+            origin: "developer",
+            interrupt,
+            client_id: clientId,
+            timeline_comments: comments,
+          }),
+        });
+        return { status: response.status, body: await response.json() };
+      };
+      const first = await request("consult");
+      if (mode !== "direct") {
+        expect(first).toEqual({ status: 200, body: { result: "queued", queued_id: "id-2" } });
+        expect(new SqliteConversationStore(f.database.sqlite).queue(id)).toEqual([
+          {
+            id: "id-2",
+            conversationId: id,
+            text,
+            images: [],
+            timelineComments,
+            clientId: "consult",
+            position: 1,
+            createdAt: 100000,
+          },
+        ]);
+        expect(
+          await request("consult", false, [{ task_id: "wrong", text: "再送で上書きしない" }]),
+        ).toEqual(first);
+        if (mode === "manual") {
+          await f.runtime.stop(id);
+          await f.runtime.deliverQueue(id);
+        } else if (mode === "interrupt") {
+          const response = await routes.request(`/conversations/${id}/messages`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              text: "割り込み",
+              images: [],
+              origin: "developer",
+              interrupt: true,
+              client_id: "interrupt",
+              timeline_comments: interruptedComments,
+            }),
+          });
+          expect(response.status).toBe(200);
+        } else {
+          const question = f.store.events(id).find((e) => e.type === "question");
+          if (question?.type !== "question") throw new Error("質問なし");
+          await f.runtime.answer(id, question.payload.request_id, {});
+        }
+      } else expect(first).toEqual({ status: 200, body: { result: "delivered", seq: 1 } });
+      await f.until(id, () => f.store.get(id)?.runState === "idle");
+      const event = f.store
+        .events(id)
+        .filter((e) => e.type === "user_message")
+        .at(-1);
+      expect(event?.payload).toEqual({
+        text: mode === "interrupt" ? `${text}\n\n割り込み` : text,
+        images: [],
+        origin: mode === "interrupt" ? "interrupt" : mode === "direct" ? "developer" : "queued",
+        timeline_comments:
+          mode === "interrupt" ? [...timelineComments, ...interruptedComments] : timelineComments,
+        client_ids: mode === "interrupt" ? ["consult", "interrupt"] : ["consult"],
+        queued_ids: mode === "direct" ? [] : ["id-2"],
+        client_receipts: [
+          mode === "direct"
+            ? { client_id: "consult", result: "delivered", received_at: 100000 }
+            : { client_id: "consult", result: "queued", queued_id: "id-2", received_at: 100000 },
+          ...(mode === "interrupt"
+            ? [{ client_id: "interrupt", result: "delivered", received_at: 100000 }]
+            : []),
+        ],
+      });
+      expect({
+        queue: f.store.queue(id),
+        repeat: await request("consult"),
+        sent: f.agent.sent.map((m) => m.text),
+      }).toEqual({
+        queue: [],
+        repeat: first,
+        sent: [
+          ...(mode === "direct" ? [] : [mode === "success" ? "start" : "hold"]),
+          mode === "interrupt" ? `${text}\n\n割り込み` : text,
+        ],
+      });
+    },
+  );
+});
 
 class ControlledAgent extends ScriptedAgent {
   outputs: AsyncQueue<AgentOutput>[] = [];

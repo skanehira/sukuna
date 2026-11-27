@@ -19,6 +19,12 @@ import {
 import { createProgressRepository } from "./progress-repository";
 import { createTimelineFilePort } from "./timeline-file";
 import { progressResponseSchema } from "../../../../shared/progress/schema";
+import { startRunnerApp } from "../../../../runner/app";
+import { readEnvironment } from "../../../../shared/env";
+import { ScriptedAgent } from "../../../../runner/modules/conversation/adapter/scripted-agent";
+import { RunnerLink } from "../../../runner-link";
+import { createMessageRepository } from "./message-repository";
+import type { MessageDependencies } from "../domain/message-port";
 
 let home: string;
 let database: OpenedDatabase;
@@ -32,9 +38,10 @@ afterEach(() => {
   removeTempHome(home);
 });
 
-function app() {
+function app(runner?: MessageDependencies["runner"]) {
   return createApp({
     build: "test",
+    messages: runner ? { runner, repository: createMessageRepository(database.db) } : undefined,
     identity: {
       login: "test@example.com",
       devIdentity: "1",
@@ -103,10 +110,255 @@ const emptyTimeline = {
   history: [],
   reports: [],
   comments: [],
+  unresolvedComments: [],
 };
 const file = { version: 1, journal: [], reports: [] };
 
 describe("進捗の API と SQLite・タイムラインファイル", () => {
+  it.each(
+    [
+      {
+        name: "別IDで同じ前置き",
+        tasks: [
+          { id: "a「b", title: "c" },
+          { id: "a", title: "b「c" },
+        ],
+        text: "タイムラインのタスク a「b「c」について: 本文",
+        reason: "ambiguous_task",
+      },
+      {
+        name: "別IDの前置き包含",
+        tasks: [
+          { id: "a", title: "b" },
+          { id: "a「b」について: x", title: "c" },
+        ],
+        text: "タイムラインのタスク a「b」について: x「c」について: 本文",
+        reason: "ambiguous_boundary",
+      },
+      {
+        name: "同じIDの現旧題名包含",
+        tasks: [
+          { id: "a", title: "b" },
+          { id: "a", title: "b」について: c" },
+        ],
+        text: "タイムラインのタスク a「b」について: c」について: 本文",
+        reason: "ambiguous_boundary",
+      },
+      {
+        name: "同じIDと同じ前置き",
+        tasks: [
+          { id: "a", title: "b" },
+          { id: "a", title: "b" },
+        ],
+        text: "タイムラインのタスク a「b」について: 本文",
+        reason: null,
+      },
+      {
+        name: "改行を含む題名の中の前置き",
+        tasks: [
+          { id: "a", title: "b\nタイムラインのタスク c「d」について: e" },
+          { id: "c", title: "d" },
+        ],
+        text: "タイムラインのタスク a「b\nタイムラインのタスク c「d」について: e」について: 本文",
+        reason: "ambiguous_boundary",
+      },
+    ].flatMap((condition) => [false, true].map((structured) => ({ ...condition, structured }))),
+  )(
+    "$name の構造化=$structuredをAPIで正本から取り込み、旧文面の曖昧さを返す",
+    async ({ tasks, text, reason, structured }) => {
+      seedConversation();
+      database.db
+        .update(conversations)
+        .set({ runState: "idle" })
+        .where(eq(conversations.id, "chat"))
+        .run();
+      const seen = new Set<string>();
+      const journal = tasks.map((task, index) => {
+        const op = seen.has(task.id) ? "update" : "add";
+        seen.add(task.id);
+        return { at: index + 1, toolUseId: String(index), ops: [{ op, ...task }] };
+      });
+      writeFileSync(
+        join(home, "timeline/sessions/chat.json"),
+        JSON.stringify({
+          ...file,
+          journal,
+          comments: [{ at: 50, taskId: tasks[0]!.id, text: "ファイル" }],
+        }),
+      );
+      const origins = [
+        "developer",
+        "queued",
+        "interrupt",
+        "stock",
+        "answer_text",
+        "flow",
+        "resume",
+        "finish_proposal",
+      ];
+      const body = structured ? "  本文\r\nタイムラインのタスク a「b」について: 引用\n\n" : "本文";
+      database.db
+        .insert(conversationEvents)
+        .values(
+          origins.map((origin, index) => ({
+            conversationId: "chat",
+            seq: index + 3,
+            type: "user_message",
+            createdAt: 300 + index,
+            payload: {
+              origin,
+              text,
+              ...(structured ? { timeline_comments: [{ task_id: tasks[0]!.id, text: body }] } : {}),
+            },
+          })),
+        )
+        .run();
+      const response = await app().request(
+        "/api/conversations/chat/progress",
+        {},
+        incomingWith("127.0.0.1", 1234),
+      );
+      const result = progressResponseSchema.parse(await response.json());
+      expect({
+        status: response.status,
+        comments: result.timeline?.comments,
+        unresolvedComments: result.timeline?.unresolvedComments,
+      }).toEqual({
+        status: 200,
+        comments: [
+          { at: 50, taskId: tasks[0]!.id, text: "ファイル" },
+          ...(!structured && reason !== null
+            ? []
+            : origins
+                .slice(0, 5)
+                .map((_origin, index) => ({ at: 300 + index, taskId: tasks[0]!.id, text: body }))),
+        ],
+        unresolvedComments:
+          !structured && reason !== null
+            ? origins.slice(0, 5).map((_origin, index) => ({ at: 300 + index, text, reason }))
+            : [],
+      });
+    },
+  );
+
+  it.each(["present", "empty", "omitted"])(
+    "$metadata 構造化相談を公開HTTPから保存したあと進捗APIが同じIDと本文を返す: %s",
+    async (metadata) => {
+      const agent = new ScriptedAgent({ rules: [], fallback: [{ text: "受信" }, { hold: true }] });
+      const runner = await startRunnerApp({
+        database,
+        agent,
+        environment: readEnvironment(
+          "runner",
+          { SUKUNA_HOME: home },
+          home,
+          () => true,
+        )._unsafeUnwrap(),
+        log: () => {},
+      });
+      try {
+        const id = (
+          await runner.runtime.start({ projectId: "p", kind: "chat", title: "会話", cwd: home })
+        )._unsafeUnwrap().conversationId;
+        const comments = [
+          { task_id: "a「b", text: "  本文\n" },
+          { task_id: "a", text: "\n別の相談  \n" },
+        ];
+        const response = await app(
+          new RunnerLink({
+            socket: join(home, "runner.sock"),
+            log: () => {},
+            notice: () => {},
+            connection: () => {},
+          }),
+        ).request(
+          `/api/conversations/${id}/messages`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              text: "タイムラインのタスク a「b「c」について:   本文\n",
+              images: [],
+              clientMessageId: "consult",
+              mode: "send",
+              ...(metadata === "omitted"
+                ? {}
+                : { timeline_comments: metadata === "empty" ? [] : comments }),
+            }),
+          },
+          incomingWith("127.0.0.1", 1234),
+        );
+        expect({ status: response.status, body: await response.json() }).toEqual({
+          status: 202,
+          body: { result: "delivered", queueItem: null },
+        });
+        const sessionId = database.db
+          .select()
+          .from(conversations)
+          .where(eq(conversations.id, id))
+          .get()?.sessionId;
+        if (!sessionId) throw new Error("セッションがない");
+        writeFileSync(
+          join(home, `timeline/sessions/${sessionId}.json`),
+          JSON.stringify({
+            ...file,
+            journal: [
+              {
+                at: 1,
+                toolUseId: "tasks",
+                ops: [
+                  { op: "add", id: "a「b", title: "c" },
+                  { op: "add", id: "a", title: "b「c" },
+                ],
+              },
+            ],
+          }),
+        );
+        const progress = await app().request(
+          `/api/conversations/${id}/progress`,
+          {},
+          incomingWith("127.0.0.1", 1234),
+        );
+        const parsed = progressResponseSchema.parse(await progress.json());
+        const stored = database.db
+          .select()
+          .from(conversationEvents)
+          .where(eq(conversationEvents.conversationId, id))
+          .all()
+          .find((event) => event.type === "user_message");
+        expect({
+          status: progress.status,
+          comments: parsed.timeline?.comments,
+          unresolvedComments: parsed.timeline?.unresolvedComments,
+        }).toEqual({
+          status: 200,
+          comments:
+            metadata === "present"
+              ? comments.map((comment) => ({
+                  at: stored?.createdAt,
+                  taskId: comment.task_id,
+                  text: comment.text,
+                }))
+              : [],
+          unresolvedComments:
+            metadata === "omitted"
+              ? [
+                  {
+                    at: stored?.createdAt,
+                    text: "タイムラインのタスク a「b「c」について:   本文\n",
+                    reason: "ambiguous_task",
+                  },
+                ]
+              : [],
+        });
+        expect(agent.sent.map((message) => message.text)).toEqual([
+          "タイムラインのタスク a「b「c」について:   本文\n",
+        ]);
+      } finally {
+        await runner.shutdown();
+      }
+    },
+  );
   it("計画が無ければ null、ファイルに木が無ければ空の trees を返す", async () => {
     seedConversation();
     const server = app();
@@ -402,6 +654,7 @@ describe("進捗の API と SQLite・タイムラインファイル", () => {
             },
           ],
           reports: [],
+          unresolvedComments: [],
           comments: [
             { at: 300, taskId, text: "確認" },
             { at: 400, taskId, text: "会話だけの相談" },
@@ -461,6 +714,11 @@ describe("進捗の API と SQLite・タイムラインファイル", () => {
           payload: {
             origin,
             text: `下書き\n\nタイムラインのタスク other「別」について: 別の相談\n別の続き\n\nタイムラインのタスク ${id}「${index === 0 ? oldTitle : title}」について: ${text}\n\nタイムラインのタスク ${others[1]!.id}「元タスク」について: もう一方の相談`,
+            timeline_comments: [
+              { task_id: "other", text: "別の相談\n別の続き" },
+              { task_id: id, text },
+              { task_id: others[1]!.id, text: "もう一方の相談" },
+            ],
           },
         })),
       )
@@ -537,6 +795,7 @@ describe("進捗の API と SQLite・タイムラインファイル", () => {
               .map((task) => history(1, task.id, task.id === id ? oldTitle : task.title, null)),
           ],
           reports: [],
+          unresolvedComments: [],
           comments: [
             { at: 50, taskId: id, text: "ファイルの相談" },
             { at: 300, taskId: id, text },

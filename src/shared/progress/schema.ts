@@ -24,6 +24,15 @@ export const timelineCommentSchema = z.strictObject({
   taskId: z.string(),
   text: z.string(),
 });
+export const timelineInputCommentSchema = z.strictObject({
+  task_id: z.string(),
+  text: z.string(),
+});
+export const unresolvedTimelineCommentSchema = z.strictObject({
+  at: z.number(),
+  text: z.string(),
+  reason: z.enum(["ambiguous_task", "ambiguous_boundary"]),
+});
 export const timelineFileSchema = z.object({
   version: z.literal(1),
   journal: z.array(
@@ -80,6 +89,7 @@ export const timelineSchema = z.strictObject({
   ),
   reports: z.array(z.strictObject({ at: z.number(), text: z.string() })),
   comments: z.array(timelineCommentSchema),
+  unresolvedComments: z.array(unresolvedTimelineCommentSchema),
 });
 export const progressResponseSchema = z.strictObject({
   conversationId: z.string().nullable(),
@@ -100,4 +110,6 @@ export type TaskOp = z.infer<typeof taskOpSchema>;
 export type TimelineFile = z.infer<typeof timelineFileSchema>;
 export type Timeline = z.infer<typeof timelineSchema>;
 export type TimelineComment = z.infer<typeof timelineCommentSchema>;
+export type TimelineInputComment = z.infer<typeof timelineInputCommentSchema>;
+export type UnresolvedTimelineComment = z.infer<typeof unresolvedTimelineCommentSchema>;
 export type ProgressResponse = z.infer<typeof progressResponseSchema>;

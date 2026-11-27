@@ -21,6 +21,45 @@ describe("タスクの相談コメント", () => {
   it.each(
     taskCases.flatMap((task) =>
       [
+        "developer",
+        "queued",
+        "interrupt",
+        "stock",
+        "answer_text",
+        "flow",
+        "resume",
+        "finish_proposal",
+      ].map((origin) => ({ ...task, origin })),
+    ),
+  )(
+    "候補が一意な $taskId「$title」の旧発言を $origin に従って取り込む",
+    ({ taskId, title, origin }) => {
+      expect(
+        buildTimelineComments(
+          [{ id: taskId, title }],
+          [],
+          [
+            {
+              type: "user_message",
+              createdAt: 10,
+              payload: {
+                origin,
+                text: `タイムラインのタスク ${taskId}「${title}」について:   本文\r\n\n`,
+              },
+            },
+          ],
+        ),
+      ).toEqual({
+        comments: ["developer", "queued", "interrupt", "stock", "answer_text"].includes(origin)
+          ? [{ at: 10, taskId, text: "  本文\r\n\n" }]
+          : [],
+        unresolvedComments: [],
+      });
+    },
+  );
+  it.each(
+    taskCases.flatMap((task) =>
+      [
         { origin: "developer", accepted: true },
         { origin: "queued", accepted: true },
         { origin: "interrupt", accepted: true },
@@ -42,6 +81,7 @@ describe("タスクの相談コメント", () => {
           payload: {
             origin,
             text: `タイムラインのタスク ${taskId}「${title}」について:   確認してください\n本文の続き  \n`,
+            timeline_comments: [{ task_id: taskId, text: "  確認してください\n本文の続き  \n" }],
           },
         },
       ];
@@ -55,7 +95,7 @@ describe("タスクの相談コメント", () => {
           ],
           [],
           events,
-        ),
+        ).comments,
       ).toEqual(accepted ? [{ at: 10, taskId, text: "  確認してください\n本文の続き  \n" }] : []);
     },
   );
@@ -82,6 +122,12 @@ describe("タスクの相談コメント", () => {
 
 タイムラインのタスク ${taskId}「${title}」について: 最後の相談
 最後の続き`,
+            timeline_comments: [
+              { task_id: "other task", text: "前の相談\n前の続き" },
+              { task_id: taskId, text: "対象の相談\n対象の続き" },
+              { task_id: `${taskId}-other`, text: "後の相談\n後の続き" },
+              { task_id: taskId, text: "最後の相談\n最後の続き" },
+            ],
           },
         },
       ];
@@ -97,7 +143,7 @@ describe("タスクの相談コメント", () => {
           ],
           [],
           events,
-        ),
+        ).comments,
       ).toEqual([
         { at: 10, taskId: "other task", text: "前の相談\n前の続き" },
         { at: 10, taskId, text: "対象の相談\n対象の続き" },
@@ -166,7 +212,7 @@ describe("タスクの相談コメント", () => {
           { at: 20, taskId: "t2", text: "重複" },
         ],
         events,
-      ),
+      ).comments,
     ).toEqual([
       { at: 1, taskId: "t2", text: "別" },
       { at: 5, taskId: "t1", text: "ファイルの相談" },
@@ -198,7 +244,7 @@ describe("タスクの相談コメント", () => {
             },
           },
         ],
-      ),
+      ).comments,
     ).toEqual([{ at: 10, taskId: "t1", text }]);
   });
 });

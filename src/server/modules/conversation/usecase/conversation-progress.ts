@@ -42,10 +42,16 @@ export async function assembleProgress(
       : await deps.timeline.read(conversation.sessionId);
   const timeline = read.file === null ? null : replayTimeline(read.file);
   if (timeline !== null) {
-    timeline.comments = buildTimelineComments(
-      [...timeline.tasks, ...timeline.history.map(({ taskId, title }) => ({ id: taskId, title }))],
-      timeline.comments,
-      events,
+    Object.assign(
+      timeline,
+      buildTimelineComments(
+        [
+          ...timeline.tasks,
+          ...timeline.history.map(({ taskId, title }) => ({ id: taskId, title })),
+        ],
+        timeline.comments,
+        events,
+      ),
     );
   }
   return {

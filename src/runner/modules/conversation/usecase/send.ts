@@ -23,6 +23,8 @@ export async function sendUnlocked(
     const prior = this.store.duplicate(id, input.clientId, this.options.clock.now() - 600000);
     if (prior) return ok(prior);
   }
+  if (input.text.length === 0 && input.images.length === 0 && this.store.queue(id).length === 0)
+    return err({ code: "invalid_input", message: "入力を確認してください。" });
   if (activeStates.includes(c.runState) && !input.interrupt) {
     const queue = this.store.queue(id);
     const queuedId = this.options.id();
@@ -33,6 +35,9 @@ export async function sendUnlocked(
         conversationId: id,
         text: input.text,
         images: input.images,
+        ...(input.timelineComments === undefined
+          ? {}
+          : { timelineComments: input.timelineComments }),
         position: (queue.at(-1)?.position ?? 0) + 1,
         clientId: input.clientId ?? null,
         createdAt: this.options.clock.now(),

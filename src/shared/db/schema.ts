@@ -141,6 +141,9 @@ export const queuedInstructions = sqliteTable("queued_instructions", {
   stockItemId: text("stock_item_id"),
   clientId: text("client_id"),
   createdAt: integer("created_at").notNull(),
+  timelineComments: text("timeline_comments", { mode: "json" }).$type<
+    { task_id: string; text: string }[]
+  >(),
 });
 
 export const pendingAnswers = sqliteTable(

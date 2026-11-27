@@ -1,7 +1,262 @@
 import { describe, expect, it } from "vitest";
 import { replayTimeline } from "./replay";
+import { formatProgress } from "./tree";
 
 describe("タイムラインの復元", () => {
+  it("末端の単位変更を祖先すべての割合と操作順の履歴に伝える", () => {
+    const timeline = replayTimeline({
+      version: 1,
+      reports: [],
+      journal: [
+        {
+          at: 1,
+          toolUseId: "plan",
+          ops: [
+            { op: "add", id: "r" },
+            { op: "add", id: "p", parent: "r" },
+            { op: "add", id: "c", parent: "p" },
+          ],
+        },
+        { at: 2, toolUseId: "units", ops: [{ op: "update", id: "c", done: [1, 2] }] },
+      ],
+    });
+    expect({
+      tasks: timeline.tasks.map(({ id, status, completed }) => ({ id, status, completed })),
+      history: timeline.history
+        .filter((entry) => entry.at === 2)
+        .map(({ taskId, completedBefore, completedAfter }) => ({
+          taskId,
+          completedBefore,
+          completedAfter,
+        })),
+    }).toEqual({
+      tasks: [
+        { id: "r", status: "in_progress", completed: 0.5 },
+        { id: "p", status: "in_progress", completed: 0.5 },
+        { id: "c", status: "in_progress", completed: 0.5 },
+      ],
+      history: [
+        { taskId: "p", completedBefore: 0, completedAfter: 0.5 },
+        { taskId: "r", completedBefore: 0, completedAfter: 0.5 },
+        { taskId: "c", completedBefore: 0, completedAfter: 0.5 },
+      ],
+    });
+  });
+  it("丸め境界の計算をメモ変更では保ち、子の重み変更後は新しい境界へ更新する", () => {
+    const timeline = replayTimeline({
+      version: 1,
+      reports: [],
+      journal: [
+        {
+          at: 1,
+          toolUseId: "plan",
+          ops: [
+            { op: "add", id: "r" },
+            { op: "add", id: "a", parent: "r", status: "completed", weight: 5 },
+            { op: "add", id: "b", parent: "r", status: "completed", weight: 6 },
+            { op: "add", id: "p", parent: "r", weight: 19989 },
+          ],
+        },
+        { at: 2, toolUseId: "note", ops: [{ op: "update", id: "r", note: "メモ" }] },
+        { at: 3, toolUseId: "a", ops: [{ op: "update", id: "a", weight: 10 }] },
+        { at: 4, toolUseId: "b", ops: [{ op: "update", id: "b", weight: 11 }] },
+        { at: 5, toolUseId: "p", ops: [{ op: "update", id: "p", weight: 19979 }] },
+      ],
+    });
+    expect({
+      completed: timeline.trees[0]!.completed,
+      formatted: formatProgress(timeline.trees[0]!.completed),
+      memo: timeline.history
+        .filter((entry) => entry.at === 2)
+        .map(({ completedBefore, completedAfter, note }) => ({
+          completedBefore,
+          completedAfter,
+          note,
+        })),
+    }).toEqual({
+      completed: 0.0010500000000000002,
+      formatted: "0.11%",
+      memo: [
+        {
+          completedBefore: 0.0005499999999999999,
+          completedAfter: 0.0005499999999999999,
+          note: "メモ",
+        },
+      ],
+    });
+  });
+  it.each([
+    { completed: 11, split: 5, value: 0.0005499999999999999, text: "0.05%" },
+    { completed: 21, split: 10, value: 0.0010500000000000002, text: "0.11%" },
+    { completed: 31, split: 15, value: 0.0015500000000000002, text: "0.16%" },
+    { completed: 19999, split: 10000, value: 0.9999, text: "99.99%" },
+  ])(
+    "重み$completedの丸め境界で割合と履歴と表示をプラグインに合わせる",
+    ({ completed, split, value, text }) => {
+      const timeline = replayTimeline({
+        version: 1,
+        reports: [],
+        journal: [
+          {
+            at: 1,
+            toolUseId: "plan",
+            ops: [
+              { op: "add", id: "r" },
+              { op: "add", id: "a", parent: "r", status: "completed", weight: split },
+              { op: "add", id: "b", parent: "r", status: "completed", weight: completed - split },
+              { op: "add", id: "p", parent: "r", weight: 20000 - completed },
+            ],
+          },
+        ],
+      });
+      expect({
+        completed: timeline.trees[0]!.completed,
+        task: timeline.tasks[0]!.completed,
+        history: timeline.history[0]!.completedAfter,
+        formatted: formatProgress(timeline.trees[0]!.completed),
+      }).toEqual({ completed: value, task: value, history: value, formatted: text });
+    },
+  );
+  it("単位と重みの変更と子の削除を操作順に親の割合と履歴へ反映する", () => {
+    const timeline = replayTimeline({
+      version: 1,
+      reports: [],
+      journal: [
+        {
+          at: 1,
+          toolUseId: "add",
+          ops: [
+            { op: "add", id: "root" },
+            { op: "add", id: "a", parent: "root", status: "completed", weight: 3 },
+            { op: "add", id: "b", parent: "root" },
+          ],
+        },
+        { at: 2, toolUseId: "units", ops: [{ op: "update", id: "b", done: [1, 2] }] },
+        { at: 3, toolUseId: "weight", ops: [{ op: "update", id: "a", weight: 1 }] },
+        { at: 4, toolUseId: "remove", ops: [{ op: "remove", id: "a" }] },
+        { at: 5, toolUseId: "complete", ops: [{ op: "update", id: "b", done: [2, 2] }] },
+      ],
+    });
+    expect({
+      tree: timeline.trees[0],
+      tasks: timeline.tasks,
+      history: timeline.history
+        .filter((entry) => entry.taskId === "root")
+        .map(({ at, from, to, completedBefore, completedAfter }) => ({
+          at,
+          from,
+          to,
+          completedBefore,
+          completedAfter,
+        })),
+    }).toEqual({
+      tree: {
+        id: "root",
+        title: "root",
+        status: "completed",
+        completed: 1,
+        parts: { pending: 0, in_progress: 0, completed: 1, blocked: 0 },
+        leaves: { pending: 0, in_progress: 0, completed: 1, blocked: 0, total: 1 },
+        startedAt: 1,
+      },
+      tasks: [
+        {
+          id: "root",
+          parent: null,
+          title: "root",
+          status: "completed",
+          weight: 1,
+          completed: 1,
+          units: "1 / 1",
+        },
+        {
+          id: "b",
+          parent: "root",
+          title: "b",
+          status: "completed",
+          weight: 1,
+          done: [2, 2],
+          completed: 1,
+          units: "2 / 2",
+        },
+      ],
+      history: [
+        { at: 5, from: "in_progress", to: "completed", completedBefore: 0.5, completedAfter: 1 },
+        {
+          at: 4,
+          from: "in_progress",
+          to: "in_progress",
+          completedBefore: 0.75,
+          completedAfter: 0.5,
+        },
+        {
+          at: 3,
+          from: "in_progress",
+          to: "in_progress",
+          completedBefore: 0.875,
+          completedAfter: 0.75,
+        },
+        {
+          at: 2,
+          from: "in_progress",
+          to: "in_progress",
+          completedBefore: 0.75,
+          completedAfter: 0.875,
+        },
+        { at: 1, from: "completed", to: "in_progress", completedBefore: 1, completedAfter: 0.75 },
+        { at: 1, from: "pending", to: "completed", completedBefore: 0, completedAfter: 1 },
+        { at: 1, from: null, to: "pending", completedBefore: 0, completedAfter: 0 },
+      ],
+    });
+  });
+  it.each([
+    { shape: "wide", count: 1000 },
+    { shape: "wide", count: 4000 },
+    { shape: "wide", count: 10000 },
+    { shape: "deep", count: 200 },
+  ])(
+    "$shape の正常な計画を復元し全タスクと末端を返す",
+    ({ shape, count }) => {
+      const timeline = replayTimeline({
+        version: 1,
+        reports: [],
+        journal: [
+          {
+            at: 1,
+            toolUseId: "plan",
+            ops: [
+              { op: "add", id: "root" },
+              ...Array.from({ length: count }, (_, index) => ({
+                op: "add" as const,
+                id: `task${index}`,
+                parent: shape === "wide" || index === 0 ? "root" : `task${index - 1}`,
+              })),
+            ],
+          },
+        ],
+      });
+      expect({
+        tasks: timeline.tasks.length,
+        leaves: timeline.trees[0]?.leaves,
+        status: timeline.trees[0]?.status,
+        completed: timeline.trees[0]?.completed,
+        history: timeline.history.length,
+      }).toEqual({
+        tasks: count + 1,
+        leaves: {
+          pending: shape === "wide" ? count : 1,
+          in_progress: 0,
+          completed: 0,
+          blocked: 0,
+          total: shape === "wide" ? count : 1,
+        },
+        status: "pending",
+        completed: 0,
+        history: count + 1,
+      });
+    },
+    20_000,
+  );
   it("時刻順に復元し深さ優先のタスクと親の変更履歴、報告を返す", () => {
     expect(
       replayTimeline({
@@ -170,6 +425,7 @@ describe("タイムラインの復元", () => {
         { at: 180001, text: "新しい報告" },
         { at: 1, text: "古い報告" },
       ],
+      unresolvedComments: [],
       comments: [
         { at: 10, taskId: "child", text: "前" },
         { at: 20, taskId: "child", text: "後" },

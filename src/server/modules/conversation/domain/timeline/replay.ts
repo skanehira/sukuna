@@ -1,28 +1,15 @@
 import type { Timeline, TimelineFile } from "../../../../../shared/progress/schema";
-import { applyOps, measureTask, type Task } from "./tree";
+import { TaskTree, type Task } from "./tree";
 
 export function replayTimeline(
   file: Omit<TimelineFile, "comments"> & { comments?: TimelineFile["comments"] },
 ): Timeline {
-  let tasks: Task[] = [];
+  const tree = new TaskTree();
   const history: Timeline["history"] = [];
   const started = new Map<string, number>();
   for (const entry of file.journal.toSorted((a, b) => a.at - b.at)) {
     for (const op of entry.ops) {
-      const before = tasks;
-      tasks = applyOps(before, [op]);
-      for (const task of tasks.toSorted((a, b) => (a.id === op.id ? -1 : b.id === op.id ? 1 : 0))) {
-        const old = before.find((item) => item.id === task.id);
-        const was = measureTask(before, task.id);
-        const now = measureTask(tasks, task.id);
-        const changed = old !== task;
-        if (
-          task.id === op.id
-            ? !changed
-            : old === undefined ||
-              (was.status === now.status && was.parts.completed === now.parts.completed)
-        )
-          continue;
+      for (const { task, before: old, was, now } of tree.apply(op)) {
         if (old === undefined) started.set(task.id, entry.at);
         history.push({
           at: entry.at,
@@ -31,7 +18,7 @@ export function replayTimeline(
           from: old?.status ?? null,
           to: now.status,
           weight: task.weight,
-          completedBefore: was.parts.completed,
+          completedBefore: was?.parts.completed ?? 0,
           completedAfter: now.parts.completed,
           description: task.id === op.id ? (op.description ?? null) : null,
           note: task.id === op.id ? (op.note ?? null) : null,
@@ -40,18 +27,24 @@ export function replayTimeline(
       }
     }
   }
+  const tasks = tree.tasks();
   const ordered: Task[] = [];
-  const visit = (parent: string | null): void => {
-    for (const task of tasks.filter((item) => item.parent === parent)) {
-      ordered.push(task);
-      visit(task.id);
-    }
-  };
-  visit(null);
+  const children = new Map<string | null, Task[]>();
+  for (const task of tasks) {
+    const siblings = children.get(task.parent) ?? [];
+    siblings.push(task);
+    children.set(task.parent, siblings);
+  }
+  const pending = (children.get(null) ?? []).toReversed();
+  while (pending.length) {
+    const task = pending.pop()!;
+    ordered.push(task);
+    pending.push(...(children.get(task.id) ?? []).toReversed());
+  }
   const trees = tasks
     .filter((task) => task.parent === null)
     .map((task) => {
-      const measure = measureTask(tasks, task.id);
+      const measure = tree.measure(task.id);
       return {
         id: task.id,
         title: task.title,
@@ -65,8 +58,8 @@ export function replayTimeline(
       trees.find((tree) => tree.status === "in_progress")?.id ?? trees.at(-1)?.id ?? null,
     trees,
     tasks: ordered.map((task) => {
-      const measure = measureTask(tasks, task.id);
-      const group = tasks.some((child) => child.parent === task.id);
+      const measure = tree.measure(task.id);
+      const group = children.has(task.id);
       const units = group
         ? [measure.leaves.completed, measure.leaves.total]
         : (task.done ?? [task.status === "completed" ? 1 : 0, 1]);
@@ -75,5 +68,6 @@ export function replayTimeline(
     history: history.reverse(),
     reports: file.reports.toSorted((a, b) => b.at - a.at),
     comments: (file.comments ?? []).toSorted((a, b) => a.at - b.at),
+    unresolvedComments: [],
   };
 }
