@@ -10,7 +10,7 @@ const skeletonLines: LineInfo[] = Array.from({ length: 6 }, () => ({
 export function Skeleton({ side }: { side: BufferSide }) {
   return (
     <div role="status" aria-label="読み込み中" className="flex min-h-0 flex-1 flex-col">
-      <Buffer side={side} lines={skeletonLines} onReady={() => undefined} />
+      <Buffer side={side} temporary lines={skeletonLines} onReady={() => undefined} />
     </div>
   );
 }

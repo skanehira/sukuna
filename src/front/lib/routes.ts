@@ -25,6 +25,9 @@ export function parseRoute(url: string): Route {
         : {}),
     };
   }
+  if (parts.length === 1 && parts[0] === "convs") return { kind: "convs" };
+  if (parts.length === 1 && parts[0] === "search")
+    return { kind: "search", query: params.toString() };
   if (["help", "settings", "usage"].includes(parts[0])) return { kind: parts[0] };
   return { kind: "not-found" };
 }

@@ -1,4 +1,8 @@
 import type { ScreenLoader } from "../../App";
+import type { ServerMessage } from "../../../shared/ws";
+import type { RightView } from "../../buffer/right-window";
+import type { LifecycleFeed } from "../../components/lifecycle/use-lifecycle";
+import { createLifecycleWorkspace, type LifecycleOptions } from "../lifecycle/workspace";
 import { Buffer } from "../../buffer/Buffer";
 import type { BufferController } from "../../buffer/controller";
 import {
@@ -21,15 +25,24 @@ export function createConversationWorkspace(
   controller: BufferController,
   env: ConversationEnvironment,
   socket: () => RealtimeSocket,
-  recap?: { api: RecapApi; storage: TabStorage },
+  {
+    recap,
+    lifecycle: lifecycleOptions,
+  }: {
+    recap?: { api: RecapApi; storage: TabStorage };
+    lifecycle?: LifecycleOptions;
+  } = {},
 ) {
   const sessions = new Map<string, ConversationSession>();
   const active = new Set<ConversationSession>();
+  const shown = new Map<string, number>();
   const listeners = new Set<() => void>();
+  const changes = new Map<string, Set<(message?: ServerMessage) => void>>();
   let connected = true;
   let visible = true;
   let currentSession: ConversationSession | null = null;
   const reload = (topic: string) => {
+    changes.get(topic)?.forEach((receive) => receive());
     for (const session of active)
       if (topic === `conversation:${session.id}`)
         void session
@@ -51,8 +64,52 @@ export function createConversationWorkspace(
     },
     reload,
     gap: reload,
-    message: (message) => active.forEach((session) => session.receive(message)),
+    message: (message) => {
+      active.forEach((session) => session.receive(message));
+      if (message.type !== "resync")
+        changes.get(message.topic)?.forEach((receive) => receive(message));
+    },
   });
+  const subscribeChanges: LifecycleFeed = (topic, receive, from) => {
+    const receivers = changes.get(topic) ?? new Set();
+    receivers.add(receive);
+    changes.set(topic, receivers);
+    const after = topic.startsWith("conversation:")
+      ? sessions.get(topic.slice("conversation:".length))?.receivedThrough()
+      : undefined;
+    const unsubscribe = realtime.subscribe(topic, from ?? after);
+    return () => {
+      receivers.delete(receive);
+      if (receivers.size === 0) changes.delete(topic);
+      unsubscribe();
+    };
+  };
+  const showConversation = (id: string) => {
+    const topic = `conversation:${id}`;
+    const count = shown.get(topic) ?? 0;
+    shown.set(topic, count + 1);
+    if (count === 0) realtime.shown([...shown.keys()]);
+    return () => {
+      const count = shown.get(topic) ?? 0;
+      if (count > 1) {
+        shown.set(topic, count - 1);
+      } else {
+        shown.delete(topic);
+        realtime.shown([...shown.keys()]);
+      }
+    };
+  };
+  const lifecycle =
+    lifecycleOptions &&
+    createLifecycleWorkspace({
+      ...lifecycleOptions,
+      controller,
+      conversations: api,
+      clock: env,
+      showConversation,
+      subscribe: subscribeChanges,
+      lookup: (id) => sessions.get(id)?.snapshot().data?.conversation,
+    });
   const connection = {
     snapshot: () => connected,
     subscribe: (listener: () => void) => {
@@ -66,14 +123,14 @@ export function createConversationWorkspace(
     active.add(session);
     session.connection(connected);
     const unsubscribe = realtime.subscribe(`conversation:${session.id}`, session.receivedThrough());
-    realtime.shown([...active].map((session) => `conversation:${session.id}`));
+    const unshow = showConversation(session.id);
     return () => {
       active.delete(session);
       const next = parseRoute(controller.options.url ?? "/");
       if (next.kind !== "conversation" || next.id !== session.id || next.view)
         session.recap?.leave();
       unsubscribe();
-      realtime.shown([...active].map((session) => `conversation:${session.id}`));
+      unshow();
     };
   };
   const loadScreen: ScreenLoader = async (route) => {
@@ -84,6 +141,8 @@ export function createConversationWorkspace(
       currentSession.recap?.leave();
       currentSession = null;
     }
+    const lifecycleScreen = lifecycle?.screen(route);
+    if (lifecycleScreen) return lifecycleScreen;
     if (route.kind === "home")
       return {
         kind: "ready",
@@ -143,14 +202,14 @@ export function createConversationWorkspace(
   return {
     loadScreen,
     connection,
-    renderRight: (view: { view: string; target: string }) => {
+    renderRight: (view: RightView) => {
       if (["recent", "toc", "decisions", "recap-search"].includes(view.view)) {
         const recap = sessions.get(view.target)?.recap;
         return recap ? (
           <RecapPanel key={`${view.target}:${view.view}`} recap={recap} view={view.view} />
         ) : null;
       }
-      if (view.view !== "conversation-switch") return null;
+      if (view.view !== "conversation-switch") return lifecycle?.right(view) ?? null;
       const route = parseRoute(controller.options.url ?? "/");
       const currentProject =
         route.kind === "project"
@@ -162,9 +221,11 @@ export function createConversationWorkspace(
     },
     start() {
       const unregister = registerConversationSwitch(controller);
+      const unregisterLifecycle = lifecycle?.start();
       realtime.start();
       return () => {
         unregister();
+        unregisterLifecycle?.();
         realtime.stop();
       };
     },

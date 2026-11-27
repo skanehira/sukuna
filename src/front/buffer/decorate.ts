@@ -91,10 +91,10 @@ function columnClasses(line: LineInfo, def: ColumnDef | undefined, index: number
 }
 
 function columnStyle(line: LineInfo, def: ColumnDef | undefined, index: number): string | null {
-  const widths = line.kind === "menu" ? MENU_WIDTHS : (def?.widths ?? []);
-  const width =
-    line.kind === "menu" ? columnWidth(widths, index, MENU_SHARE) : columnWidth(widths, index);
-  const align = line.kind === "menu" ? undefined : def?.align?.[index];
+  const menu = line.kind === "menu";
+  const widths = def?.widths ?? (menu ? MENU_WIDTHS : []);
+  const width = columnWidth(widths, index, menu ? MENU_SHARE : undefined);
+  const align = menu ? undefined : def?.align?.[index];
   const parts: string[] = [];
   if (width !== null) parts.push(`width:${width}`);
   if (align === "right") parts.push("text-align:right");

@@ -14,12 +14,12 @@ import {
   highlightActiveLine,
   scrollPastEnd as scrollBeyondEnd,
 } from "@codemirror/view";
-import { getCM, vim } from "@replit/codemirror-vim";
+import { getCM, Vim, vim } from "@replit/codemirror-vim";
 import type { ColumnDef, LineInfo } from "./line";
 import { BufferControllerContext, windowId, type WindowHandle } from "./controller";
-import { numberMenus, numberMenuOperation } from "./menu";
+import { menuAt, numberMenus, numberMenuOperation } from "./menu";
 import { FrameContext } from "./Frame";
-import { applyVim, vimMode } from "./keymap/apply-vim";
+import { applyVim, vimCount, vimMode } from "./keymap/apply-vim";
 import { canPlaceCursor, initialLine, placeCursor } from "./no-cursor";
 import { findSeqLine } from "./seq-index";
 import {
@@ -52,7 +52,7 @@ export type BufferHandle = {
   append(lines: LineInfo[], clearTail?: TailPart[]): void;
   replace(from: number, to: number, lines: LineInfo[]): void;
   setTail(part: TailPart, lines: LineInfo[]): void;
-  replaceAll(lines: LineInfo[]): void;
+  replaceAll(lines: LineInfo[], missingCursorTarget?: string): void;
   jumpTo(line: number, options?: { remember?: boolean; topLine?: number; column?: number }): void;
   cursorRevision?(): number;
   pushJump(line: number): void;
@@ -69,6 +69,7 @@ export type BufferProps = {
   startLine?: number;
   followTail?: boolean;
   scrollPastEnd?: boolean;
+  temporary?: boolean;
   onReady: (handle: BufferHandle) => void;
 };
 
@@ -76,7 +77,7 @@ type CursorIntent =
   | { kind: "append" }
   | { kind: "setTail"; from: number; to: number; count: number }
   | { kind: "replace"; from: number; to: number; count: number }
-  | { kind: "replaceAll" };
+  | { kind: "replaceAll"; missingCursorTarget?: string };
 
 type Batch = {
   changes: ChangeSet;
@@ -152,6 +153,15 @@ function cursorSelection(
   }
   if (nextLines.length === 0) return EditorSelection.single(0);
   const target = Math.max(0, Math.min(cursorLine, nextLines.length - 1));
+  const positional = nextLines[target];
+  if (
+    intent.kind === "replaceAll" &&
+    intent.missingCursorTarget &&
+    (id !== undefined || positional.action || positional.target)
+  ) {
+    const fallback = nextLines.findIndex((line) => line.id === intent.missingCursorTarget);
+    if (fallback >= 0) return EditorSelection.single(lineStart(nextLines, fallback));
+  }
   return EditorSelection.single(lineStart(nextLines, target));
 }
 
@@ -165,6 +175,7 @@ export function Buffer({
   startLine,
   followTail = false,
   scrollPastEnd = false,
+  temporary = false,
   onReady,
 }: BufferProps) {
   const controller = useContext(BufferControllerContext);
@@ -241,8 +252,21 @@ export function Buffer({
       let selection = view.state.selection;
       let currentLines = view.state.field(bufferField).lines;
       const follow = config.followTail && !isBusy(view);
+      const number = Number(vimCount(view));
+      let menuChanged = false;
       for (const { intent, op, changes } of batch.operations) {
-        const resolved = cursorSelection(doc, selection, currentLines, intent, op.content, follow);
+        const nextLines = contentLines(op.content);
+        let resolved = cursorSelection(doc, selection, currentLines, intent, op.content, follow);
+        if (!menuChanged && number && intent.kind === "replaceAll" && intent.missingCursorTarget) {
+          const menuId = menuAt(currentLines, number)?.line.id;
+          if (menuId && menuAt(nextLines, number)?.line.id !== menuId) {
+            const fallback = nextLines.findIndex((line) => line.id === intent.missingCursorTarget);
+            if (fallback >= 0) {
+              resolved = EditorSelection.single(lineStart(nextLines, fallback));
+              menuChanged = true;
+            }
+          }
+        }
         selection = resolved ?? selection.map(changes);
         if (resolved !== undefined) {
           options.selection = selection;
@@ -253,9 +277,14 @@ export function Buffer({
           options.selection = selection;
         }
         doc = changes.apply(doc);
-        currentLines = contentLines(op.content);
+        currentLines = nextLines;
       }
       view.dispatch(bufferTransaction(batch.changes, batch.content, batch.rebuild, options));
+      if (menuChanged) {
+        const cm = getCM(view);
+        if (cm) Vim.handleKey(cm, "<Esc>", "mapping");
+        if (controller?.snapshot().active === logicalSide) controller.update({ number: "" });
+      }
     };
 
     const enqueue = (
@@ -293,10 +322,11 @@ export function Buffer({
       name: name ?? frameTitle ?? side,
       url: controller?.options.url ?? "/",
       view: viewName ?? side,
+      temporary,
       posKey: posKey ?? `${controller?.options.url ?? "/"}:${logicalSide}:${viewName ?? side}`,
       focus: () => {
         view.focus();
-        controller?.update({ mode: vimMode(view) });
+        controller?.update({ mode: vimMode(view), number: vimCount(view) });
       },
       lines: () => view.state.field(bufferField).lines,
       position: () => {
@@ -334,7 +364,7 @@ export function Buffer({
       ? applyVim(view, controller, logicalSide, viewName ?? side)
       : undefined;
     const remember = () => {
-      controller?.positions.setPosition(window.posKey, window.position());
+      if (!temporary) controller?.positions.setPosition(window.posKey, window.position());
     };
     rememberSelection = () => {
       remember();
@@ -342,7 +372,7 @@ export function Buffer({
     };
     const focus = () => {
       controller?.positions.setActive(logicalSide);
-      controller?.update({ active: logicalSide, mode: vimMode(view) });
+      controller?.update({ active: logicalSide, mode: vimMode(view), number: vimCount(view) });
     };
     const doubleClick = () => {
       controller?.open();
@@ -366,8 +396,10 @@ export function Buffer({
           (base) => setTailLines(base, part, tailLines),
         );
       },
-      replaceAll(allLines) {
-        enqueue({ kind: "replaceAll" }, (base) => replaceAllLines(base, allLines));
+      replaceAll(allLines, missingCursorTarget) {
+        enqueue({ kind: "replaceAll", missingCursorTarget }, (base) =>
+          replaceAllLines(base, allLines),
+        );
       },
       jumpTo(line, options) {
         if (batchRef.current) {

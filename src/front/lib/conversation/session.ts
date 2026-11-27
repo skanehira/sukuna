@@ -115,6 +115,12 @@ export class ConversationSession {
     this.adopt(data, preserveDraft || this.draft !== draft, version);
   }
   connect(): () => void {
+    let connecting = true;
+    const conversation = this.state.data?.conversation;
+    if (conversation?.kind === "chat" && conversation.closedAt !== null)
+      queueMicrotask(() => {
+        if (connecting) this.controller.notify("閉じた会話です。続きを書いて送ると再開します");
+      });
     const oldPrompt = this.controller.options.prompt?.bind(this.controller.options);
     this.controller.options.prompt = () => this.prompt();
     this.action("agent.stop", "AI を止める", async () => {
@@ -212,6 +218,7 @@ export class ConversationSession {
     ]);
     const disconnectRecap = this.recap?.connect();
     return () => {
+      connecting = false;
       disconnectRecap?.();
       this.cancelSave?.();
       this.controller.closePrompt();
@@ -672,6 +679,8 @@ export class ConversationSession {
         this.messageId ??= this.env.id();
         sentMessageId = this.messageId;
         const queueCount = this.state.data?.queue.length ?? 0;
+        const conversation = this.state.data?.conversation;
+        const reopening = conversation?.kind === "chat" && conversation.closedAt !== null;
         const result = await this.api.send(this.id, {
           text,
           images,
@@ -679,15 +688,17 @@ export class ConversationSession {
           clientMessageId: sentMessageId,
         });
         this.controller.notify(
-          result.result === "queued"
-            ? "預けました。今の作業が終わると届きます"
-            : interrupt && this.working()
-              ? queueCount
-                ? `AI を止めて、届く前の指示 ${queueCount} 件と一緒にすぐに送りました`
-                : "AI を止めて、すぐに送りました"
-              : images.length
-                ? `画像 ${images.length} 件と一緒に送りました`
-                : "送りました",
+          reopening
+            ? "送りました。会話を再開し、一覧に戻します"
+            : result.result === "queued"
+              ? "預けました。今の作業が終わると届きます"
+              : interrupt && this.working()
+                ? queueCount
+                  ? `AI を止めて、届く前の指示 ${queueCount} 件と一緒にすぐに送りました`
+                  : "AI を止めて、すぐに送りました"
+                : images.length
+                  ? `画像 ${images.length} 件と一緒に送りました`
+                  : "送りました",
         );
       }
       const unchanged = this.draft === draft && draft.version() === version;
