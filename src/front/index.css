@@ -1,1 +1,38 @@
 @import "tailwindcss";
+@import "./styles/fonts.css";
+
+@theme {
+  --color-ground: #f4f5f7;
+  --color-surface: #ffffff;
+  --color-raised: #eceef2;
+  --color-line: #e1e4ea;
+  --color-ink: #1a1d24;
+  --color-muted: #646c7c;
+  --color-accent: #4753d6;
+  --color-sel: #dde1ff;
+  --color-done: #1c8650;
+  --color-doing: #946200;
+  --color-wait: #b8264c;
+  --color-add: #e0f4e7;
+  --color-del: #fde4e9;
+  --font-sans: "Zen Kaku Gothic New", "Hiragino Sans", sans-serif;
+  --font-mono: "Cica", "JetBrains Mono", ui-monospace, monospace;
+}
+
+@keyframes buffer-pulse {
+  50% {
+    opacity: 0.5;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background-color: var(--color-ground);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}
