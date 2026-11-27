@@ -14,6 +14,14 @@ export function deliverQueue(
       !this.store.queue(id).length
     )
       return err(conflict());
+    const allowed = await this.runOptions.allowDelivery(conversation, {
+      text: "",
+      images: [],
+      origin: "queued",
+    });
+    if (allowed.isErr()) return err(allowed.error);
+    const current = this.store.get(id);
+    if (!current || this.closing || activeStates.includes(current.runState)) return err(conflict());
     const result = await this.deliver(id, { text: "", images: [], origin: "queued" });
     return result.andThen((sent) =>
       sent.result === "delivered" ? ok({ seq: sent.seq }) : err(conflict()),

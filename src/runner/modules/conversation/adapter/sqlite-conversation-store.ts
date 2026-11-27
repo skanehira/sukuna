@@ -130,6 +130,16 @@ export class SqliteConversationStore implements ConversationStore {
         | undefined) ?? null
     );
   }
+  projectOptions(id: string): ReturnType<ConversationStore["projectOptions"]> {
+    return (
+      (this.sqlite
+        .prepare("SELECT model,permission_mode AS permissionMode FROM projects WHERE id=?")
+        .get(id) as ReturnType<ConversationStore["projectOptions"]> | undefined) ?? {
+        model: null,
+        permissionMode: "bypassPermissions",
+      }
+    );
+  }
   list(): Conversation[] {
     return this.sqlite.prepare(selectConversation).all() as Conversation[];
   }
@@ -214,6 +224,12 @@ export class SqliteConversationStore implements ConversationStore {
           "UPDATE conversations SET last_seq = ?, run_state = ?, stop_reason = ?, resets_at = ?, last_activity_at = ? WHERE id = ?",
         )
         .run(seq, nextRunState(c.runState, event), stopReason, resetsAt, now, id);
+      if (event.type === "user_message" && event.payload.origin !== "flow")
+        this.sqlite
+          .prepare(
+            "UPDATE conversations SET title=? WHERE id=? AND kind='chat' AND (title IS NULL OR title='新しい会話') AND NOT EXISTS (SELECT 1 FROM conversation_events WHERE conversation_id=? AND type='user_message' AND seq<?)",
+          )
+          .run(event.payload.text.split("\n")[0]!.slice(0, 40), id, id, seq);
       if (event.type === "question")
         for (const [index, q] of event.payload.questions.entries())
           this.sqlite
@@ -227,14 +243,16 @@ export class SqliteConversationStore implements ConversationStore {
   queue(id: string): QueuedInstruction[] {
     const rows = this.sqlite
       .prepare(
-        "SELECT id, conversation_id AS conversationId, text, images, position, client_id AS clientId, created_at AS createdAt, timeline_comments AS timelineComments FROM queued_instructions WHERE conversation_id = ? ORDER BY position, rowid",
+        "SELECT id, conversation_id AS conversationId, text, images, position, client_id AS clientId, created_at AS createdAt, timeline_comments AS timelineComments, stock_item_id AS stockItemId FROM queued_instructions WHERE conversation_id = ? ORDER BY position, rowid",
       )
-      .all(id) as (Omit<QueuedInstruction, "images" | "timelineComments"> & {
+      .all(id) as (Omit<QueuedInstruction, "images" | "timelineComments" | "stockItemId"> & {
       images: string;
       timelineComments: string | null;
+      stockItemId: string | null;
     })[];
-    return rows.map(({ timelineComments, ...r }) => ({
+    return rows.map(({ timelineComments, stockItemId, ...r }) => ({
       ...r,
+      ...(stockItemId === null ? {} : { stockItemId }),
       images: JSON.parse(r.images) as string[],
       ...(timelineComments === null
         ? {}
@@ -248,7 +266,7 @@ export class SqliteConversationStore implements ConversationStore {
   enqueue(q: QueuedInstruction): void {
     this.sqlite
       .prepare(
-        "INSERT INTO queued_instructions (id, conversation_id, text, images, position, client_id, created_at, timeline_comments) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO queued_instructions (id, conversation_id, text, images, position, client_id, created_at, timeline_comments, stock_item_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
       )
       .run(
         q.id,
@@ -261,9 +279,15 @@ export class SqliteConversationStore implements ConversationStore {
         q.timelineComments === undefined
           ? null
           : JSON.stringify(timelineInputCommentSchema.array().parse(q.timelineComments)),
+        q.stockItemId ?? null,
       );
   }
-  dequeue(id: string): void {
+  dequeue(id: string, deliveredSeq: number): void {
+    this.sqlite
+      .prepare(
+        "UPDATE stock_items SET sent_seq=? WHERE id IN (SELECT stock_item_id FROM queued_instructions WHERE conversation_id=? AND stock_item_id IS NOT NULL) AND state='sent' AND sent_seq IS NULL",
+      )
+      .run(deliveredSeq, id);
     this.sqlite.prepare("DELETE FROM queued_instructions WHERE conversation_id = ?").run(id);
   }
   duplicate(id: string, clientId: string, since: number): SendResult | null {
@@ -280,6 +304,15 @@ export class SqliteConversationStore implements ConversationStore {
           : { result: "delivered", seq: e.seq };
     }
     return null;
+  }
+  isUnanswered(id: string, questionSeq: number): boolean {
+    return (
+      this.sqlite
+        .prepare(
+          "SELECT 1 FROM questions WHERE conversation_id=? AND seq=? AND kind='choice' AND answered=0 LIMIT 1",
+        )
+        .get(id, questionSeq) !== undefined
+    );
   }
   finishAnswers(id: string, questionSeq: number): void {
     this.sqlite

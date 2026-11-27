@@ -1,5 +1,8 @@
+import { ulid } from "ulid";
+import { createConversationDependencies } from "./modules/conversation/adapter/dependencies";
+import type { ConversationDependencies } from "./modules/conversation/domain/ports";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { createProgressRepository } from "./modules/conversation/adapter/progress-repository";
 import { createMessageRepository } from "./modules/conversation/adapter/message-repository";
@@ -140,4 +143,25 @@ export function getMessageDependencies(): MessageDependencies {
 export function getWsHub(): WsHub {
   if (!hub) throw new Error("配信が初期化されていません");
   return hub;
+}
+
+export function getConversationDependencies(): ConversationDependencies {
+  return createConversationDependencies({
+    sqlite: getDatabase().sqlite,
+    home: dirname(getDatabase().sqlite.name),
+    runner: {
+      call: async (method, path, input) => {
+        const response = await getRunnerLink().forward(method, path, input);
+        return ok({ status: response.status, body: (await response.json()) as unknown });
+      },
+    },
+    id: ulid,
+    now: () => Date.now(),
+    changed: (id, parts) =>
+      getWsHub().notice({ kind: "conversation_parts", conversation_id: id, parts }),
+    reopened: (ids) =>
+      ids.forEach((id) =>
+        getWsHub().notice({ kind: "conversation_parts", conversation_id: id, parts: [] }),
+      ),
+  });
 }

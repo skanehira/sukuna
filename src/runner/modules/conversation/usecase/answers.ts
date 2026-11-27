@@ -13,7 +13,8 @@ export function answer(
     const question = this.store
       .events(id)
       .find((e) => e.type === "question" && e.payload.request_id === requestId);
-    if (question?.type !== "question") return err(conflict());
+    if (question?.type !== "question" || !this.store.isUnanswered(id, question.seq))
+      return err(conflict());
     const formatted = Object.fromEntries(
       question.payload.questions.map((q, index) => {
         const a = answers[String(index)];

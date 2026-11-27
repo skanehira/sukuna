@@ -1,3 +1,5 @@
+import { CommandCache } from "./modules/conversation/adapter/command-cache";
+import { issueInstructions } from "./modules/issue/domain/issue-instructions";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { ulid } from "ulid";
@@ -60,6 +62,7 @@ export async function startRunnerApp(options: {
       agent,
       images: createImageFiles(env.home),
       clock,
+      commands: new CommandCache(),
       id: ulid,
       uuid: randomUUID,
       log: (context, message, error) =>
@@ -88,6 +91,7 @@ export async function startRunnerApp(options: {
         });
       },
     });
+    runtime.runOptions.registerInstructions(issueInstructions);
     runtime.subscribe((signal) => {
       const conversation = runtime.store.get(signal.conversationId);
       if (signal.type === "parts")

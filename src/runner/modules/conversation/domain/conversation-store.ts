@@ -33,6 +33,7 @@ export type QueuedInstruction = {
   position: number;
   clientId: string | null;
   createdAt: number;
+  stockItemId?: string;
 };
 export type SendResult =
   | { result: "delivered"; seq: number }
@@ -41,6 +42,10 @@ export interface ConversationStore {
   transaction<T>(operation: () => T): T;
   withWorkspace<T>(id: string, operation: (worktreeId: string | null) => T): T;
   get(id: string): Conversation | null;
+  projectOptions(id: string): {
+    model: "opus" | "sonnet" | "haiku" | null;
+    permissionMode: "bypassPermissions" | "acceptEdits" | "default";
+  };
   list(): Conversation[];
   create(conversation: Conversation): void;
   session(id: string, sessionId: string): void;
@@ -48,8 +53,9 @@ export interface ConversationStore {
   append(id: string, event: ConversationEvent, now: number): StoredEvent | null;
   queue(id: string): QueuedInstruction[];
   enqueue(instruction: QueuedInstruction): void;
-  dequeue(id: string): void;
+  dequeue(id: string, deliveredSeq: number): void;
   duplicate(id: string, clientId: string, since: number): SendResult | null;
+  isUnanswered(id: string, questionSeq: number): boolean;
   finishAnswers(id: string, questionSeq: number): void;
   clearStaleQuestions(id: string): void;
   saveRateLimit(value: unknown): void;

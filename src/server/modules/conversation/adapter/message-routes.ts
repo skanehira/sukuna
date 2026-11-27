@@ -5,8 +5,12 @@ import type { IdentityEnv } from "../../identity/adapter/middleware";
 import type { MessageDependencies } from "../domain/message-port";
 
 const resultSchema = z.discriminatedUnion("result", [
-  z.object({ result: z.literal("delivered"), seq: z.number() }),
-  z.object({ result: z.literal("queued"), queued_id: z.string() }),
+  z.object({ result: z.literal("delivered"), seq: z.number(), duplicate: z.boolean().optional() }),
+  z.object({
+    result: z.literal("queued"),
+    queued_id: z.string(),
+    duplicate: z.boolean().optional(),
+  }),
 ]);
 
 export function createMessageHandler(deps: MessageDependencies): Handler<IdentityEnv> {
@@ -18,10 +22,12 @@ export function createMessageHandler(deps: MessageDependencies): Handler<Identit
     if (!parsed.success)
       return c.json({ error: { code: "invalid_input", message: "入力を確認してください。" } }, 400);
     const input = parsed.data;
+    const accept = deps.prepareAcceptance?.(id, input);
     const result = await deps.runner.call(
       "POST",
       `/conversations/${encodeURIComponent(id)}/messages`,
       {
+        ...(deps.receiptMetadata ? { receipt_metadata: true } : {}),
         text: input.text,
         images: input.images,
         interrupt: input.mode === "interrupt",
@@ -46,6 +52,7 @@ export function createMessageHandler(deps: MessageDependencies): Handler<Identit
         },
         500,
       );
+    accept?.(delivered.data.duplicate ?? false);
     return c.json(
       {
         result: delivered.data.result,

@@ -117,3 +117,12 @@ export type AgentOutput =
       permissionDenials: number;
       terminalReason: string | null;
     };
+
+export interface CommandCache {
+  remember(
+    conversationId: string,
+    projectId: string,
+    commands: { name: string; description: string }[],
+  ): void;
+  read(conversationId: string, projectId: string): { name: string; description: string }[];
+}

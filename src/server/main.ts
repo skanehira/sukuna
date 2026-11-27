@@ -12,7 +12,7 @@ import {
   attachUpgradeHandler,
   getDatabase,
   getProgressDependencies,
-  getMessageDependencies,
+  getConversationDependencies,
   getRunnerLink,
   getWsHub,
   initializeRuntime,
@@ -60,7 +60,7 @@ const server = serve(
         resetTime: formatResetTime,
       },
       progress: getProgressDependencies(),
-      messages: getMessageDependencies(),
+      conversations: getConversationDependencies(),
       stock: createStockDependencies({
         database: () => getDatabase().db,
         workspace,

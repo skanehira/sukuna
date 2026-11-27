@@ -1,17 +1,12 @@
 import type { Result } from "neverthrow";
-import type { TimelineInputComment } from "../../../../shared/progress/schema";
 
-export type QueueItem = {
-  id: string;
-  text: string;
-  images: string[];
-  position: number;
-  stockItemId: string | null;
-  clientId: string | null;
-  createdAt: number;
-  timeline_comments?: TimelineInputComment[];
-};
+export type QueueItem = import("../../../../shared/conversation/api").ConversationQueueItem;
 export type MessageDependencies = {
+  receiptMetadata?: boolean;
+  prepareAcceptance?: (
+    id: string,
+    input: { text: string; images: string[] },
+  ) => (duplicate: boolean) => void;
   runner: {
     call(
       method: string,

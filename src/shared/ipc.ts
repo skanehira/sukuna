@@ -14,6 +14,7 @@ export const startConversationSchema = z.object({
   parent_conversation_id: z.string().nullable().optional(),
 });
 export const sendMessageSchema = z.object({
+  receipt_metadata: z.boolean().optional(),
   text: z.string(),
   images: z.array(z.string()),
   interrupt: z.boolean(),
@@ -48,7 +49,7 @@ export const runnerNoticeSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("conversation_parts"),
     conversation_id: z.string(),
-    parts: z.array(z.enum(["queue", "answers", "recap", "stock", "threads"])),
+    parts: z.array(z.enum(["queue", "answers", "draft", "recap", "stock", "threads"])),
   }),
   z.object({
     kind: z.literal("issue"),

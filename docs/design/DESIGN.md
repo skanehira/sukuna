@@ -424,7 +424,7 @@ issue の状態の移り変わりは `features/issue-flow.md` の表が正本で
 - CodeMirror Vim は、途中まで合う追加キーより、最後まで合う組み込みキーを先に使う。`Space` と `Ctrl+w` は先頭で受け止め、キー列が完成してから Vim に渡す。`f` / `t` などが次の文字を待つ間は、その文字を Vim に直接渡す
 - 同じ worktree で `vp build` と `vp dev` を並行すると、最適化した依存の URL が古くなり、画面の読み込みが 504 になることがある。順に実行し、発生時は `vp dev --force` で再起動する
 - `vp dev` では、Hono の WebSocket の部品が使えない。WebSocket は `ws` の受け口を 1 つ作り、開発と本番の両方から同じものを呼ぶ (PoC `vite-plus-node-stack`)
-- `vp dev` で API のファイルを編集しても、データベースの接続・配信・WebSocket の受け口は作り直さない。プロセスに 1 つのモジュールに置く
+- `vp dev` のデータベースの接続・配信・WebSocket の受け口は、プロセスに 1 つのモジュールで持つ。HTTP ハンドラだけの HMR では、既存の接続を保つ。`src/server/runtime.ts` 自身や、そのモジュールが import する依存の HMR では、開発サーバーを再起動する。再評価で接続の状態が失われるためである。
 - ブラウザの WebSocket API は、制御フレームの Ping/Pong を公開しない。死活確認は `app` の `ping` メッセージで行う。形と間隔は `features/runtime.md`「配信」に従う (WHATWG WebSockets「Ping and Pong frames」)
 - `vp dev` では Vite が `/api` 以外のパスを配るため、本人の判定を受けるのは API だけになる。本番の起動では画面のサーバーが静的ファイルと SPA の HTML も判定し、本人でなければ拒否の HTML を返す
 - `vp dev` の `localhost` は `::1` で待ち受けることがあるため、開発用の本人の値は `127.0.0.1` と `::1` の両方を手元として扱う

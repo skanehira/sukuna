@@ -112,15 +112,22 @@ export function createIpcRoutes(
     }),
   );
   route("/conversations/:id/messages", sendMessageSchema, async (id, p) => {
-    const result = await runtime.send(id, {
-      text: p.text,
-      images: p.images,
-      interrupt: p.interrupt,
-      clientId: p.client_id,
-      origin: p.origin,
-      timelineComments: p.timeline_comments,
-    });
-    return result;
+    let duplicate = false;
+    const result = await runtime.send(
+      id,
+      {
+        text: p.text,
+        images: p.images,
+        interrupt: p.interrupt,
+        clientId: p.client_id,
+        origin: p.origin,
+        timelineComments: p.timeline_comments,
+      },
+      (fresh) => {
+        duplicate = !fresh;
+      },
+    );
+    return p.receipt_metadata ? result.map((value) => ({ ...value, duplicate })) : result;
   });
   route("/conversations/:id/queue/deliver", empty, (id) => runtime.deliverQueue(id));
   route("/conversations/:id/stop", empty, (id) => runtime.stop(id));

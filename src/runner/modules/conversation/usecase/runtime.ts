@@ -1,3 +1,5 @@
+import { RunOptions } from "./run-options";
+import type { CommandCache } from "../domain/agent-port";
 import { ConversationWorkspaceChanged } from "../domain/conversation-store";
 import { WorktreeActivityBusy } from "../../../../shared/workspace/worktree-activity";
 import { deliverQueue } from "./deliver-queue";
@@ -58,6 +60,7 @@ export type RuntimeOptions = {
   ) => void;
   notice: (conversationId: string, message: string, level: "info" | "error") => void;
   tools?: AppToolRegistry;
+  commands?: CommandCache;
 };
 export type SendInput = {
   text: string;
@@ -94,11 +97,11 @@ export const conflict = (
 export class ConversationRuntime {
   readonly store: ConversationStore;
   readonly tools: AppToolRegistry;
+  readonly runOptions: RunOptions;
   readonly timers: UsageLimitTimer;
   readonly releases: ReleaseReservations;
   executions = new Map<string, Execution>();
   private operations = new Map<string, Promise<unknown>>();
-  private projectCommands = new Map<string, { name: string; description: string }[]>();
   private listeners = new Set<(signal: RuntimeSignal) => void | Promise<void>>();
   closing = false;
   options: RuntimeOptions;
@@ -106,6 +109,7 @@ export class ConversationRuntime {
     this.options = options;
     this.store = options.store;
     this.tools = options.tools ?? new AppToolRegistry();
+    this.runOptions = new RunOptions(options.store, this.tools);
     this.timers = new UsageLimitTimer(options.clock);
     this.releases = new ReleaseReservations(this);
   }
@@ -153,9 +157,15 @@ export class ConversationRuntime {
     });
     return next;
   }
-  record(id: string, events: ConversationEvent[], before: () => void = () => {}): StoredEvent[] {
+  record(
+    id: string,
+    events: ConversationEvent[],
+    before: () => void = () => {},
+    unchanged: () => boolean = () => true,
+  ): StoredEvent[] {
     const previous = this.store.get(id)?.runState;
     const recorded = this.store.transaction(() => {
+      if (!unchanged()) return [];
       before();
       return events.flatMap((e) => {
         const record = this.store.append(id, e, this.options.clock.now());
@@ -206,11 +216,7 @@ export class ConversationRuntime {
     const session = this.options.agent.open({
       sessionId: c.sessionId ?? this.options.uuid(),
       resume: c.sessionId !== null,
-      cwd: c.cwd,
-      model: null,
-      permissionMode: "bypassPermissions",
-      appendSystemPrompt: "",
-      appTools: this.tools.all(c.kind),
+      ...this.runOptions.build(c),
       context: { conversationId: c.id, projectId: c.projectId, issueId: c.issueId },
       onQuestion: (request) => this.question(c.id, request),
       onPermission: (request) => this.askPermission(c.id, request),
@@ -239,53 +245,66 @@ export class ConversationRuntime {
     options: { includeQueued?: boolean; interrupt?: boolean; omitMissingImages?: boolean } = {},
   ): Promise<Result<SendResult, OperationError>> {
     if (!this.store.get(id)) throw new Error("会話がありません。");
-    const includeQueued = options.includeQueued ?? true;
-    const queued = includeQueued ? this.store.queue(id) : [];
-    const inputs = [...queued, input];
-    const images: LoadedImage[] = [];
-    let missingImages = 0;
-    for (const imageId of inputs.flatMap((entry) => entry.images)) {
-      const image = this.options.images.read(id, imageId);
-      if (image.isErr()) {
-        if (!options.omitMissingImages || image.error.code !== "invalid_input")
-          return err(image.error);
-        missingImages += 1;
-      } else images.push(image.value);
-    }
+    const prepare = () => {
+      const includeQueued = options.includeQueued ?? true;
+      const queued = includeQueued ? this.store.queue(id) : [];
+      const inputs = [...queued, input];
+      const text = inputs
+        .map((entry) => entry.text)
+        .filter((part) => part.length > 0)
+        .join("\n\n");
+      const imageIds = inputs.flatMap((entry) => entry.images);
+      if (!text.length && !imageIds.length)
+        return err<never, OperationError>({
+          code: "invalid_input",
+          message: "入力を確認してください。",
+        });
+      const images: LoadedImage[] = [];
+      let missingImages = 0;
+      for (const imageId of imageIds) {
+        const image = this.options.images.read(id, imageId);
+        if (image.isErr()) {
+          if (!options.omitMissingImages || image.error.code !== "invalid_input")
+            return err<never, OperationError>(image.error);
+          missingImages += 1;
+        } else images.push(image.value);
+      }
+      if (!text.length && !images.length)
+        return err<never, OperationError>({
+          code: "invalid_input",
+          message:
+            "画像が見つからないため、指示を届けられませんでした。画像を添付し直して、もう一度送ってください。",
+        });
+      return ok({ includeQueued, queued, inputs, text, images, missingImages });
+    };
+    const initial = prepare();
+    if (initial.isErr()) return err(initial.error);
     if (options.interrupt) await this.interrupt(id, "interrupt");
+    const reject = (error: OperationError): Result<never, OperationError> => {
+      if (options.interrupt) {
+        this.record(id, [{ type: "stopped", payload: { reason: "error", detail: error.message } }]);
+        this.options.notice(id, error.message, "error");
+      }
+      return err(error);
+    };
     for (;;) {
       const result = this.store.withWorkspace(
         id,
-        (worktreeId): Result<SendResult, OperationError> | Execution => {
+        (worktreeId): Result<SendResult, OperationError> | Execution | null => {
           if (this.closing) return err(conflict());
           const c = this.store.get(id);
           if (!c) throw new Error("会話がありません。");
           const opened = this.executions.get(id);
           if (opened && (opened.cwd !== c.cwd || opened.worktreeId !== worktreeId)) return opened;
-          let execution: Execution;
-          try {
-            execution = this.execution(c, worktreeId);
-          } catch (error) {
-            this.record(id, [
-              {
-                type: "stopped",
-                payload: {
-                  reason: "error",
-                  detail: error instanceof Error ? error.message : "AI の実行に失敗しました。",
-                },
-              },
-            ]);
-            throw error;
-          }
+          const prepared = prepare();
+          if (prepared.isErr()) return reject(prepared.error);
+          const { includeQueued, queued, inputs, text, images, missingImages } = prepared.value;
           const hasStructuredComments = inputs.some(
             (entry) => entry.timelineComments !== undefined,
           );
           const legacyTexts = inputs
             .filter((entry) => entry.timelineComments === undefined && entry.text.length > 0)
             .map((entry) => entry.text);
-          const text = [...queued.map((q) => q.text), input.text]
-            .filter((s) => s.length > 0)
-            .join("\n\n");
           const event: ConversationEvent = {
             type: "user_message",
             payload: {
@@ -328,23 +347,71 @@ export class ConversationRuntime {
               ],
             },
           };
-          const records = this.record(id, [...(acceptance?.events ?? []), event], () => {
-            acceptance?.before();
-            if (includeQueued) this.store.dequeue(id);
-          });
+          let execution: Execution | undefined;
+          let openingError: { cause: unknown } | undefined;
+          let records: StoredEvent[];
+          try {
+            records = this.record(
+              id,
+              [...(acceptance?.events ?? []), event],
+              () => {
+                try {
+                  execution = this.execution(c, worktreeId);
+                } catch (error) {
+                  openingError = { cause: error };
+                  throw error;
+                }
+                acceptance?.before();
+                if (includeQueued)
+                  this.store.dequeue(
+                    id,
+                    (this.store.get(id)?.lastSeq ?? 0) + (acceptance?.events.length ?? 0) + 1,
+                  );
+              },
+              () =>
+                this.store.withWorkspace(id, (actualWorktreeId) => {
+                  const current = this.store.get(id);
+                  return (
+                    !this.closing &&
+                    current?.cwd === c.cwd &&
+                    actualWorktreeId === worktreeId &&
+                    (!includeQueued ||
+                      JSON.stringify(this.store.queue(id)) === JSON.stringify(queued))
+                  );
+                }),
+            );
+          } catch (error) {
+            if (openingError)
+              this.record(id, [
+                {
+                  type: "stopped",
+                  payload: {
+                    reason: "error",
+                    detail:
+                      openingError.cause instanceof Error
+                        ? openingError.cause.message
+                        : "AI の実行に失敗しました。",
+                  },
+                },
+              ]);
+            throw error;
+          }
+          if (!records.length) return null;
+          if (!execution) throw new Error("実行がありません。");
+          const activeExecution = execution;
           if (queued.length) this.partsChanged(id, ["queue"]);
           const record = records.at(-1);
           if (!record) throw new Error("指示を記録できません。");
           this.timers.cancel(id);
-          execution.rate = null;
-          execution.assistantError = null;
-          execution.intent = null;
-          execution.startSeq = record.seq;
-          execution.inputOrigin = input.origin;
-          execution.ended = new Promise((resolve) => {
-            execution.end = resolve;
+          activeExecution.rate = null;
+          activeExecution.assistantError = null;
+          activeExecution.intent = null;
+          activeExecution.startSeq = record.seq;
+          activeExecution.inputOrigin = input.origin;
+          activeExecution.ended = new Promise((resolve) => {
+            activeExecution.end = resolve;
           });
-          execution.session.send({
+          activeExecution.session.send({
             text,
             images: images.map(({ data, mediaType }) => ({ data, mediaType })),
           });
@@ -357,6 +424,7 @@ export class ConversationRuntime {
           return ok({ result: "delivered", seq: record.seq });
         },
       );
+      if (result === null) continue;
       if (!("session" in result)) return result;
       result.session.close();
       await result.consuming;
@@ -387,7 +455,7 @@ export class ConversationRuntime {
     if (output.kind === "init") {
       this.store.transaction(() => this.store.session(id, output.sessionId));
       const projectId = this.store.get(id)?.projectId;
-      if (projectId) this.projectCommands.set(projectId, output.commands);
+      if (projectId) this.options.commands?.remember(id, projectId, output.commands);
       return;
     }
     if (output.kind === "text_delta") {
@@ -469,9 +537,14 @@ export class ConversationRuntime {
   }
   async commands(id: string): Promise<{ name: string; description: string }[]> {
     const execution = this.executions.get(id);
-    if (execution) return execution.session.commands();
     const projectId = this.store.get(id)?.projectId;
-    return projectId ? (this.projectCommands.get(projectId) ?? []) : [];
+    if (!projectId) return [];
+    if (execution) {
+      const commands = await execution.session.commands();
+      this.options.commands?.remember(id, projectId, commands);
+      return commands;
+    }
+    return this.options.commands?.read(id, projectId) ?? [];
   }
   private question(id: string, request: QuestionRequest): Promise<Record<string, string>> {
     this.record(id, [
