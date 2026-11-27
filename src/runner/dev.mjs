@@ -47,7 +47,7 @@ if (process.argv[2] === "--run") {
     await runner.ended;
   }
 
-  const watchers = ["src/runner", "src/shared"].map((directory) => {
+  const watchers = ["src/runner", "src/shared", "src/server/modules/issue"].map((directory) => {
     const path = join(root, directory);
     return watch(path, { recursive: true }, (_event, filename) => {
       if (stopping || !filename || !/\.(?:[cm]?[jt]sx?|json|sql)$/.test(filename)) return;

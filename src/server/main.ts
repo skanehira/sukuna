@@ -17,6 +17,8 @@ import {
 } from "./runtime";
 import { ulid } from "ulid";
 import { createStockDependencies } from "./modules/stock/adapter/dependencies";
+
+import { createIssueDependencies } from "./modules/issue/adapter/dependencies";
 import { createWorkspaceDependencies } from "./modules/workspace/adapter/dependencies";
 
 const environment = readEnvironment("server", process.env, homedir(), (path) => {
@@ -61,6 +63,15 @@ const server = serve(
         id: ulid,
         now: () => Date.now(),
       }),
+
+      issues: createIssueDependencies(
+        () => getDatabase().db,
+        getRunnerLink,
+        log,
+        undefined,
+        (issueId, projectId) =>
+          getWsHub().notice({ kind: "issue", issue_id: issueId, project_id: projectId, seq: 0 }),
+      ),
     }).fetch,
     port: env.port,
     hostname: "0.0.0.0",

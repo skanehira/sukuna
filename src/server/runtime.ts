@@ -74,6 +74,7 @@ let log: Logger = createLogger({
   write: (line) => console.log(line),
   level: "info",
 });
+export const writeRuntimeLog: Logger = (entry) => log(entry);
 const heartbeat = setInterval(() => {
   hub?.ping();
 }, 20_000);

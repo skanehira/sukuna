@@ -70,3 +70,10 @@ export const releaseReservationSchema = z.object({ token: z.string().min(1) });
 export const completeReleaseSchema = z.object({ token: z.string().min(1) });
 export const RELEASE_RESERVATION_PREFIX = "runner-release:";
 export const releaseReservationKey = (id: string) => `${RELEASE_RESERVATION_PREFIX}${id}`;
+
+export const issuePatchIpcSchema = z.strictObject({
+  parent_number: z.number().int().positive().nullable().optional(),
+  depends_on: z.array(z.number().int().positive()).max(50).optional(),
+  priority: z.enum(["high", "medium", "low"]).nullable().optional(),
+  confirm_before_merge: z.boolean().optional(),
+});

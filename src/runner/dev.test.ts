@@ -108,9 +108,14 @@ it("開発用ランナーのコマンドを実行すると、全テーブルを�
   }
 }, 20_000);
 
-it.each(["SIGTERM", "SIGINT"] as const)(
-  "開発用ランナーは入口と共有依存の変更を順に読み直し、%s で監視と実行を終える",
-  async (signal) => {
+it.each([
+  ["SIGTERM", "src/shared/db/startup.ts"],
+  ["SIGINT", "src/shared/db/startup.ts"],
+  ["SIGTERM", "src/server/modules/issue/adapter/issue-repository.ts"],
+  ["SIGINT", "src/server/modules/issue/adapter/issue-repository.ts"],
+] as const)(
+  "開発用ランナーは %s で終了し、入口と依存 %s の変更を順に読み直す",
+  async (signal, dependency) => {
     const sandbox = createTempHome();
     const root = fileURLToPath(new URL("../..", import.meta.url));
     cpSync(join(root, "src"), join(sandbox, "src"), { recursive: true });
@@ -179,7 +184,7 @@ it.each(["SIGTERM", "SIGINT"] as const)(
       ]);
 
       appendFileSync(
-        join(sandbox, "src/shared/db/startup.ts"),
+        join(sandbox, dependency),
         '\nconsole.log(JSON.stringify({ component: "fixture", message: "shared updated" }));\n',
       );
       await waitForMessages(6);

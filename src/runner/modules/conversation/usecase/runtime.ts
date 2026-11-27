@@ -202,7 +202,7 @@ export class ConversationRuntime {
       model: null,
       permissionMode: "bypassPermissions",
       appendSystemPrompt: "",
-      appTools: this.tools.all(),
+      appTools: this.tools.all(c.kind),
       context: { conversationId: c.id, projectId: c.projectId, issueId: c.issueId },
       onQuestion: (request) => this.question(c.id, request),
       onPermission: (request) => this.askPermission(c.id, request),

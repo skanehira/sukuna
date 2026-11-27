@@ -15,7 +15,7 @@ export function createIssueUnitOfWork(db: FlowDatabase): IssueUnitOfWorkPort {
   };
 }
 
-function createIssueRepository(db: QueryDatabase): IssueRepositoryPort {
+export function createIssueRepository(db: QueryDatabase): IssueRepositoryPort {
   const withdrawnDependencies = (id: string) =>
     db
       .select({ number: issues.number })

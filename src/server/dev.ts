@@ -1,13 +1,15 @@
 import { createApp } from "./app";
 import { buildId } from "./build-id";
-import { createWorkspaceDependencies } from "./modules/workspace/adapter/dependencies";
+import { createIssueDependencies } from "./modules/issue/adapter/dependencies";
 import {
   getDatabase,
-  getProgressDependencies,
-  getMessageDependencies,
   getRunnerLink,
   getWsHub,
+  writeRuntimeLog,
+  getProgressDependencies,
+  getMessageDependencies,
 } from "./runtime";
+import { createWorkspaceDependencies } from "./modules/workspace/adapter/dependencies";
 import { ulid } from "ulid";
 import { createStockDependencies } from "./modules/stock/adapter/dependencies";
 
@@ -27,4 +29,13 @@ export default createApp({
     id: ulid,
     now: () => Date.now(),
   }),
+
+  issues: createIssueDependencies(
+    () => getDatabase().db,
+    getRunnerLink,
+    writeRuntimeLog,
+    undefined,
+    (issueId, projectId) =>
+      getWsHub().notice({ kind: "issue", issue_id: issueId, project_id: projectId, seq: 0 }),
+  ),
 });
