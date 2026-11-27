@@ -82,7 +82,8 @@ test("締めくくりをやめて指示を書き、一覧と検索からスレ�
   await page.route("**/api/**", (route) => {
     const url = new URL(route.request().url());
     const path = url.pathname;
-    if (path === "/api/me" || path === "/api/health") return route.continue();
+    if (path === "/api/me" || path === "/api/health" || path === "/api/settings")
+      return route.continue();
     if (path === "/api/projects")
       return route.fulfill({
         json: { projects: [{ id: "p1", name: project, conversations: [], issues: [] }] },

@@ -9,6 +9,8 @@ import { App } from "../App";
 import { BufferController } from "../buffer/controller";
 import { createConversationApi } from "../lib/conversation/api";
 import { createConversationWorkspace } from "../lib/conversation/workspace";
+import { createLifecycleApi } from "../lib/lifecycle/api";
+import { createRecapApi } from "../lib/recap/api";
 import { createSettingsApi, createSettingsStore } from "../lib/settings-store";
 import { loadSettingsScreen, registerSettingsCommands } from "../lib/settings-workspace";
 import { createNavigation } from "../shell/navigation";
@@ -60,6 +62,8 @@ async function start(
     entries?: KeymapEntry[];
     screen?: "conversation" | "help";
     concurrentSave?: KeymapEntry[];
+    withRecap?: boolean;
+    withLifecycle?: boolean;
   } = {},
 ) {
   const { entries = [], screen: initialScreen = "conversation" } = options;
@@ -125,6 +129,17 @@ async function start(
       send: vi.fn(),
       close: vi.fn(),
     }),
+    {
+      recap: options.withRecap
+        ? {
+            api: createRecapApi(fetcher),
+            storage: { getItem: () => null, setItem() {}, removeItem() {} },
+          }
+        : undefined,
+      lifecycle: options.withLifecycle
+        ? { api: createLifecycleApi(fetcher), openExternal: () => {} }
+        : undefined,
+    },
   );
   stops.push(workspace.start());
   render(
@@ -274,6 +289,86 @@ describe("設定の通常操作", () => {
       await new Promise((resolve) => requestAnimationFrame(resolve));
     });
     expect(textInBuffer(f.main)).toContain("Space x、Q  AI を止める  会話");
+  });
+
+  it("会話を開いていないヘルプで、直近・目次・決まったこと・検索の割り当てを編集できる", async () => {
+    const f = await start({
+      screen: "help",
+      withRecap: true,
+      entries: [{ keys: "<Space>M", context: "normal", to: { action: "recap.toc" } }],
+    });
+    const recapLabels = new Set([
+      "直近",
+      "目次",
+      "決まったこと",
+      "目次と決まったことを検索する",
+      "章の始まりを移す",
+    ]);
+    const recapRows = () =>
+      textInBuffer(f.main)
+        .split("\n")
+        .filter((row) => recapLabels.has(row.split("  ")[1]));
+    await waitFor(() =>
+      expect(recapRows()).toEqual([
+        "Space i  直近  会話",
+        "Space m、Space M  目次  会話",
+        "Space d  決まったこと  会話",
+        "/  目次と決まったことを検索する  目次・決まったこと",
+        ":toc  章の始まりを移す  会話",
+      ]),
+    );
+    await f.command(":map <Space>I recap.recent");
+    await f.command(":map <Space>T recap.toc");
+    await f.command(":map <Space>D recap.decisions");
+    await f.command(":map <Space>S recap.search");
+    expect(f.entries()).toEqual([
+      { keys: "<Space>M", context: "normal", to: { action: "recap.toc" } },
+      { keys: "<Space>I", context: "normal", to: { action: "recap.recent" } },
+      { keys: "<Space>T", context: "normal", to: { action: "recap.toc" } },
+      { keys: "<Space>D", context: "normal", to: { action: "recap.decisions" } },
+      { keys: "<Space>S", context: "normal", to: { action: "recap.search" } },
+    ]);
+    await waitFor(() =>
+      expect(recapRows()).toEqual([
+        "Space i、Space I  直近  会話",
+        "Space m、Space M、Space T  目次  会話",
+        "Space d、Space D  決まったこと  会話",
+        "/、Space S  目次と決まったことを検索する  目次・決まったこと",
+        ":toc  章の始まりを移す  会話",
+      ]),
+    );
+  });
+
+  it("会話の一覧・締めくくり・検索を別画面のヘルプで読んで割り当てる", async () => {
+    const f = await start({ screen: "help", withLifecycle: true });
+    const rows = () => textInBuffer(f.main).split("\n");
+    expect(rows()).toEqual(
+      expect.arrayContaining([
+        "Space b  会話とスレッドの一覧  どこでも",
+        "Space z  会話を締めくくる  会話",
+        "Space f  issue と会話を検索  どこでも",
+        ":convs  会話とスレッドの一覧  共通",
+        ":close  会話を締めくくる  会話",
+        ":find  issue と会話を検索  共通",
+      ]),
+    );
+    await f.command(":map <Space>B conversation.list");
+    await f.command(":map <Space>Z conversation.close");
+    await f.command(":map <Space>F search.open");
+    expect(f.entries()).toEqual([
+      { keys: "<Space>B", context: "normal", to: { action: "conversation.list" } },
+      { keys: "<Space>Z", context: "normal", to: { action: "conversation.close" } },
+      { keys: "<Space>F", context: "normal", to: { action: "search.open" } },
+    ]);
+    await waitFor(() =>
+      expect(rows()).toEqual(
+        expect.arrayContaining([
+          "Space b、Space B  会話とスレッドの一覧  どこでも",
+          "Space z、Space Z  会話を締めくくる  会話",
+          "Space f、Space F  issue と会話を検索  どこでも",
+        ]),
+      ),
+    );
   });
 
   it.each([

@@ -13,6 +13,7 @@ import {
 import { ConversationPage } from "../../pages/conversation/ConversationPage";
 import { RecapPanel } from "../../components/recap/RecapPanel";
 import { RecapSession } from "../recap/session";
+import { recapActions, recapCommands } from "../recap/keymap";
 import type { RecapApi } from "../recap/api";
 import type { TabStorage } from "../recap/read-tracking";
 import { Realtime, type RealtimeSocket } from "../realtime";
@@ -227,10 +228,14 @@ export function createConversationWorkspace(
     start() {
       const unregister = registerConversationSwitch(controller);
       const unregisterLifecycle = lifecycle?.start();
-      const removeActionHelp = controller.actions.declareHelp(Object.values(conversationActions));
-      const removeCommandHelp = controller.commands.declareHelp(
-        Object.values(conversationCommands),
-      );
+      const removeActionHelp = controller.actions.declareHelp([
+        ...Object.values(conversationActions),
+        ...(recap ? Object.values(recapActions) : []),
+      ]);
+      const removeCommandHelp = controller.commands.declareHelp([
+        ...Object.values(conversationCommands),
+        ...(recap ? Object.values(recapCommands) : []),
+      ]);
       const unsubscribeApp = settingsChanged ? realtime.subscribe("app") : undefined;
       realtime.start();
       return () => {

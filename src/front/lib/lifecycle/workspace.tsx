@@ -89,11 +89,16 @@ export function createLifecycleWorkspace({
         controller.actions.register({
           name: "search.open",
           label: searchTitle,
-          group: "開く・戻る",
+          group: "そのほか",
           where: "どこでも",
           run: () => controller.openCommand("find "),
         }),
-        controller.commands.register({ name: "close", label: "会話を締めくくる", run: openClose }),
+        controller.commands.register({
+          name: "close",
+          label: "会話を締めくくる",
+          where: "会話",
+          run: openClose,
+        }),
         controller.commands.register({ name: "convs", label: listTitle, run: openList }),
         controller.commands.register({ name: "find", label: searchTitle, run: find }),
       ];
