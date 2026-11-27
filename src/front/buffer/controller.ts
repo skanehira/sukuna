@@ -1,3 +1,4 @@
+import { includesConflict, proposeKeymapChange } from "../lib/keymap-commands";
 import { createContext } from "react";
 import {
   ActionRegistry,
@@ -68,7 +69,7 @@ export type BufferSnapshot = {
   commandPrefix?: ":" | "/";
   prompt: PromptSpec | null;
   promptId: number;
-  confirmation: { text: string; run: () => void | Promise<void>; context: ActionContext } | null;
+  confirmation: { text: string; context: ActionContext; choicesInText?: boolean } | null;
   notice: { message: string; kind: "error" | "info" } | null;
 };
 export type ControllerOptions = {
@@ -94,6 +95,9 @@ export class BufferController {
   private windows = new Map<string, WindowHandle>();
   private configured: KeymapEntry[] = [];
   private bindings = defaultKeymap;
+  private keymapVersion = 0;
+  private keymapWrite = Promise.resolve();
+  private confirmed: (() => void | Promise<void>) | undefined;
   private pending = new Set<string>();
   private status = new Map<string, string>();
   private hints = new Map<string, Hint[]>();
@@ -163,7 +167,10 @@ export class BufferController {
         fromPrompt: name.startsWith("win.") || name === "cmdline",
         run,
       });
-    this.actions.subscribe(() => this.update({}));
+    this.actions.subscribe(() => {
+      this.rebuildKeymap();
+      this.update({});
+    });
   }
   snapshot = (): BufferSnapshot => this.state;
   subscribe = (listener: () => void): (() => void) => {
@@ -179,21 +186,31 @@ export class BufferController {
   entries(): KeymapEntry[] {
     return this.bindings;
   }
+  bindingSnapshot = (): KeymapEntry[] => this.bindings;
+  private adoptKeymap(entries: KeymapEntry[]): void {
+    if (entries === this.configured) return;
+    this.configured = entries;
+    this.rebuildKeymap();
+    this.update({ prefix: "" });
+  }
+  private rebuildKeymap(): void {
+    this.bindings = resolveKeymap(defaultKeymap, this.configured, (name) =>
+      this.actions.describe(name),
+    );
+  }
   start(): () => void {
     const port = this.options.keymap;
     let active = true;
     let generation = 0;
     const reload = async () => {
       const request = ++generation;
+      const version = this.keymapVersion;
       try {
         const config = await port!.load();
-        if (active && request === generation) {
-          this.configured = config.entries;
-          this.bindings = resolveKeymap(defaultKeymap, this.configured);
-          this.update({ prefix: "" });
-        }
+        if (active && request === generation && version === this.keymapVersion)
+          this.adoptKeymap(config.entries);
       } catch (error) {
-        if (active)
+        if (active && request === generation && version === this.keymapVersion)
           this.notify(
             error instanceof Error ? error.message : "キーの設定を読み込めませんでした",
             "error",
@@ -284,9 +301,6 @@ export class BufferController {
     }
     await this.perform(() => action.run(context));
   }
-  confirm(text: string, context: ActionContext, run: () => void | Promise<void>): void {
-    this.update({ confirmation: { text, context, run } });
-  }
   private async perform(run: () => void | Promise<void>): Promise<void> {
     try {
       await run();
@@ -294,12 +308,24 @@ export class BufferController {
       this.notify(error instanceof Error ? error.message : "操作に失敗しました", "error");
     }
   }
+  confirm(
+    text: string,
+    context: ActionContext,
+    run: () => void | Promise<void>,
+    choicesInText?: boolean,
+  ): void {
+    this.origin = context.window;
+    this.confirmed = run;
+    this.update({ confirmation: { text, context, choicesInText } });
+  }
   answer(
     event: Pick<KeyboardEvent, "key" | "isComposing" | "ctrlKey" | "altKey" | "metaKey">,
   ): boolean {
     const confirmation = this.state.confirmation;
-    if (!confirmation) return false;
+    const run = this.confirmed;
+    if (!confirmation || !run) return false;
     if (["Shift", "Control", "Alt", "Meta"].includes(event.key)) return true;
+    this.confirmed = undefined;
     this.update({ confirmation: null });
     this.focus(confirmation.context.window);
     if (
@@ -311,7 +337,7 @@ export class BufferController {
     ) {
       this.pending.add(confirmation.context.window);
       this.update({});
-      void this.perform(confirmation.run).finally(() => {
+      void this.perform(run).finally(() => {
         this.pending.delete(confirmation.context.window);
         this.update({});
       });
@@ -469,35 +495,7 @@ export class BufferController {
         quit: () => (this.right.current ? this.closeRight() : this.back()),
         jump: (line) =>
           this.windows.get(this.state.active)?.place({ line, column: 0, topLine: line }),
-        save: async (entry) => {
-          if (!this.options.keymap) {
-            this.notify("キーの設定はまだ保存できません", "error");
-            return;
-          }
-          if (
-            entry.context === "terminal" &&
-            entry.to !== null &&
-            "action" in entry.to &&
-            entry.to.action === "terminal.normal"
-          ) {
-            for (const previous of this.bindings.filter(
-              (value) =>
-                value.context === "terminal" &&
-                value.keys !== entry.keys &&
-                value.to !== null &&
-                "action" in value.to &&
-                value.to.action === "terminal.normal",
-            )) {
-              const removal: KeymapEntry = { keys: previous.keys, context: "terminal", to: null };
-              await this.options.keymap.save(removal);
-              this.configured = [...this.configured, removal];
-            }
-          }
-          await this.options.keymap.save(entry);
-          this.configured = [...this.configured, entry];
-          this.bindings = resolveKeymap(defaultKeymap, this.configured);
-          this.update({});
-        },
+        save: (entry) => this.proposeKeymap(entry, this.context(this.origin)),
       });
     } catch (error) {
       if (error instanceof CommandRetry) {
@@ -512,6 +510,66 @@ export class BufferController {
       }
       this.notify(error instanceof Error ? error.message : "コマンドの実行に失敗しました", "error");
     }
+  }
+  private proposeKeymap(
+    entry: KeymapEntry,
+    context: ActionContext,
+    accepted: KeymapEntry[] = [],
+  ): Promise<void> {
+    return this.enqueueKeymapWrite(async () => {
+      const port = this.options.keymap;
+      if (!port) throw new Error("キーの設定はまだ保存できません");
+      for (;;) {
+        const latest = port.replace ? await port.loadLatest?.() : undefined;
+        const current =
+          latest?.entries ?? (port.replace ? (await port.load()).entries : this.configured);
+        this.adoptKeymap(current);
+        const change = proposeKeymapChange(this.bindings, entry, this.actions);
+        if (
+          change.confirmation &&
+          change.conflicts.some((item) => !includesConflict(accepted, item))
+        ) {
+          this.confirm(
+            change.confirmation,
+            context,
+            () => this.proposeKeymap(entry, context, change.conflicts),
+            true,
+          );
+          return;
+        }
+        const entries = [...current, ...change.additions];
+        if (port.replace) {
+          const saved =
+            latest?.revision === undefined
+              ? await port.replace(entries)
+              : await port.replace(entries, latest.revision);
+          if (saved === null) continue;
+          this.adoptKeymap(saved.entries);
+        } else {
+          for (const addition of change.additions) await port.save(addition);
+          this.adoptKeymap(entries);
+        }
+        this.keymapVersion++;
+        this.notify("キーの割り当てを保存しました");
+        return;
+      }
+    });
+  }
+  resetKeymap(): Promise<void> {
+    return this.enqueueKeymapWrite(async () => {
+      const port = this.options.keymap;
+      if (!port?.replace) throw new Error("キーの割り当てを既定に戻せませんでした");
+      const saved = await port.replace([]);
+      if (!saved) throw new Error("キーの割り当てを既定に戻せませんでした");
+      this.keymapVersion++;
+      this.adoptKeymap(saved.entries);
+      this.notify("キーの割り当てを既定に戻しました");
+    });
+  }
+  private enqueueKeymapWrite(save: () => Promise<void>): Promise<void> {
+    const write = this.keymapWrite.then(save);
+    this.keymapWrite = write.catch(() => {});
+    return write;
   }
   registerPromptUpdate(update: (text: string) => void): () => void {
     this.promptUpdate = update;

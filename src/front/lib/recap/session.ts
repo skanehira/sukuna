@@ -1,6 +1,7 @@
 import type { DecisionsResponse, RecapResponse, TocResponse } from "../../../shared/recap/api";
 import type { BufferHandle } from "../../buffer/Buffer";
 import { CommandRetry } from "../../buffer/commands";
+import type { ActionInfo } from "../../buffer/keymap/registry";
 import { canPlaceCursor } from "../../buffer/no-cursor";
 import type { LineInfo } from "../../buffer/line";
 import type { ConversationSession } from "../conversation/session";
@@ -8,6 +9,7 @@ import type { Event, Snapshot } from "../conversation/types";
 import { ConversationApiError } from "../conversation/api";
 import { eventLines } from "../conversation/lines";
 import type { RecapApi } from "./api";
+import { recapAction, recapActions, recapCommands, recapItemActions } from "./keymap";
 import { openPosition } from "./open-position";
 import {
   forgetOpening,
@@ -138,35 +140,12 @@ export class RecapSession {
   connect(): () => void {
     const controller = this.conversation.controller;
     const removers: (() => void)[] = [];
-    const register = (
-      name: string,
-      label: string,
-      views: string[],
-      run: () => void | Promise<void>,
-    ) => {
-      removers.push(
-        controller.actions.register({
-          name,
-          label,
-          views,
-          group: "状況を思い出す",
-          where: "会話",
-          run,
-        }),
-      );
+    const register = (action: ActionInfo, run: () => void | Promise<void>) => {
+      removers.push(controller.actions.register({ ...action, run }));
     };
-    for (const [view, label] of [
-      ["recent", "直近"],
-      ["toc", "目次"],
-      ["decisions", "決まったこと"],
-    ] as const)
-      register(
-        `recap.${view}`,
-        label,
-        ["conversation", "recent", "toc", "decisions", "recap-search"],
-        () => this.open(view),
-      );
-    register("recap.search", "目次と決まったことを検索する", ["toc", "decisions"], () =>
+    for (const view of ["recent", "toc", "decisions"] as const)
+      register(recapActions[view], () => this.open(view));
+    register(recapActions.search, () =>
       controller.openSearch(async (query) => {
         const current = this.beginRightOpening();
         const [toc, decisions] = await Promise.all([
@@ -180,13 +159,13 @@ export class RecapSession {
         controller.openRight({ view: "recap-search", target: this.conversation.id });
       }),
     );
-    for (const [name, label, run] of [
-      ["item.edit", "直す", () => this.edit()],
-      ["item.delete", "消す", () => this.remove()],
-      ["item.undo", "戻す", () => this.restore()],
+    for (const [action, run] of [
+      [recapItemActions.edit, () => this.edit()],
+      [recapItemActions.delete, () => this.remove()],
+      [recapItemActions.undo, () => this.restore()],
     ] as const) {
-      const old = controller.actions.get(name);
-      register(name, label, ["conversation", "toc", "decisions"], () =>
+      const old = controller.actions.get(action.name);
+      register({ ...action, views: ["conversation", ...action.views] }, () =>
         controller.context().view === "conversation" ? old?.run(controller.context()) : run(),
       );
       if (old)
@@ -196,8 +175,7 @@ export class RecapSession {
     }
     removers.push(
       controller.commands.register({
-        name: "toc",
-        label: "章の始まりを移す",
+        ...recapCommands.toc,
         run: async (args) => {
           if (args[0] !== "start" || args.length !== 2 || !/^\d+$/.test(args[1]))
             throw new Error("使い方: :toc start <章の番号>");
@@ -210,7 +188,7 @@ export class RecapSession {
       }),
     );
     const jump = (name: string, label: string, run: () => void | Promise<void>) => {
-      register(name, label, ["recent", "toc", "decisions", "recap-search"], run);
+      register(recapAction(name, label, ["recent", "toc", "decisions", "recap-search"]), run);
     };
     jump("recap.jump", "本文へ移る", () => this.selectedJump());
     jump("recap.open-toc", "目次", () => this.open("toc"));

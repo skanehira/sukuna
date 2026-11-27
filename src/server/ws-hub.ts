@@ -135,6 +135,15 @@ export class WsHub {
       payload: { conversation_ids: conversationIds, issue_ids: issueIds, project_ids: projectIds },
     });
   }
+  settingsChanged(): void {
+    const message: ServerMessage = {
+      topic: "app",
+      seq: ++this.seq,
+      type: "settings_changed",
+      payload: {},
+    };
+    for (const client of this.clients.keys()) this.send(client, message);
+  }
   ping(): void {
     const message: ServerMessage = { topic: "app", seq: ++this.seq, type: "ping", payload: {} };
     for (const client of this.clients.keys()) this.send(client, message);

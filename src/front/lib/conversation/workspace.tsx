@@ -1,6 +1,8 @@
+import { conversationActionHelp, conversationCommands } from "./keymap";
 import type { ScreenLoader } from "../../App";
 import type { ServerMessage } from "../../../shared/ws";
 import type { RightView } from "../../buffer/right-window";
+import { listDeleteAction } from "../../components/lifecycle/ConversationList";
 import type { LifecycleFeed } from "../../components/lifecycle/use-lifecycle";
 import { createLifecycleWorkspace, type LifecycleOptions } from "../lifecycle/workspace";
 import { Buffer } from "../../buffer/Buffer";
@@ -12,6 +14,7 @@ import {
 import { ConversationPage } from "../../pages/conversation/ConversationPage";
 import { RecapPanel } from "../../components/recap/RecapPanel";
 import { RecapSession } from "../recap/session";
+import { recapActions, recapCommands, recapItemActions } from "../recap/keymap";
 import type { RecapApi } from "../recap/api";
 import type { TabStorage } from "../recap/read-tracking";
 import { Realtime, type RealtimeSocket } from "../realtime";
@@ -28,9 +31,11 @@ export function createConversationWorkspace(
   {
     recap,
     lifecycle: lifecycleOptions,
+    settingsChanged,
   }: {
     recap?: { api: RecapApi; storage: TabStorage };
     lifecycle?: LifecycleOptions;
+    settingsChanged?: () => void;
   } = {},
 ) {
   const sessions = new Map<string, ConversationSession>();
@@ -42,6 +47,7 @@ export function createConversationWorkspace(
   let visible = true;
   let currentSession: ConversationSession | null = null;
   const reload = (topic: string) => {
+    if (topic === "app") settingsChanged?.();
     changes.get(topic)?.forEach((receive) => receive());
     for (const session of active)
       if (topic === `conversation:${session.id}`)
@@ -65,6 +71,7 @@ export function createConversationWorkspace(
     reload,
     gap: reload,
     message: (message) => {
+      if (message.topic === "app" && message.type === "settings_changed") settingsChanged?.();
       active.forEach((session) => session.receive(message));
       if (message.type !== "resync")
         changes.get(message.topic)?.forEach((receive) => receive(message));
@@ -222,10 +229,25 @@ export function createConversationWorkspace(
     start() {
       const unregister = registerConversationSwitch(controller);
       const unregisterLifecycle = lifecycle?.start();
+      const removeActionHelp = controller.actions.declareHelp([
+        ...conversationActionHelp([
+          ...(recap ? Object.values(recapItemActions) : []),
+          ...(lifecycle ? [listDeleteAction] : []),
+        ]),
+        ...(recap ? Object.values(recapActions) : []),
+      ]);
+      const removeCommandHelp = controller.commands.declareHelp([
+        ...Object.values(conversationCommands),
+        ...(recap ? Object.values(recapCommands) : []),
+      ]);
+      const unsubscribeApp = settingsChanged ? realtime.subscribe("app") : undefined;
       realtime.start();
       return () => {
         unregister();
         unregisterLifecycle?.();
+        removeActionHelp();
+        removeCommandHelp();
+        unsubscribeApp?.();
         realtime.stop();
       };
     },

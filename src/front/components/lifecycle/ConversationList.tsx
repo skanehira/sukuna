@@ -3,7 +3,9 @@ import { useMemo } from "react";
 import { useEffect } from "react";
 import type { BufferController } from "../../buffer/controller";
 import { Frame } from "../../buffer/Frame";
+import type { ActionInfo } from "../../buffer/keymap/registry";
 import type { LineInfo } from "../../buffer/line";
+import { conversationActions } from "../../lib/conversation/keymap";
 import type { ConversationApi } from "../../lib/conversation/types";
 import type { LifecycleApi } from "../../lib/lifecycle/api";
 import {
@@ -26,6 +28,13 @@ import {
 
 export const listTitle = "会話とスレッドの一覧";
 export const listView = "conversation-list";
+export const listDeleteAction = {
+  name: conversationActions.deleteItem.name,
+  label: "会話・スレッドを削除する",
+  group: "会話",
+  where: "会話一覧",
+  views: [listView],
+} satisfies ActionInfo;
 const issueDelete = "issue は、プロジェクトの画面で dd を押して取り下げます";
 
 export function ConversationList({
@@ -88,11 +97,7 @@ export function ConversationList({
   useEffect(() => {
     const current = () => rows.get(controller.currentLine()?.id ?? "");
     const removeDelete = controller.actions.register({
-      name: "item.delete",
-      label: "会話・スレッドを削除する",
-      group: "会話",
-      where: listTitle,
-      views: [listView],
+      ...listDeleteAction,
       run: (context) => {
         if (controller.busy(context.window)) return;
         const selected = current();

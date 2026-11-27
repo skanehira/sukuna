@@ -1,6 +1,7 @@
 import type { ActionRegistry, KeymapEntry } from "./keymap/registry";
 import { normalizeKeys, parseKeys } from "./keymap/notation";
-export type CommandDef = { name: string; label: string; run(args: string[]): void | Promise<void> };
+export type CommandInfo = { name: string; label: string; where?: string };
+export type CommandDef = CommandInfo & { run(args: string[]): void | Promise<void> };
 export class CommandRetry extends Error {
   readonly run: () => Promise<void>;
   constructor(message: string, run: () => Promise<void>) {
@@ -10,17 +11,45 @@ export class CommandRetry extends Error {
 }
 export class CommandRegistry {
   private commands = new Map<string, CommandDef>();
+  private listeners = new Set<() => void>();
+  private help = new Map<string, CommandInfo>();
+  private current: CommandInfo[] = [];
   register(command: CommandDef): () => void {
     this.commands.set(command.name, command);
+    this.emit();
     return () => {
-      this.commands.delete(command.name);
+      if (this.commands.get(command.name) === command) {
+        this.commands.delete(command.name);
+        this.emit();
+      }
+    };
+  }
+  declareHelp(commands: readonly CommandInfo[]): () => void {
+    commands.forEach((command) => this.help.set(command.name, command));
+    this.emit();
+    return () => {
+      commands.forEach((command) => {
+        if (this.help.get(command.name) === command) this.help.delete(command.name);
+      });
+      this.emit();
     };
   }
   get(name: string): CommandDef | undefined {
     return this.commands.get(name);
   }
-  all(): CommandDef[] {
-    return [...this.commands.values()];
+  all(): CommandInfo[] {
+    return this.current;
+  }
+  snapshot = (): CommandInfo[] => this.current;
+  subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  };
+  private emit(): void {
+    this.current = [...new Map<string, CommandInfo>([...this.help, ...this.commands]).values()];
+    this.listeners.forEach((listener) => listener());
   }
 }
 export type CommandEnvironment = {
@@ -55,14 +84,14 @@ export async function executeCommand(input: string, env: CommandEnvironment): Pr
     const context = name.startsWith("t") ? "terminal" : "normal";
     let to: KeymapEntry["to"] = null;
     if (!remove) {
-      if (env.actions.get(target) && (context !== "terminal" || target === "terminal.normal"))
+      if (env.actions.describe(target) && (context !== "terminal" || target === "terminal.normal"))
         to = { action: target };
       else if (context === "normal" && parseKeys(target)) to = { keys: normalizeKeys(target) };
       else {
         env.notify(`動作がありません: ${target}`, "error");
         return;
       }
-      if (/^[a-zA-Z_][\w-]*(?:\.[a-zA-Z_][\w-]*)+$/.test(target) && !env.actions.get(target)) {
+      if (/^[a-zA-Z_][\w-]*(?:\.[a-zA-Z_][\w-]*)+$/.test(target) && !env.actions.describe(target)) {
         env.notify(`動作がありません: ${target}`, "error");
         return;
       }

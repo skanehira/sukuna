@@ -28,6 +28,7 @@ export type LineInfo = {
   id?: string;
   target?: OpenTarget;
   action?: string;
+  status?: string;
   main?: boolean;
   danger?: boolean;
   done?: boolean;

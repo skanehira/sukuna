@@ -13,6 +13,8 @@ import { createConversationApi } from "./lib/conversation/api";
 import { createLifecycleApi } from "./lib/lifecycle/api";
 import { createConversationWorkspace } from "./lib/conversation/workspace";
 import type { RealtimeSocket } from "./lib/realtime";
+import { createSettingsApi, createSettingsStore } from "./lib/settings-store";
+import { loadSettingsScreen, registerSettingsCommands } from "./lib/settings-workspace";
 import { ulid } from "ulid";
 
 const reload = () => window.location.reload();
@@ -29,6 +31,23 @@ const notices = createNotices({
   },
 });
 controller.options.notify = notices.notify;
+const reportSettingsError = (error: unknown) => {
+  notices.notify(error instanceof Error ? error.message : "設定を読み込めませんでした。", "error");
+};
+const settings = createSettingsStore(
+  createSettingsApi(window.fetch.bind(window)),
+  reportSettingsError,
+);
+controller.options.keymap = settings.keymap;
+const stopSettingsCommands = registerSettingsCommands(controller);
+const timeFormat = new Intl.DateTimeFormat("ja-JP", {
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+const formatTime = (at: number) => timeFormat.format(at);
 const conversations = createConversationWorkspace(
   createConversationApi(window.fetch.bind(window)),
   controller,
@@ -53,6 +72,9 @@ const conversations = createConversationWorkspace(
         window.open(url, "_blank", "noopener,noreferrer");
       },
     },
+    settingsChanged: () => {
+      void settings.refresh().catch(reportSettingsError);
+    },
   },
 );
 const stopConversations = conversations.start();
@@ -69,6 +91,7 @@ import.meta.hot?.dispose(() => {
   window.removeEventListener("keydown", dismissNotice);
   notices.dispose();
   window.removeEventListener("pagehide", pagehide);
+  stopSettingsCommands();
   stopConversations();
   document.removeEventListener("visibilitychange", visibility);
   dispose();
@@ -85,7 +108,10 @@ createRoot(document.getElementById("root")!).render(
             navigation={navigation}
             notices={notices}
             identityRecovery={identityRecovery}
-            loadScreen={conversations.loadScreen}
+            loadScreen={(route) =>
+              loadSettingsScreen(route, controller, settings, formatTime) ??
+              conversations.loadScreen(route)
+            }
             renderRight={conversations.renderRight}
             connection={conversations.connection}
           />

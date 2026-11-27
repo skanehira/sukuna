@@ -1,3 +1,5 @@
+import type { ActionInfo } from "../../buffer/keymap/registry";
+import { conversationAction, conversationActions, conversationCommands } from "./keymap";
 import type { Answers } from "../../../shared/events";
 import { eventSchema } from "../../../shared/events";
 import type { ServerMessage } from "../../../shared/ws";
@@ -123,18 +125,18 @@ export class ConversationSession {
       });
     const oldPrompt = this.controller.options.prompt?.bind(this.controller.options);
     this.controller.options.prompt = () => this.prompt();
-    this.action("agent.stop", "AI を止める", async () => {
+    this.bindAction(conversationActions.stop, async () => {
       await this.api.stop(this.id);
       this.controller.notify(
         `会話: ${this.state.data!.conversation.title} の AI を止めました。作業は保存され、指示待ちになります`,
       );
       await this.refresh();
     });
-    this.action("conversation.resume", "再開する", async () => {
+    this.bindAction(conversationActions.resume, async () => {
       await this.api.resume(this.id);
       await this.refresh();
     });
-    this.action("conversation.queue.send", "届く前の指示を送る", async () => {
+    this.bindAction(conversationActions.sendQueue, async () => {
       await this.api.send(this.id, {
         text: "",
         images: [],
@@ -143,9 +145,9 @@ export class ConversationSession {
       });
       await this.refresh();
     });
-    this.action("item.delete", "預けた指示を取り消す", () => this.deleteQueue());
-    this.action("item.edit", "預けた指示を直す", () => this.editQueue());
-    this.action("item.undo", "預けた指示を戻す", async () => {
+    this.bindAction(conversationActions.deleteItem, () => this.deleteQueue());
+    this.bindAction(conversationActions.editItem, () => this.editQueue());
+    this.bindAction(conversationActions.undoItem, async () => {
       const item = this.undo;
       if (!item) return;
       if (item.stockItemId)
@@ -186,24 +188,22 @@ export class ConversationSession {
       this.undoDraft = null;
       await this.refresh();
     });
-    this.action("diff.expand", "差分を開く", () => this.fold(false));
-    this.action("diff.collapse", "差分を畳む", () => this.fold(true));
-    this.action("conversation.answers.send", "回答をまとめて送る", () => this.sendAnswers(false));
-    this.action("conversation.answers.confirm", "回答を送る", () => this.sendAnswers(true));
-    this.action("conversation.answered", "送った回答", () => {
+    this.bindAction(conversationActions.expandDiff, () => this.fold(false));
+    this.bindAction(conversationActions.collapseDiff, () => this.fold(true));
+    this.bindAction(conversationActions.sendAnswers, () => this.sendAnswers(false));
+    this.bindAction(conversationActions.confirmAnswers, () => this.sendAnswers(true));
+    this.bindAction(conversationActions.answered, () => {
       this.controller.notify("この質問には、回答を送ってあります");
     });
     this.removers.push(
       this.controller.commands.register({
-        name: "stop",
-        label: "AI を止める",
+        ...conversationCommands.stop,
         run: () => this.controller.run("agent.stop"),
       }),
     );
     this.removers.push(
       this.controller.commands.register({
-        name: "images",
-        label: "画像を外す",
+        ...conversationCommands.images,
         run: async (args) => {
           if (args.join(" ") !== "clear") throw new Error("使い方: :images clear");
           this.editDraft(this.draft.content().text, []);
@@ -234,16 +234,11 @@ export class ConversationSession {
     run: () => void | Promise<void>,
     confirm?: string,
   ): void {
+    this.bindAction(conversationAction(name, label), run, confirm);
+  }
+  private bindAction(info: ActionInfo, run: () => void | Promise<void>, confirm?: string): void {
     this.removers.push(
-      this.controller.actions.register({
-        name,
-        label,
-        group: "会話",
-        where: "会話",
-        views: ["conversation"],
-        ...(confirm ? { confirm } : {}),
-        run,
-      }),
+      this.controller.actions.register({ ...info, run, ...(confirm ? { confirm } : {}) }),
     );
   }
   eventRecords(): Event[] {

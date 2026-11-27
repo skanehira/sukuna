@@ -207,7 +207,7 @@ describe("ターミナル API と WebSocket", () => {
     server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 });
     await once(server, "listening");
     baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const authorizeTerminal = createUpgradeAuthorizer({
+    const authorize = createUpgradeAuthorizer({
       resolve: createResolveIdentity({
         ...identity,
         get devIdentity() {
@@ -216,7 +216,7 @@ describe("ターミナル API と WebSocket", () => {
       }),
     });
     allowTerminal = true;
-    server.on("upgrade", createUpgradeHandler({ authorizeTerminal, terminals: sessions }));
+    server.on("upgrade", createUpgradeHandler({ authorize, terminals: sessions }));
   });
 
   let allowTerminal: boolean;

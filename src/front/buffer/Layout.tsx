@@ -73,7 +73,12 @@ export function Layout({
         {state.command !== null ? (
           <CommandLine controller={controller} initial={state.command} />
         ) : null}
-        {state.confirmation ? <ConfirmBar text={state.confirmation.text} /> : null}
+        {state.confirmation ? (
+          <ConfirmBar
+            text={state.confirmation.text}
+            choicesInText={state.confirmation.choicesInText}
+          />
+        ) : null}
         {state.notice && !controller.options.notify ? (
           <div
             role="alert"

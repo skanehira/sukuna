@@ -80,6 +80,39 @@ describe("今の割り当て", () => {
       ),
     ).toEqual([]);
   });
+  it("組み込みキーが有効な表示だけを重なりに数える", () => {
+    const registry = new ActionRegistry();
+    registry.register({ ...action, name: "diff.open", views: ["diff"] });
+    registry.register({ ...action, name: "files.open", views: ["files"] });
+    registry.register({ ...action, name: "diff.search", views: ["diff"] });
+    const onDiff: KeymapEntry = { keys: "j", context: "normal", to: { action: "diff.open" } };
+    const builtin: KeymapEntry = { keys: "j", context: "normal", to: { keys: "j" } };
+    expect(findConflicts([onDiff], { ...onDiff, to: { action: "diff.search" } }, registry)).toEqual(
+      [onDiff],
+    );
+    expect(findConflicts([onDiff], { ...onDiff, to: { action: "files.open" } }, registry)).toEqual([
+      builtin,
+    ]);
+    expect(findConflicts([onDiff], { ...onDiff, to: { keys: "k" } }, registry)).toEqual([
+      onDiff,
+      builtin,
+    ]);
+    expect(findConflicts([onDiff], { ...onDiff, context: "visual" }, registry)).toEqual([
+      { ...builtin, context: "visual" },
+    ]);
+  });
+
+  it("先頭の割り当てが同じ表示で動くときだけ Vim のキー列を隠す", () => {
+    const registry = new ActionRegistry();
+    registry.register({ ...action, name: "diff.open", views: ["diff"] });
+    registry.register({ ...action, name: "files.open", views: ["files"] });
+    const prefix: KeymapEntry = { keys: "g", context: "normal", to: { action: "diff.open" } };
+    const longer = { ...prefix, keys: "gg" };
+    expect(findConflicts([prefix], longer, registry)).toEqual([prefix]);
+    expect(findConflicts([prefix], { ...longer, to: { action: "files.open" } }, registry)).toEqual([
+      { ...longer, to: { keys: "gg" } },
+    ]);
+  });
 });
 
 describe("コマンド", () => {
