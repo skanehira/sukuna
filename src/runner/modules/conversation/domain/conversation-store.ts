@@ -43,6 +43,11 @@ export type SendResult =
   | { result: "delivered"; seq: number }
   | { result: "queued"; queuedId: string };
 export type ProjectRunReservation = { readonly projectId: string; release(): void };
+export type ReleaseCleanupFailure = { message: string; unusable: boolean };
+export const releaseCleanupFailure: ReleaseCleanupFailure = {
+  message: "実行の予約を解除できませんでした。",
+  unusable: false,
+};
 export interface ConversationStore {
   transaction<T>(operation: () => T): T;
   withWorktreeReservation<T>(operation: (reservation: WorktreeActivityReservation) => T): T;
@@ -84,7 +89,8 @@ export interface ConversationStore {
   clearQuestionsBefore(id: string, startSeq: number): void;
   saveRateLimit(value: unknown): void;
   reserveRelease(id: string, token: string, milliseconds: number): void;
-  clearRelease(id: string, token: string): Result<void, { message: string }>;
+  clearReleaseInTransaction(id: string, token: string): Result<void, ReleaseCleanupFailure>;
+  isUsageTimerRetired(id: string, lastSeq: number): boolean;
   clearReleaseReservations(): void;
 }
 

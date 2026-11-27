@@ -123,11 +123,7 @@ export class WsHub {
       subscription.after = record.seq;
     }
   }
-  private inbox(
-    conversationIds: string[] = [],
-    issueIds: string[] = [],
-    projectIds: string[] = [],
-  ): void {
+  inbox(conversationIds: string[] = [], issueIds: string[] = [], projectIds: string[] = []): void {
     this.publish({
       topic: "inbox",
       seq: ++this.seq,
@@ -157,6 +153,22 @@ export class WsHub {
     }
     this.publish({ topic: "app", seq: ++this.seq, type: "runner", payload: { connected } });
   }
+  conversationParts(
+    id: string,
+    parts: Extract<RunnerNotice, { kind: "conversation_parts" }>["parts"],
+  ) {
+    const row = this.database
+      .prepare("SELECT last_seq, project_id, issue_id FROM conversations WHERE id=?")
+      .get(id) as Pick<ConversationRow, "last_seq" | "project_id" | "issue_id"> | undefined;
+    if (row)
+      this.publish({
+        topic: `conversation:${id}`,
+        seq: row.last_seq,
+        type: "changed",
+        payload: { parts },
+      });
+    return row;
+  }
   notice(notice: RunnerNotice): void {
     if (notice.kind === "conversation") {
       const topic = `conversation:${notice.conversation_id}`;
@@ -185,18 +197,9 @@ export class WsHub {
           payload: { text: notice.text },
         });
     } else if (notice.kind === "conversation_parts") {
-      const row = this.database
-        .prepare("SELECT last_seq, project_id, issue_id FROM conversations WHERE id=?")
-        .get(notice.conversation_id) as ConversationRow | undefined;
-      if (row) {
-        this.publish({
-          topic: `conversation:${notice.conversation_id}`,
-          seq: row.last_seq,
-          type: "changed",
-          payload: { parts: notice.parts },
-        });
+      const row = this.conversationParts(notice.conversation_id, notice.parts);
+      if (row)
         this.inbox([notice.conversation_id], row.issue_id ? [row.issue_id] : [], [row.project_id]);
-      }
     } else if (notice.kind === "issue") {
       const topic = `issue:${notice.issue_id}`;
       for (const [client, c] of this.clients) {

@@ -2,6 +2,8 @@ import { createProjectRoutes } from "./modules/workspace/adapter/project-routes"
 import type { ProjectDependencies } from "./modules/workspace/domain/project-settings";
 import { createDesignRoutes } from "./modules/flow/adapter/design-routes";
 import type { DesignDependencies } from "./modules/flow/domain/design-ports";
+import { createLifecycleRoutes } from "./modules/conversation/adapter/lifecycle-http";
+import type { LifecycleDependencies } from "./modules/conversation/domain/lifecycle";
 import { createInboxRoutes } from "./modules/inbox/adapter/routes";
 import type { InboxDependencies } from "./modules/inbox/domain/ports";
 import { createConversationWorktrees } from "./modules/conversation/adapter/worktrees";
@@ -53,6 +55,7 @@ export type AppOptions = {
   progress?: ProgressDependencies;
   messages?: MessageDependencies;
   conversations?: ConversationDependencies;
+  lifecycle?: LifecycleDependencies;
   stock?: StockDependencies;
 
   issues?: IssueServerDeps;
@@ -102,6 +105,7 @@ export function createApp(options: AppOptions): Hono<IdentityEnv> {
 
   if (options.workspace) app.route("/api/conversations", createWorkspaceRoutes(options.workspace));
 
+  if (options.lifecycle) app.route("/api", createLifecycleRoutes(options.lifecycle));
   if (options.stock) app.route("/api", createStockRoutes(options.stock));
   if (options.worktrees) app.route("/api", createWorktreeRoutes(options.worktrees));
 

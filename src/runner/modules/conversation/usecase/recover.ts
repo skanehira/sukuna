@@ -7,6 +7,9 @@ export function recover(runtime: ConversationRuntime): void {
       runtime.record(c.id, [
         { type: "stopped", payload: { reason: "restarted", previous_run_state: c.runState } },
       ]);
-    if (c.runState === "usage_limited") runtime.scheduleUsageResume(c.id);
+    if (c.runState === "usage_limited") {
+      const parent = c.parentConversationId ? runtime.store.get(c.parentConversationId) : null;
+      if (parent?.closedAt == null) runtime.scheduleUsageResume(c.id);
+    }
   }
 }

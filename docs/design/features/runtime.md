@@ -114,6 +114,8 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 | `settings` のキー `runner-workspace-switch:<要求の UUID>` | ランナー、画面のサーバー | ランナーが切り替え結果を、画面のサーバーが取消しを書く (`features/worktree-terminal.md` の作業場所の切り替え API) |
 | `settings` の `runner-stock-send:` で始まるキー | ランナー、画面のサーバー | ストック送信の受付結果と取消し (`features/stock-thread.md`「POST /api/conversations/:id/stock/send」) |
 | `settings` のキー `runner-accepted-input:<指摘の id>` | ランナー | 受理から発言の記録までの指摘を保存する (`features/design-review.md`「差し戻し」) |
+| `settings` のキー `conversation-usage-retired:<会話の id>` | 画面のサーバー | 閉鎖で取り消した利用枠タイマーの記録番号 (「再開と利用枠の戻り」) |
+| `settings` のキー `conversation-close-withdraw:<会話の id>` | 画面のサーバー | 閉鎖時刻と未取り下げの通知 ID (`features/conversation-lifecycle.md`「閉じる」) |
 | `settings` のキー `backup_status` | ランナー | バックアップはランナーがとる (`features/operations.md`) |
 | `settings` のキー `last_restore` と、復元のときの `flow_paused` | 復元の処理と、起動時の後始末 (`db.lock` の中) | 2 つのプロセスを止めてから書く (`features/operations.md`) |
 | `settings` のほかのキー、`projects` | 画面のサーバー | 開発者の操作 |
@@ -158,8 +160,8 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 | POST | `/conversations/:id/permissions/:requestId` | 許可の確認に答える | `behavior` (`allow` / `deny`)、`message?` | `seq` |
 | GET | `/conversations/:id/commands` | スキルとスラッシュコマンドの候補 | なし | `commands` (`name`、`description`) |
 | POST | `/conversations/:id/workspace` | 開発者が始めた会話の作業ディレクトリを切り替える。開いている実行を閉じる (`features/worktree-terminal.md`「作業場所の切り替え」) | `cwd`、`worktree_id?`、`attempt?` (要求 ID と有効期限) | `cwd` |
-| POST | `/conversations/:id/release` | 実行を片付けて手放す (閉じる・削除の前)。利用枠の戻りを待つタイマーも外す | なし | `run_state` |
-| POST | `/conversations/:id/release/reserve` | スレッドの終了保存まで操作を予約する (`features/stock-thread.md`「終了の予約に使う内部の口」) | `idle_only?` | `token` |
+| POST | `/conversations/:id/release` | 実行を手放し、利用枠の戻りを待つタイマーを外す | なし | `run_state` |
+| POST | `/conversations/:id/release/reserve` | 実行を手放し、会話を閉じる・削除する・スレッドを終える操作の保存まで予約する (`features/stock-thread.md`「終了の予約に使う内部の口」) | `only_idle?`、`idle_only?` (スレッドを確定事項つきで終了する場合) | `token` |
 | POST | `/conversations/:id/release/complete` | 終了の予約を解除する (同上) | `token` | なし |
 | POST | `/conversations/:id/stock/send` | ストックを送る (`features/stock-thread.md`) | `kinds`、`stockIds?`、`attempt_id?` | stock-thread.md の `POST /api/conversations/:id/stock/send` の 200 と同じ |
 | POST | `/conversations/:id/finish/propose` | スレッドの確定事項の案を求める (`features/stock-thread.md`「スレッドを終える」) | なし | `run_state` (`working`) |
@@ -176,6 +178,8 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 | GET | `/health` | 生きているかと版 | なし | `pid`、`started_at`、`version` |
 | GET | `/changes` | ランナーからの変化の知らせを受け続ける | なし | 改行区切りの JSON の流れ |
 
+- 親会話からスレッドを始める操作と分岐は、親会話の直列処理で行う。待っている間に親が閉じたら 409 を、削除されたら 404 を返す
+- `only_idle` を指定して終了を予約する場合、ランナーは同じ会話で先に届いた操作を処理してから状態を読む。作業中、回答待ち、許可待ちなら、AI を止めずに 409 を返す
 - 状態が合わない操作は 409 (`conflict`) を返す。例: 作業中でない会話の停止、再開できない状態の会話の再開、待っていない許可の確認への答え
 - 再開できるのは、`stopped` (`restarted`)・`failed`・`usage_limited` の会話だけである (`features/conversation.md`)
 - issue のいまの段階の担当でない会話への、指示を送る・再開・ストックの送信は、409 (`conflict`) を返す。`message` は「この issue はいま <段階> の会話で進んでいます」とする (`features/conversation.md`「指示を届ける規則」)
@@ -597,7 +601,7 @@ type AppTool = {
 
 ```ts
 interface GhRunner {
-  run(args: string[], opts: { cwd: string; stdin?: string }): Promise<{ stdout: string; stderr: string; exitCode: number }>;
+  run(args: string[], opts: { cwd: string; stdin?: string; signal?: AbortSignal }): Promise<{ stdout: string; stderr: string; exitCode: number }>;
 }
 ```
 
@@ -629,7 +633,7 @@ interface GhRunner {
 | 再起動の前の状態 | 扱い |
 | --- | --- |
 | `working` / `waiting_answer` / `waiting_permission` | `stopped` (`restarted`、`previous_run_state` に前の状態) を書き、指示が届くまで動かさない |
-| `usage_limited` | `resets_at` の 1 分後にタイマーを張り直す。閉じた会話には張らない |
+| `usage_limited` | `resets_at` の 1 分後にタイマーを張り直す。閉じた会話と、そのスレッドには張らない |
 | `idle` / `stopped` / `failed` | 何もしない |
 
 - 自動フローの会話 (`triage`、`design`、`impl`) の続きの指示は、`flow` が送る。`flow` は `stopped` の記録の `previous_run_state` で、前に何をしていたかを知る (`features/issue-flow.md`「ランナーの再起動のあと」)
@@ -651,7 +655,9 @@ interface GhRunner {
 - ストックで受け付けた指示は、受付から 30 秒まで開き直しを待つ。IPC の応答待ち 10 秒とストック送信結果の照合待ち 20 秒を合わせた時間である
 - `credits_required` で止まった会話は、自動では再開しない
 - 自動で再開したときは、知らせの `notice` を出す
-- 実行を手放す操作 (`release`) は、その会話の利用枠の戻りを待つタイマーも外す。閉じた会話は、開発者が送るまで再開しない (`features/conversation-lifecycle.md`)
+- 実行を手放す操作 (`release`) は、その会話の利用枠の戻りを待つタイマーも外す。閉じる・削除する操作で予約を使う場合は、予約中だけタイマーを止める。閉鎖や削除が確定せず、会話も親も開いたままなら、解除後に同じ予定時刻から待ち直す。期限を過ぎていれば解除後に試す (`features/conversation-lifecycle.md`)
+- ランナーは書き込みトランザクションで同じトークンの予約を削除する。削除に失敗したら、同じトランザクションで期限を確認する。予約が有効な場合やロックを取れない場合は削除を再試行する。削除か期限切れを確かめるまで、会話の直列処理とタイマーの一時停止を保つ
+- 閉鎖を確定したとき、画面のサーバーは利用枠切れの会話とスレッドの最後の記録番号を保存する。ランナーは、番号が一致する間は予約の解除や再起動で古いタイマーを張り直さない
 
 ### マイグレーション
 

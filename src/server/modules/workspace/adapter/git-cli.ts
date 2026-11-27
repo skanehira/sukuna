@@ -1,4 +1,13 @@
 import { parseDesignDiff } from "./design-diff";
+import type { ClosingGitSummary, LifecycleDependencies } from "../../conversation/domain/lifecycle";
+import {
+  limitClosingItems,
+  parseClosingCommits,
+  parseClosingCount,
+  parseClosingPrs,
+  parseUncommittedPaths,
+} from "../../conversation/domain/closing-summary";
+
 import { runCommand, type CommandOptions, type CommandResult } from "../../../../shared/command";
 import { lstat, readFile, appendFile, open, mkdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -376,5 +385,127 @@ export function createDesignGit(git: GitRunner) {
       );
       return result.exitCode === 0 ? result.stdout.trim() : null;
     },
+  };
+}
+
+export function createClosingGitCli(
+  git: GitRunner,
+  gh: GhRunner,
+  deadline = () => AbortSignal.timeout(10_000),
+): LifecycleDependencies["git"] {
+  const timed = async <T extends object>(operation: (signal: AbortSignal) => Promise<T>) => {
+    const signal = deadline();
+    const timeoutError = "10 秒で取得を打ち切りました";
+    let abort = () => {};
+    const timeout = new Promise<never>((_, reject) => {
+      abort = () => reject(new Error(timeoutError));
+    });
+    signal.addEventListener("abort", abort, { once: true });
+    try {
+      if (signal.aborted) throw new Error(timeoutError);
+      return { ok: true as const, ...(await Promise.race([operation(signal), timeout])) };
+    } catch (error) {
+      return {
+        ok: false as const,
+        error: error instanceof Error ? error.message : "取得できませんでした",
+      };
+    } finally {
+      signal.removeEventListener("abort", abort);
+    }
+  };
+  const output = (result: CommandResult) => {
+    if (result.exitCode !== 0)
+      throw new Error(result.stderr.trim().split(/\r?\n/)[0] || "コマンドを実行できませんでした");
+    return result.stdout;
+  };
+  return async (cwd, project, firstEventAt): Promise<ClosingGitSummary> => {
+    const repo = await timed(async (signal) => {
+      const result = await git.run(["rev-parse", "--is-inside-work-tree"], { cwd, signal });
+      if (result.exitCode !== 0 && /not a git repository/i.test(result.stderr))
+        return { git: false };
+      return { git: output(result).trim() === "true" };
+    });
+    if (repo.ok && !repo.git) return { git: false, outputs: {}, remaining: {} };
+    if (!repo.ok)
+      return {
+        git: true,
+        outputs: { commits: repo, prs: repo },
+        remaining: { uncommitted: repo, unpushed: repo },
+      };
+    const run = (signal: AbortSignal, args: string[]) => git.run(args, { cwd, signal });
+    const [commits, prs, uncommitted, unpushed] = await Promise.all([
+      timed(async (signal) => {
+        if (firstEventAt === null) return { items: [], more: 0 };
+        const since = Math.floor(firstEventAt / 1000) + 1;
+        const result = await run(signal, [
+          "log",
+          `--since-as-filter=@${since}`,
+          "--format=%ct%x09%H%x09%s",
+          "HEAD",
+        ]);
+        if (
+          result.exitCode !== 0 &&
+          /does not have any commits yet|bad revision 'HEAD'/.test(result.stderr)
+        )
+          return { items: [], more: 0 };
+        return limitClosingItems(parseClosingCommits(output(result)), 50);
+      }),
+      timed(async (signal) => {
+        if (!project.usesGithub || firstEventAt === null) return { items: [] };
+        const symbolic = await run(signal, ["symbolic-ref", "--short", "--quiet", "HEAD"]);
+        if (symbolic.exitCode === 1) return { items: [] };
+        const branch = output(symbolic).trim();
+        if (branch === project.defaultBranch) return { items: [] };
+        for (let limit = 100; ; limit *= 2) {
+          signal.throwIfAborted();
+          const result = await gh.run(
+            [
+              "pr",
+              "list",
+              "--head",
+              branch,
+              "--state",
+              "all",
+              "--json",
+              "number,title,url,state,createdAt",
+              "--limit",
+              String(limit),
+            ],
+            { cwd, signal },
+          );
+          const { received, reachedStart, items } = parseClosingPrs(output(result), firstEventAt);
+          if (received < limit || reachedStart) return { items };
+        }
+      }),
+      timed(async (signal) => {
+        const result = await run(signal, [
+          "status",
+          "--porcelain=v1",
+          "-z",
+          "--untracked-files=all",
+        ]);
+        return limitClosingItems(parseUncommittedPaths(output(result)), 20);
+      }),
+      timed(async (signal) => {
+        const head = await run(signal, ["rev-parse", "--verify", "--quiet", "HEAD"]);
+        if (head.exitCode === 1) return { count: 0, upstream: false };
+        output(head);
+        const upstream = await run(signal, ["rev-parse", "--verify", "--quiet", "@{u}"]);
+        if (upstream.exitCode === 0) {
+          const result = await run(signal, ["rev-list", "--count", "@{u}..HEAD"]);
+          return { count: parseClosingCount(output(result)), upstream: true };
+        }
+        if (
+          !/no upstream configured|HEAD does not point to a branch|upstream branch .* not stored/.test(
+            upstream.stderr,
+          ) &&
+          upstream.exitCode !== 1
+        )
+          output(upstream);
+        const result = await run(signal, ["rev-list", "--count", "HEAD", "--not", "--remotes"]);
+        return { count: parseClosingCount(output(result)), upstream: false };
+      }),
+    ]);
+    return { git: true, outputs: { commits, prs }, remaining: { uncommitted, unpushed } };
   };
 }

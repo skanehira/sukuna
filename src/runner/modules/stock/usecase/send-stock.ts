@@ -9,6 +9,7 @@ import {
   type DeliveryError,
   type OperationError,
 } from "../../conversation/usecase/runtime";
+import { withConversationAdmission } from "../../conversation/usecase/start";
 import type { Conversation } from "../../conversation/domain/conversation-store";
 import { formatStockInstructions, formatStockItem } from "../domain/message-format";
 import type { OutgoingStock, OutgoingStockRepository } from "../domain/ports";
@@ -24,13 +25,13 @@ export type SendStockDependencies = {
 
 export function createSendStock(deps: SendStockDependencies) {
   const { runtime, repository } = deps;
-  return (id: string, input: StockSendIpcInput, cancelled: () => boolean) =>
-    runtime.serial<StockSendResponse, DeliveryError>(id, async () => {
-      const receipt = input.attempt_id ? deps.receipt(input.attempt_id, id) : undefined;
-      const parent = runtime.store.get(id);
-      if (!parent) return err({ code: "not_found", message: "会話が見つかりません。" });
+  return (id: string, input: StockSendIpcInput, cancelled: () => boolean) => {
+    const sendInConversation = async (
+      parent: Conversation,
+    ): Promise<Result<StockSendResponse, DeliveryError>> => {
       if (parent.kind === "thread") return err(conflict("スレッドからはストックを送れません。"));
-      if (cancelled() || runtime.closing) return err(cancelledStockSend);
+      if (runtime.closing) return err(cancelledStockSend);
+      const receipt = input.attempt_id ? deps.receipt(input.attempt_id, id) : undefined;
       const ids = input.stockIds === undefined ? undefined : new Set(input.stockIds);
       const selected = repository.list(id).filter((item) => ids === undefined || ids.has(item.id));
       const questions =
@@ -76,7 +77,9 @@ export function createSendStock(deps: SendStockDependencies) {
         instructions: { count: instructions.length, delivery: delivery.value },
         questions: results,
       });
-    });
+    };
+    return withConversationAdmission(runtime, id, "stock", cancelled, sendInConversation);
+  };
 }
 
 async function sendInstructions(

@@ -112,12 +112,13 @@ export type StockSendIpcInput = z.infer<typeof sendStockIpcSchema>;
 export const threadProposalIpcResponseSchema = z.strictObject({ run_state: z.literal("working") });
 export const reserveReleaseSchema = z.preprocess(
   (input) => (input === undefined ? {} : input),
-  z.strictObject({ idle_only: z.boolean().optional() }),
+  z.strictObject({ idle_only: z.boolean().optional(), only_idle: z.boolean().optional() }),
 );
 export const releaseReservationSchema = z.object({ token: z.string().min(1) });
 export const completeReleaseSchema = z.object({ token: z.string().min(1) });
 export const RELEASE_RESERVATION_PREFIX = "runner-release:";
 export const releaseReservationKey = (id: string) => `${RELEASE_RESERVATION_PREFIX}${id}`;
+export const retiredUsageTimerKey = (id: string) => `conversation-usage-retired:${id}`;
 
 export const issuePatchIpcSchema = z.strictObject({
   parent_number: z.number().int().positive().nullable().optional(),

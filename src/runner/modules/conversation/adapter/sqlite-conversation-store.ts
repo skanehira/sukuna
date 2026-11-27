@@ -4,12 +4,14 @@ import {
   ConversationWriteBusy,
   ProjectRunBlocked,
   ProjectRunBusy,
+  releaseCleanupFailure,
 } from "../domain/conversation-store";
 import { createWorktreeActivity } from "../../../../shared/workspace/sqlite-worktree-activity";
 import type { WorktreeActivityReservation } from "../../../../shared/workspace/worktree-activity";
 import { reserveProjectActivity } from "../../../../shared/project/sqlite-project-run-activity";
 import {
   releaseReservationKey,
+  retiredUsageTimerKey,
   RELEASE_RESERVATION_PREFIX,
   type WorkspaceSwitchAttempt,
 } from "../../../../shared/ipc";
@@ -18,7 +20,7 @@ import {
   readWorkspaceSwitchReceipt,
   writeWorkspaceSwitchReceipt,
 } from "../../../../shared/conversation/sqlite-workspace-switch-receipts";
-import { Result } from "neverthrow";
+import { err, ok, Result } from "neverthrow";
 import type Database from "better-sqlite3";
 import { eventSchema, type ConversationEvent, type StoredEvent } from "../../../../shared/events";
 import { nextRunState } from "../domain/run-state";
@@ -30,6 +32,7 @@ import type {
   ConversationWorkspace,
   QueuedInstruction,
   ProjectRunReservation,
+  ReleaseCleanupFailure,
   SendResult,
 } from "../domain/conversation-store";
 const acceptedInputPrefix = "runner-accepted-input:";
@@ -219,15 +222,30 @@ export class SqliteConversationStore implements ConversationStore {
       )
       .run(releaseReservationKey(id), token, milliseconds);
   }
-  clearRelease(id: string, token: string): Result<void, { message: string }> {
-    return Result.fromThrowable(
-      () => {
-        this.sqlite
-          .prepare("DELETE FROM settings WHERE key=? AND json_extract(value, '$.token')=?")
-          .run(releaseReservationKey(id), token);
-      },
-      () => ({ message: "実行の予約を解除できませんでした。" }),
-    )();
+  clearReleaseInTransaction(id: string, token: string): Result<void, ReleaseCleanupFailure> {
+    if (!this.sqlite.inTransaction) return err(releaseCleanupFailure);
+    const key = releaseReservationKey(id);
+    try {
+      this.sqlite
+        .prepare("DELETE FROM settings WHERE key=? AND json_extract(value, '$.token')=?")
+        .run(key, token);
+      return ok(undefined);
+    } catch {
+      if (!this.sqlite.inTransaction) return err(releaseCleanupFailure);
+      const active = this.sqlite
+        .prepare(`SELECT 1 FROM settings
+          WHERE key=? AND json_extract(value, '$.token')=?
+            AND json_extract(value, '$.expiresAt') > unixepoch('subsec') * 1000`)
+        .get(key, token);
+      return err({ ...releaseCleanupFailure, unusable: !active });
+    }
+  }
+  isUsageTimerRetired(id: string, lastSeq: number): boolean {
+    return Boolean(
+      this.sqlite
+        .prepare("SELECT 1 FROM settings WHERE key=? AND json_extract(value, '$')=?")
+        .get(retiredUsageTimerKey(id), lastSeq),
+    );
   }
   clearReleaseReservations(): void {
     this.sqlite

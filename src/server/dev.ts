@@ -16,6 +16,7 @@ import {
   getProgressDependencies,
   getConversationDependencies,
   getPtySessions,
+  getLifecycleDependencies,
 } from "./runtime";
 import { createProjectDependencies } from "./modules/workspace/adapter/project-dependencies";
 import { createWorktreeDependencies } from "./modules/workspace/adapter/worktree-dependencies";
@@ -38,6 +39,7 @@ export default createApp({
   pr: getPrDependencies(),
   progress: getProgressDependencies(),
   conversations: getConversationDependencies(),
+  lifecycle: getLifecycleDependencies(),
   stock: createStockDependencies({
     database: getDatabase,
     workspace,
