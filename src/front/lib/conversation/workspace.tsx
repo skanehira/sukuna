@@ -77,7 +77,6 @@ export function createConversationWorkspace(
     gap: reload,
     message: (message) => {
       inbox?.receive(message);
-      active.forEach((session) => session.receive(message));
       if (message.topic === "app" && message.type === "settings_changed") settingsChanged?.();
       active.forEach((session) => session.receive(message));
       if (message.type !== "resync")

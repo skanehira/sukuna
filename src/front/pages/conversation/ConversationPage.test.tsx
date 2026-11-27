@@ -1296,3 +1296,77 @@ describe("会話の画面", () => {
     ]);
   });
 });
+
+it(
+  "通常の会話購読で届くdelta一件を一度表示し、保存済みイベントへ重複せず置き換える",
+  async () => {
+    const controller = new BufferController({ url: "/conversations/c1" });
+    const navigation = createNavigation({ kind: "conversation", id: "c1" }, () => {});
+    const socket: RealtimeSocket = {
+      onopen: null,
+      onclose: null,
+      onmessage: null,
+      onerror: null,
+      send: () => {},
+      close: () => {},
+    };
+    const settingsChanged = vi.fn<() => void>();
+    const workspace = createConversationWorkspace(
+      fakeApi(),
+      controller,
+      { clientId: "tab", id: () => "id", now: () => 0, schedule: () => () => {} },
+      () => socket,
+      { settingsChanged },
+    );
+    const stop = workspace.start();
+    socket.onopen?.();
+    const mounted = render(
+      <SWRConfig value={{ provider: () => new Map() }}>
+        <App controller={controller} navigation={navigation} loadScreen={workspace.loadScreen} />
+      </SWRConfig>,
+    );
+    const receive = async (message: unknown) => {
+      act(() => socket.onmessage?.({ data: JSON.stringify(message) }));
+      await flush();
+    };
+    const expected = "AI\n独立試験の途中出力";
+    try {
+      await screen.findByRole("region", { name: "会話: 予約 API" });
+      await receive({
+        topic: "conversation:c1",
+        seq: 0,
+        type: "delta",
+        payload: { text: "独立試験の途中出力" },
+      });
+      await waitFor(() => expect(main().state.doc.lines).toBe(2));
+      const interim = main().state.doc.toString();
+      await receive({
+        topic: "conversation:c1",
+        seq: 1,
+        type: "event",
+        payload: {
+          type: "assistant_text",
+          payload: { text: "独立試験の途中出力", parent_tool_use_id: null },
+          conversation_id: "c1",
+          seq: 1,
+          created_at: 1,
+          sdk_uuid: null,
+        },
+      });
+      await waitFor(() => expect(main().state.doc.toString()).toBe(expected));
+      expect([interim, main().state.doc.toString()]).toEqual([expected, expected]);
+      const before = settingsChanged.mock.calls.length;
+      await receive({
+        topic: "app",
+        seq: 0,
+        type: "settings_changed",
+        payload: { keymap: "updated" },
+      });
+      expect(settingsChanged).toHaveBeenCalledTimes(before + 1);
+    } finally {
+      mounted.unmount();
+      stop();
+    }
+  },
+  navigationTestTimeout,
+);
