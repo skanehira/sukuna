@@ -2,26 +2,8 @@ import { err, ok } from "neverthrow";
 import { z } from "zod";
 import { githubIssueLimit, type GithubIssuePort } from "../usecase/github-import";
 import type { GhRunner } from "../../../../shared/gh/gh-runner";
+import { githubRepository as canonicalGithubUrl } from "../../../../shared/gh/repository-url";
 import type { ProjectGit } from "../../workspace/domain/project-settings";
-
-function githubRepository(origin: string): string | null {
-  const scp = /^(?:[^@/:]+@)?github\.com:(.+)$/i.exec(origin);
-  let path = scp?.[1];
-  if (path === undefined) {
-    try {
-      const url = new URL(origin);
-      const host = url.hostname.toLowerCase();
-      if (host !== "github.com" && !(url.protocol === "ssh:" && host === "ssh.github.com"))
-        return null;
-      if (!["https:", "http:", "ssh:", "git:"].includes(url.protocol)) return null;
-      path = url.pathname.slice(1);
-    } catch {
-      return null;
-    }
-  }
-  const name = path.replace(/\/$/, "").replace(/\.git$/i, "");
-  return /^[\w.-]+\/[\w.-]+$/.test(name) ? `github.com/${name}` : null;
-}
 
 export function createProjectGithub(gh: GhRunner) {
   return {
@@ -29,12 +11,9 @@ export function createProjectGithub(gh: GhRunner) {
       origin: string | null,
       cwd: string,
     ): Promise<{ available: boolean; reason?: string }> {
-      const repository = origin === null ? null : githubRepository(origin);
+      const repository = origin === null ? null : canonicalGithubUrl(origin);
       if (repository === null) return { available: false };
-      const result = await gh.run(
-        ["repo", "view", `https://${repository}`, "--json", "nameWithOwner"],
-        { cwd },
-      );
+      const result = await gh.run(["repo", "view", repository, "--json", "nameWithOwner"], { cwd });
       if (result.exitCode === 0) return { available: true };
       return {
         available: false,
@@ -82,14 +61,14 @@ export function createGithubIssuePort(
   return {
     async resolve(cwd) {
       const origin = await git.origin(cwd);
-      const repository = origin === null ? null : githubRepository(origin);
+      const repository = origin === null ? null : canonicalGithubUrl(origin);
       return repository === null
         ? err({
             code: "github_unavailable",
             message:
               "GitHub のリポジトリを確認できませんでした。origin に GitHub のリポジトリを設定してください。",
           })
-        : ok({ cwd, repository });
+        : ok({ cwd, repository: repository.slice("https://".length) });
     },
     async list({ cwd, repository }) {
       const result = await gh.run(

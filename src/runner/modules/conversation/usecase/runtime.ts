@@ -35,7 +35,7 @@ import type {
   ProjectRunReservation,
   SendResult,
 } from "../domain/conversation-store";
-import { classifyStop, type RateLimit } from "../domain/stop-reason";
+import { classifyStop, type RateLimit, type StopIntent } from "../domain/stop-reason";
 import { outputEvents } from "../domain/event-mapping";
 import type { ConversationEvent, StoredEvent, Origin, RunState } from "../../../../shared/events";
 import { AppToolRegistry } from "./app-tool-registry";
@@ -85,15 +85,18 @@ export type SendInput = {
 };
 type DeliveryOptions = {
   includeQueued?: boolean;
+  prefix?: string;
+  checkStage?: "owner" | "accepted";
   interrupt?: boolean;
   omitMissingImages?: boolean;
-  reopensAfterAcceptance?: boolean;
+  reopensAfterAcceptance?: boolean | "stock";
   projectRun?: ProjectRunReservation;
   newConversation?: Conversation;
   recordOpeningFailure?: boolean;
   afterAcceptance?: boolean;
 };
 export type InputAcceptance = {
+  workspace?: { path: string; id: string };
   events: ConversationEvent[];
   before?: () => void;
   check?: () => OperationError | null;
@@ -123,7 +126,7 @@ type Execution = {
   consuming: Promise<void>;
   ended: Promise<void>;
   end: () => void;
-  intent: "user" | "interrupt" | null;
+  intent: StopIntent | null;
   rate: RateLimit | null;
   assistantError: string | null;
   startSeq: number;
@@ -375,9 +378,18 @@ export class ConversationRuntime {
           message:
             "画像が見つからないため、指示を届けられませんでした。画像を添付し直して、もう一度送ってください。",
         });
-      return ok({ includeQueued, queued, inputs, text, images, missingImages });
+      const message = [options.prefix, text].filter(Boolean).join("\n\n");
+      return ok({ includeQueued, queued, inputs, text: message, images, missingImages });
     };
-    const preflight = acceptance?.check?.();
+    const check = () => {
+      const refused = acceptance?.check?.();
+      if (refused) return refused;
+      const conversation = options.checkStage && this.store.get(id);
+      return conversation
+        ? this.runOptions.checkStart(conversation, options.checkStage === "owner")
+        : null;
+    };
+    const preflight = check();
     if (preflight) return err(preflight);
     const initial = prepare();
     if (initial.isErr()) return err(initial.error);
@@ -411,222 +423,230 @@ export class ConversationRuntime {
         await finishInterrupted(message);
         throw error;
       }
-      const refusal = acceptance?.check?.();
+      const refusal = check();
       if (refusal) return reject(refusal);
     }
+    const withDeliveryWorkspace = <T>(operation: (worktreeId: string | null) => T) => {
+      const workspace = acceptance?.workspace;
+      if (!workspace) return this.store.withWorkspace(id, operation);
+      return this.store.withWorktreeReservation((reservation) => {
+        reservation.acquire([workspace.id]);
+        return operation(this.store.get(id)?.worktreeId ?? null);
+      });
+    };
     const attemptDelivery = () =>
-      this.store.withWorkspace(
-        id,
-        (worktreeId): Result<SendResult, OperationError> | Execution | null => {
-          let refusal = acceptance?.check?.() ?? null;
-          if (refusal) return err(refusal);
-          if (this.closing) return err(conflict());
-          const c = this.store.get(id) ?? newConversation;
-          if (!c) throw new Error("会話がありません。");
-          const opened = this.executions.get(id);
-          if (
-            opened &&
-            (opened.streamEnded || opened.cwd !== c.cwd || opened.worktreeId !== worktreeId)
-          )
-            return opened;
-          const prepared = prepare();
-          if (prepared.isErr()) return err(prepared.error);
-          const { includeQueued, queued, inputs, text, images, missingImages } = prepared.value;
-          const hasStructuredComments = inputs.some(
-            (entry) => entry.timelineComments !== undefined,
-          );
-          const legacyTexts = inputs
-            .filter((entry) => entry.timelineComments === undefined && entry.text.length > 0)
-            .map((entry) => entry.text);
-          const event: ConversationEvent = {
-            type: "user_message",
-            payload: {
-              text,
-              images: images.map(({ path, mediaType }) => ({ path, media_type: mediaType })),
-              origin: input.origin,
-              ...(hasStructuredComments
-                ? {
-                    timeline_comments: inputs.flatMap((entry) => entry.timelineComments ?? []),
-                    ...(legacyTexts.length ? { timeline_legacy_texts: legacyTexts } : {}),
-                  }
-                : {}),
-              client_ids: [
-                ...queued.flatMap((q) => (q.clientId ? [q.clientId] : [])),
-                ...(input.clientId ? [input.clientId] : []),
-              ],
-              queued_ids: queued.map((q) => q.id),
-              client_receipts: [
-                ...queued.flatMap((q) =>
-                  q.clientId
-                    ? [
-                        {
-                          client_id: q.clientId,
-                          result: "queued" as const,
-                          queued_id: q.id,
-                          received_at: q.createdAt,
-                        },
-                      ]
-                    : [],
-                ),
-                ...(input.clientId
+      withDeliveryWorkspace((worktreeId): Result<SendResult, OperationError> | Execution | null => {
+        let refusal = check();
+        if (refusal) return err(refusal);
+        if (this.closing) return err(conflict());
+        const c = this.store.get(id) ?? newConversation;
+        if (!c) throw new Error("会話がありません。");
+        const opened = this.executions.get(id);
+        if (
+          opened &&
+          (opened.streamEnded ||
+            opened.cwd !== (acceptance?.workspace?.path ?? c.cwd) ||
+            opened.worktreeId !== (acceptance?.workspace?.id ?? worktreeId))
+        )
+          return opened;
+        const prepared = prepare();
+        if (prepared.isErr()) return err(prepared.error);
+        const { includeQueued, queued, inputs, text, images, missingImages } = prepared.value;
+        const hasStructuredComments = inputs.some((entry) => entry.timelineComments !== undefined);
+        const legacyTexts = inputs
+          .filter((entry) => entry.timelineComments === undefined && entry.text.length > 0)
+          .map((entry) => entry.text);
+        const event: ConversationEvent = {
+          type: "user_message",
+          payload: {
+            text,
+            images: images.map(({ path, mediaType }) => ({ path, media_type: mediaType })),
+            origin: input.origin,
+            ...(hasStructuredComments
+              ? {
+                  timeline_comments: inputs.flatMap((entry) => entry.timelineComments ?? []),
+                  ...(legacyTexts.length ? { timeline_legacy_texts: legacyTexts } : {}),
+                }
+              : {}),
+            client_ids: [
+              ...queued.flatMap((q) => (q.clientId ? [q.clientId] : [])),
+              ...(input.clientId ? [input.clientId] : []),
+            ],
+            queued_ids: queued.map((q) => q.id),
+            client_receipts: [
+              ...queued.flatMap((q) =>
+                q.clientId
                   ? [
                       {
-                        client_id: input.clientId,
-                        result: "delivered" as const,
-                        received_at: this.options.clock.now(),
+                        client_id: q.clientId,
+                        result: "queued" as const,
+                        queued_id: q.id,
+                        received_at: q.createdAt,
                       },
                     ]
-                  : []),
-              ],
-            },
-          };
-          const deferred: AcceptedInstruction | undefined = options.afterAcceptance
-            ? {
-                id: this.options.id(),
-                conversationId: id,
-                text,
-                images: input.images,
-                clientId: input.clientId ?? null,
-                createdAt: this.options.clock.now(),
-                ...(input.timelineComments === undefined
-                  ? {}
-                  : { timelineComments: input.timelineComments }),
-              }
-            : undefined;
-          let execution: Execution | undefined;
-          let openingError: { cause: unknown } | undefined;
-          let resumeClosedAt: number | null = null;
-          let records: StoredEvent[];
-          try {
-            records = this.record(
-              id,
-              [...(acceptance?.events ?? []), ...(deferred ? [] : [event])],
-              () => {
-                if (newConversation) this.store.create(newConversation);
-                acceptance?.before?.();
-                if (options.reopensAfterAcceptance)
-                  resumeClosedAt = this.store.get(id)?.closedAt ?? null;
-                try {
-                  execution = newConversation
-                    ? this.store.withWorkspace(id, (actualId) => this.execution(c, actualId))
-                    : this.execution(c, worktreeId);
-                } catch (error) {
-                  openingError = { cause: error };
-                  throw error;
-                }
-                if (deferred) this.store.stageAccepted(deferred);
-                else if (includeQueued)
-                  this.store.dequeue(
-                    id,
-                    (this.store.get(id)?.lastSeq ?? 0) + (acceptance?.events.length ?? 0) + 1,
-                  );
-              },
-              () =>
-                this.store.withWorkspace(id, (actualWorktreeId) => {
-                  const current = this.store.get(id);
-                  refusal = acceptance?.check?.() ?? null;
-                  if (refusal !== null || this.closing) return false;
-                  if (newConversation) {
-                    if (current) refusal = conflict();
-                    return current === null;
-                  }
-                  return (
-                    current?.cwd === c.cwd &&
-                    actualWorktreeId === worktreeId &&
-                    (!includeQueued ||
-                      JSON.stringify(this.store.queue(id)) === JSON.stringify(queued))
-                  );
-                }),
-              () => {
-                const rejected = acceptance?.checkBeforeCommit?.();
-                if (rejected) throw new InputRefused(rejected);
-              },
-            );
-          } catch (error) {
-            if (!opened && execution) {
-              this.executions.delete(id);
-              try {
-                execution.session.close();
-              } catch (closeError) {
-                this.log(id, "未受理の実行を閉じられませんでした。", closeError);
-              }
-            }
-            if (error instanceof InputRefused) return err(error.refusal);
-            if (openingError && !newConversation && options.recordOpeningFailure !== false)
-              this.record(id, [
-                {
-                  type: "stopped",
-                  payload: {
-                    reason: "error",
-                    detail:
-                      openingError.cause instanceof Error
-                        ? openingError.cause.message
-                        : "AI の実行に失敗しました。",
-                  },
-                },
-              ]);
-            throw error;
-          }
-          if (refusal) return err(refusal);
-          if (!execution) return null;
-          if (!opened) execution.consuming = this.consume(id, execution);
-          const deliver = (activeExecution: Execution, record: StoredEvent) => {
-            this.timers.cancel(id);
-            activeExecution.rate = null;
-            activeExecution.assistantError = null;
-            activeExecution.intent = null;
-            delete activeExecution.refusedInterrupt;
-            activeExecution.startSeq = record.seq;
-            activeExecution.turnActive = true;
-            activeExecution.acceptedInputId = deferred?.id;
-            activeExecution.inputOrigin = input.origin;
-            activeExecution.reopening =
-              resumeClosedAt === null
-                ? null
-                : {
-                    closedAt: resumeClosedAt,
-                    until:
-                      record.createdAt +
-                      (input.origin === "stock"
-                        ? RUNNER_IPC_TIMEOUT_MS + STOCK_SEND_SETTLEMENT_TIMEOUT_MS
-                        : reopenWaitMs),
-                  };
-            activeExecution.ended = new Promise((resolve) => {
-              activeExecution.end = resolve;
-            });
-            activeExecution.session.send({
+                  : [],
+              ),
+              ...(input.clientId
+                ? [
+                    {
+                      client_id: input.clientId,
+                      result: "delivered" as const,
+                      received_at: this.options.clock.now(),
+                    },
+                  ]
+                : []),
+            ],
+          },
+        };
+        const deferred: AcceptedInstruction | undefined = options.afterAcceptance
+          ? {
+              id: this.options.id(),
+              conversationId: id,
               text,
-              images: images.map(({ data, mediaType }) => ({ data, mediaType })),
-            });
-            if (missingImages)
-              this.options.notice(
-                id,
-                `画像 ${missingImages} 件が見つからないため、外して届けました`,
-                "info",
-              );
-          };
-          if (deferred) {
-            this.deliverAccepted(
-              id,
-              execution,
-              deferred.id,
-              Boolean(opened && options.interrupt),
-              event,
-              deliver,
-            );
-            return ok({ result: "queued", queuedId: deferred.id });
+              images: input.images,
+              clientId: input.clientId ?? null,
+              createdAt: this.options.clock.now(),
+              ...(input.timelineComments === undefined
+                ? {}
+                : { timelineComments: input.timelineComments }),
+            }
+          : undefined;
+        let execution: Execution | undefined;
+        let openingError: { cause: unknown } | undefined;
+        let resumeClosedAt: number | null = null;
+        let records: StoredEvent[];
+        try {
+          records = this.record(
+            id,
+            [...(acceptance?.events ?? []), ...(deferred ? [] : [event])],
+            () => {
+              if (newConversation) this.store.create(newConversation);
+              acceptance?.before?.();
+              if (options.reopensAfterAcceptance)
+                resumeClosedAt = this.store.get(id)?.closedAt ?? null;
+              try {
+                execution =
+                  newConversation || acceptance?.workspace
+                    ? this.store.withWorkspace(id, (actualId) =>
+                        this.execution(this.store.get(id) ?? c, actualId),
+                      )
+                    : this.execution(c, worktreeId);
+              } catch (error) {
+                openingError = { cause: error };
+                throw error;
+              }
+              if (deferred) this.store.stageAccepted(deferred);
+              else if (includeQueued)
+                this.store.dequeue(
+                  id,
+                  (this.store.get(id)?.lastSeq ?? 0) + (acceptance?.events.length ?? 0) + 1,
+                );
+            },
+            () =>
+              withDeliveryWorkspace((actualWorktreeId) => {
+                const current = this.store.get(id);
+                refusal = check();
+                if (refusal !== null || this.closing) return false;
+                if (newConversation) {
+                  if (current) refusal = conflict();
+                  return current === null;
+                }
+                return (
+                  current?.cwd === c.cwd &&
+                  actualWorktreeId === worktreeId &&
+                  (!includeQueued ||
+                    JSON.stringify(this.store.queue(id)) === JSON.stringify(queued))
+                );
+              }),
+            () => {
+              const rejected = acceptance?.checkBeforeCommit?.();
+              if (rejected) throw new InputRefused(rejected);
+            },
+          );
+        } catch (error) {
+          if (!opened && execution) {
+            this.executions.delete(id);
+            try {
+              execution.session.close();
+            } catch (closeError) {
+              this.log(id, "未受理の実行を閉じられませんでした。", closeError);
+            }
           }
-          if (queued.length)
-            this.partsChanged(
+          if (error instanceof InputRefused) return err(error.refusal);
+          if (openingError && !newConversation && options.recordOpeningFailure !== false)
+            this.record(id, [
+              {
+                type: "stopped",
+                payload: {
+                  reason: "error",
+                  detail:
+                    openingError.cause instanceof Error
+                      ? openingError.cause.message
+                      : "AI の実行に失敗しました。",
+                },
+              },
+            ]);
+          throw error;
+        }
+        if (refusal) return err(refusal);
+        if (!execution) return null;
+        if (!opened) execution.consuming = this.consume(id, execution);
+        const deliver = (activeExecution: Execution, record: StoredEvent) => {
+          this.timers.cancel(id);
+          activeExecution.rate = null;
+          activeExecution.assistantError = null;
+          activeExecution.intent = null;
+          delete activeExecution.refusedInterrupt;
+          activeExecution.startSeq = record.seq;
+          activeExecution.turnActive = true;
+          activeExecution.acceptedInputId = deferred?.id;
+          activeExecution.inputOrigin = input.origin;
+          activeExecution.reopening =
+            resumeClosedAt === null
+              ? null
+              : {
+                  closedAt: resumeClosedAt,
+                  until:
+                    record.createdAt +
+                    (options.reopensAfterAcceptance === "stock"
+                      ? RUNNER_IPC_TIMEOUT_MS + STOCK_SEND_SETTLEMENT_TIMEOUT_MS
+                      : reopenWaitMs),
+                };
+          activeExecution.ended = new Promise((resolve) => {
+            activeExecution.end = resolve;
+          });
+          activeExecution.session.send({
+            text,
+            images: images.map(({ data, mediaType }) => ({ data, mediaType })),
+          });
+          if (missingImages)
+            this.options.notice(
               id,
-              queued.some((entry) => entry.stockItemId) ? ["queue", "stock"] : ["queue"],
+              `画像 ${missingImages} 件が見つからないため、外して届けました`,
+              "info",
             );
-          const record = records.at(-1);
-          if (!record) throw new Error("指示を記録できません。");
-          deliver(execution, record);
-          return ok({ result: "delivered", seq: record.seq });
-        },
-      );
+        };
+        if (deferred) {
+          this.deliverAccepted(
+            id,
+            execution,
+            deferred.id,
+            Boolean(opened && options.interrupt),
+            event,
+            deliver,
+          );
+          return ok({ result: "queued", queuedId: deferred.id });
+        }
+        if (queued.length)
+          this.partsChanged(
+            id,
+            queued.some((entry) => entry.stockItemId) ? ["queue", "stock"] : ["queue"],
+          );
+        const record = records.at(-1);
+        if (!record) throw new Error("指示を記録できません。");
+        deliver(execution, record);
+        return ok({ result: "delivered", seq: record.seq });
+      });
     for (;;) {
       let result: ReturnType<typeof attemptDelivery>;
       try {
@@ -647,7 +667,7 @@ export class ConversationRuntime {
       }
       await result.consuming;
       if (this.executions.get(id) === result) {
-        const refusal = acceptance?.check?.();
+        const refusal = check();
         if (refusal) return reject(refusal);
         if (result === active && result.startSeq === interruptedStart)
           retiredThroughSeq = this.store.get(id)?.lastSeq;
@@ -824,7 +844,7 @@ export class ConversationRuntime {
     this.executions.delete(id);
     this.record(id, [{ type: "stopped", payload: { reason: "error", detail: message } }]);
   }
-  prepareStop(id: string) {
+  prepareStop(id: string, intent: "user" | "dependency_withdrawn" = "user") {
     const execution = this.executions.get(id);
     const accepted = this.acceptedDeliveries.get(id)?.instructionId;
     const seq = execution?.startSeq;
@@ -844,6 +864,8 @@ export class ConversationRuntime {
           if (current)
             this.failExecution(id, current, "AI の番を停止できなかったため実行を閉じました。");
         },
+        undefined,
+        intent,
       );
   }
   private async consume(id: string, execution: Execution): Promise<void> {
@@ -984,7 +1006,7 @@ export class ConversationRuntime {
               id,
               { text: "", images: [], origin: "queued" },
               undefined,
-              { omitMissingImages: true },
+              { omitMissingImages: true, checkStage: "accepted" },
             );
             if (result.isErr()) {
               this.log(id, "預かった指示を届けられませんでした。", result.error.message);
@@ -1064,7 +1086,7 @@ export class ConversationRuntime {
       execution.permission = { request, resolve };
     });
   }
-  async interrupt(id: string, intent: "user" | "interrupt"): Promise<void> {
+  async interrupt(id: string, intent: StopIntent): Promise<void> {
     const execution = this.executions.get(id);
     if (!execution) return;
     execution.intent = intent;

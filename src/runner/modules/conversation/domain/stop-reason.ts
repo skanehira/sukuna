@@ -1,13 +1,16 @@
 import type { AgentOutput } from "./agent-port";
 import type { RunState, ConversationEvent } from "../../../../shared/events";
 export type RateLimit = Extract<AgentOutput, { kind: "rate_limit" }>;
+export type StopIntent = "user" | "interrupt" | "dependency_withdrawn";
 export type StoppedPayload = Extract<ConversationEvent, { type: "stopped" }>["payload"];
 export function classifyStop(
   end: { subtype: string; terminalReason: string | null },
   rate: RateLimit | null,
   assistantError: string | null,
-  intent: "user" | "interrupt" | null,
+  intent: StopIntent | null,
 ): { state: RunState; stopped: StoppedPayload | null } {
+  if (intent === "dependency_withdrawn")
+    return { state: "stopped", stopped: { reason: "user", flow_trigger: intent } };
   if (intent === "user") return { state: "stopped", stopped: { reason: "user" } };
   if (intent === "interrupt") return { state: "working", stopped: null };
   if (

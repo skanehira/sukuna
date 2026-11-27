@@ -365,11 +365,19 @@ describe("設計のAPIとランナー", () => {
       await f.runner.design.drain();
       expect(f.state()).toBe("design");
       const url = `https://github.com/example/design/pull/${pr}`;
+      const originLookup = {
+        args: ["repo", "view", "--json", "nameWithOwner,url", "--", f.remote],
+        cwd: f.repository,
+      };
       expect(f.ghCalls()).toEqual([
+        originLookup,
+        originLookup,
         {
           args: [
             "pr",
             "create",
+            "--repo",
+            "github.com/example/design",
             "--base",
             "main",
             "--head",
@@ -381,6 +389,16 @@ describe("設計のAPIとランナー", () => {
           ],
           cwd: f.repository,
           stdin: "## 修正方針\n\n在庫を先に確保する\n\n## AI が確かめたい点\n\n- 期限は30分?",
+        },
+        {
+          args: [
+            "pr",
+            "view",
+            url,
+            "--json",
+            "url,state,baseRefName,headRefName,headRefOid,isCrossRepository,headRepository,mergeCommit",
+          ],
+          cwd: f.repository,
         },
       ]);
       expect(git(f.remote, "rev-parse", `refs/heads/${tree.branch}`)).toBe(tree.head);

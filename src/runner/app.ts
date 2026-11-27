@@ -1,6 +1,11 @@
 import { createStockSender } from "./modules/stock/adapter/dependencies";
 import type { GitRunner } from "./modules/workspace/adapter/git-cli";
 import { createDesignFlow } from "./modules/flow/adapter/design-dependencies";
+import { createStageRepository } from "./modules/flow/adapter/stage-repository";
+import { createFlowNotifyHandler } from "./modules/flow/adapter/notify-handler";
+import { createStageFlow } from "./modules/flow/adapter/stage-flow";
+import { createFlowGate } from "./modules/flow/usecase/flow-gate";
+import type { IssueNotice } from "./modules/flow/domain/ports";
 import { createDesignIpc } from "./modules/flow/adapter/design-ipc";
 import { CommandCache } from "./modules/conversation/adapter/command-cache";
 import { issueInstructions } from "./modules/issue/domain/issue-instructions";
@@ -29,7 +34,7 @@ import { reserveRunnerSocket } from "./modules/conversation/adapter/ipc-socket";
 import type { Clock } from "./modules/conversation/domain/clock";
 import { createIssueOperations } from "./modules/flow/adapter/issue-ops-dependencies";
 import { createIssueDataUnitOfWork } from "../server/modules/issue/adapter/issue-repository";
-import { registerIssueTools, unavailableIssueReports } from "./modules/issue/adapter/app-tools";
+import { registerIssueTools } from "./modules/issue/adapter/app-tools";
 import type { IssueReportsPort } from "./modules/issue/domain/ports";
 import { createIssueOpsHandler } from "./modules/flow/adapter/issue-ops-handler";
 import { createDecisionFileStore } from "../shared/recap/decision-file-store";
@@ -72,7 +77,22 @@ export async function startRunnerApp(options: {
             agentScriptSchema.parse(JSON.parse(readFileSync(env.agentScript ?? "", "utf8"))),
           )
         : new ClaudeAgentSdk(undefined, children.spawn));
+    const flowRepo = createStageRepository(database, () => clock.now());
+    const allows = createFlowGate({
+      globallyPaused: () => flowRepo.globallyPaused(),
+      settings: (id) => {
+        const project = flowRepo.project(id);
+        return project?.removedAt === null ? project : undefined;
+      },
+    });
     const runtime = new ConversationRuntime({
+      canResume: (conversation) =>
+        Promise.resolve(
+          (conversation.kind === "triage" ||
+            conversation.kind === "design" ||
+            conversation.kind === "impl") &&
+            allows(conversation.projectId, conversation.kind),
+        ),
       store: new SqliteConversationStore(database.sqlite),
       agent,
       images: createImageFiles(env.home),
@@ -175,13 +195,21 @@ export async function startRunnerApp(options: {
         });
     });
     const gh = createGhRunner(env.ghScript);
+    let scheduleFlow: ((id: string) => void) | undefined;
+    const notices = {
+      publish: (notice: IssueNotice) => {
+        changes.publish(notice);
+        scheduleFlow?.(notice.project_id);
+      },
+    };
     const design = createDesignFlow(
       database,
       runtime,
       gh,
       {
         clock: { now: () => clock.now(), id: ulid },
-        notices: { publish: (notice) => changes.publish(notice) },
+        notices,
+        allowPrInstruction: (projectId) => allows(projectId, "design"),
         alert: (issue_id, message) =>
           changes.publish({ kind: "notice", level: "error", issue_id, message }),
         log: (error) =>
@@ -194,6 +222,8 @@ export async function startRunnerApp(options: {
       },
       options.designGit,
     );
+    const flow = createStageFlow(database, flowRepo, runtime, design, allows, notices, log);
+    scheduleFlow = flow.schedule;
     const checkStop = async (stop: ReturnType<typeof runtime.prepareStop>) => {
       const result = await stop();
       if (result.isErr() && result.error.code !== "conflict") throw new Error(result.error.message);
@@ -201,11 +231,12 @@ export async function startRunnerApp(options: {
     const issueOps = createIssueOperations(
       database,
       { now: () => clock.now(), id: ulid },
-      { publish: (notice) => changes.publish(notice) },
+      notices,
       {
-        stop: (id) => checkStop(() => runtime.stop(id)),
-        prepareStop: (id) => {
-          const stop = runtime.prepareStop(id);
+        stop: (id, cause) =>
+          checkStop(() => runtime.stop(id, undefined, undefined, undefined, cause)),
+        prepareStop: (id, cause) => {
+          const stop = runtime.prepareStop(id, cause);
           return () => checkStop(stop);
         },
       },
@@ -214,7 +245,7 @@ export async function startRunnerApp(options: {
     registerIssueTools(runtime.tools, {
       data: createIssueDataUnitOfWork(database.db),
       flow: issueOps,
-      reports: options.issueReports ?? unavailableIssueReports,
+      reports: options.issueReports ?? flow.reports,
     });
     runtime.tools.register(recapRead(recapRepository, files));
     recover(runtime);
@@ -237,10 +268,12 @@ export async function startRunnerApp(options: {
           issueOps,
           (id, stop) => design.finishWithdrawal(id, stop),
           () => clock.now(),
-        ).route(
-          "/",
-          createDesignIpc(design, () => clock.now()),
-        ),
+        )
+          .route(
+            "/",
+            createDesignIpc(design, () => clock.now()),
+          )
+          .route("/", createFlowNotifyHandler(flow.notify)),
         rebuildRecap: (id) => recap.rebuild(id),
         allowMerge: createRunnerAllowMerge(database.db, runtime, {
           publish: (notice) => changes.publish(notice),
@@ -249,6 +282,7 @@ export async function startRunnerApp(options: {
     );
     socket.activate(routes, changes);
     recap.recover();
+    flow.recover();
     return {
       runtime,
       changes,
@@ -256,6 +290,7 @@ export async function startRunnerApp(options: {
       design,
       shutdown: async () => {
         socket.stopAccepting();
+        await flow.stop();
         await design.drain();
         await Promise.all([runtime.shutdown(), recap.stop()]);
         changes.close();

@@ -21,9 +21,9 @@ export function createDependencyWithdrawn(
           const now = deps.clock.now();
           const result = moveStateWithin(repository, { issueId, trigger: "withdraw" }, now);
           const notices: IssueNotice[] = [];
-          const conversations = new Set<string>();
+          const conversations = new Map<string, "dependency_withdrawn" | undefined>();
           if (result.kind !== "moved") return { result, notices, conversations };
-          for (const id of ownConversations) conversations.add(id);
+          for (const id of ownConversations) conversations.set(id, undefined);
           notices.push(result.notice);
           for (const dependentId of repository.dependentIssueIds(issueId)) {
             const dependent = repository.getIssue(dependentId);
@@ -38,7 +38,7 @@ export function createDependencyWithdrawn(
               if (stopped.kind === "moved") notices.push(stopped.notice);
             }
             for (const id of repository.workingStageConversationIds(dependentId))
-              conversations.add(id);
+              conversations.set(id, "dependency_withdrawn");
           }
           if (callerCancelled()) throw new WithdrawalExpired();
           return { result, notices, conversations };
@@ -52,9 +52,9 @@ export function createDependencyWithdrawn(
       }
       if (committed.result.kind !== "moved") return committed.result;
       const stops = [...committed.conversations].map(
-        (id) =>
-          (finish ? deps.conversations.prepareStop?.(id) : undefined) ??
-          (() => deps.conversations.stop(id)),
+        ([id, cause]) =>
+          (finish ? deps.conversations.prepareStop?.(id, cause) : undefined) ??
+          (() => deps.conversations.stop(id, cause)),
       );
       for (const notice of committed.notices) deps.notices.publish(notice);
       const stop = async () => {

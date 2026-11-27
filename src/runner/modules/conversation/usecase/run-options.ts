@@ -2,8 +2,39 @@ import type { AppToolRegistry } from "./app-tool-registry";
 import { ok, type Result } from "neverthrow";
 import type { Conversation, ConversationStore } from "../domain/conversation-store";
 import type { OpenParams } from "../domain/agent-port";
-import type { DeliveryError, SendInput } from "./runtime";
+import type { DeliveryError, InputAcceptance, OperationError, SendInput } from "./runtime";
+export type PreparedDelivery = {
+  input: SendInput;
+  prefix?: string;
+  workspace?: { path: string; id: string };
+  release?: () => void;
+  before?: () => void;
+  committed?: () => void;
+  rejected?: () => void;
+};
+type DeliveryPreparer = (
+  conversation: Conversation,
+  input: SendInput,
+  by: "message" | "resume",
+  cancelled?: () => boolean,
+) => Promise<Result<PreparedDelivery, DeliveryError>>;
+
+export function prepareAcceptance(prepared: PreparedDelivery, acceptance?: InputAcceptance) {
+  if (!prepared.before) return acceptance;
+  return {
+    ...acceptance,
+    events: acceptance?.events ?? [],
+    workspace: prepared.workspace,
+    before: () => {
+      acceptance?.before?.();
+      prepared.before?.();
+    },
+  };
+}
+
 export class RunOptions {
+  private startGuard?: (conversation: Conversation, checkOwner: boolean) => OperationError | null;
+  private preparer?: DeliveryPreparer;
   private providers: ((conversation: Conversation) => string)[] = [];
   private directories: ((conversation: Conversation) => string[])[] = [];
   private guards: ((
@@ -29,6 +60,28 @@ export class RunOptions {
     ) => Result<void, DeliveryError> | Promise<Result<void, DeliveryError>>,
   ): void {
     this.guards.push(guard);
+  }
+  registerDeliveryPreparer(preparer: DeliveryPreparer): void {
+    this.preparer = preparer;
+  }
+  registerStartGuard(
+    guard: (conversation: Conversation, checkOwner: boolean) => OperationError | null,
+  ): void {
+    this.startGuard = guard;
+  }
+  checkStart(conversation: Conversation, checkOwner: boolean) {
+    return this.startGuard?.(conversation, checkOwner) ?? null;
+  }
+  prepareDelivery(
+    conversation: Conversation,
+    input: SendInput,
+    by: "message" | "resume",
+    cancelled?: () => boolean,
+  ) {
+    return (
+      this.preparer?.(conversation, input, by, cancelled) ??
+      Promise.resolve(ok<PreparedDelivery>({ input }))
+    );
   }
   build(
     conversation: Conversation,

@@ -1,4 +1,6 @@
 import { afterEach, beforeEach } from "vite-plus/test";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import {
   createTempHome,
@@ -8,26 +10,35 @@ import {
 } from "../../../shared/db/test-helpers";
 import { projects, issues, issueEvents, issueDependencies } from "../../../shared/db/schema";
 import { readEnvironment } from "../../../shared/env";
+import type { GhScript } from "../../../shared/gh-script";
 import type { AgentScript } from "../../../shared/agent-script";
 import type { RunnerNotice } from "../../../shared/ipc";
 import { WsHub } from "../../ws-hub";
 import type { IssueView } from "../../../shared/issue/schema";
+import { createGitCli } from "../../../runner/modules/workspace/adapter/git-cli";
 import { startRunnerApp } from "../../../runner/app";
 import { ScriptedAgent } from "../../../runner/modules/conversation/adapter/scripted-agent";
 import { RunnerLink } from "../../runner-link";
 import { createApp } from "../../app";
+import { supplyDesignPrFields } from "../flow/design-test-support";
 import { incomingWith, createTailscaleFake } from "../identity/test-support";
 import { createIssueDependencies } from "./adapter/dependencies";
 import { createLogger } from "../../../shared/log";
 
 export function issueFixture(
   script: AgentScript = { rules: [], fallback: [{ hold: true }] },
-  options: Pick<Parameters<typeof startRunnerApp>[0], "issueReports"> = {},
+  options: Pick<Parameters<typeof startRunnerApp>[0], "issueReports"> & {
+    autoFlow?: boolean;
+    ghScript?: GhScript;
+    ghRepository?: string;
+  } = {},
 ) {
   let home: string;
   let opened: OpenedDatabase;
   let runnerDatabase: OpenedDatabase;
   let runner: Awaited<ReturnType<typeof startRunnerApp>>;
+  let agent: ScriptedAgent;
+  const timers = new Map<() => unknown, number>();
   let link: RunnerLink;
   let app: ReturnType<typeof createApp>;
   let time = 1000000;
@@ -35,32 +46,74 @@ export function issueFixture(
   const notices: RunnerNotice[] = [];
   const logs: string[] = [];
   const noticeListeners = new Set<() => void>();
+  const git = createGitCli();
+  let afterGit: ((args: string[]) => void | Promise<void>) | undefined;
+  const start = async () => {
+    runnerDatabase = openMigratedDatabase(home);
+    agent = new ScriptedAgent(script);
+    runner = await startRunnerApp({
+      ...options,
+      database: runnerDatabase,
+      environment: readEnvironment(
+        "runner",
+        { SUKUNA_HOME: home, ...(options.ghScript ? { SUKUNA_GH: join(home, "gh.json") } : {}) },
+        home,
+        () => true,
+      )._unsafeUnwrap(),
+      agent,
+      designGit: {
+        run: async (args, options) => {
+          const result = await git.run(args, options);
+          await afterGit?.(args);
+          return result;
+        },
+      },
+      clock: {
+        now: () => time,
+        setTimeout: (callback, delay) => {
+          timers.set(callback, time + delay);
+          return () => {
+            timers.delete(callback);
+          };
+        },
+      },
+      log: () => {},
+    });
+    if (options.ghRepository)
+      supplyDesignPrFields(
+        runner.gh,
+        options.ghRepository,
+        () =>
+          opened.db
+            .select()
+            .from(issueEvents)
+            .orderBy(issueEvents.seq)
+            .all()
+            .findLast(({ type }) => type === "design_submitted")?.payload,
+      );
+  };
   beforeEach(async () => {
     home = createTempHome();
     opened = openMigratedDatabase(home);
+    if (options.ghScript) writeFileSync(join(home, "gh.json"), JSON.stringify(options.ghScript));
     time = 1000000;
+    timers.clear();
+    afterGit = undefined;
     notices.length = 0;
     logs.length = 0;
     noticeListeners.clear();
     hub = new WsHub(opened.sqlite);
     opened.db
       .insert(projects)
-      .values({ id: "p", name: "確認", path: home, defaultBranch: "main" })
+      .values({
+        id: "p",
+        name: "確認",
+        path: home,
+        defaultBranch: "main",
+        flowPaused: !options.autoFlow,
+      })
       .run();
-    runnerDatabase = openMigratedDatabase(home);
-    runner = await startRunnerApp({
-      ...options,
-      database: runnerDatabase,
-      environment: readEnvironment(
-        "runner",
-        { SUKUNA_HOME: home },
-        home,
-        () => true,
-      )._unsafeUnwrap(),
-      agent: new ScriptedAgent(script),
-      clock: { now: () => time, setTimeout: () => () => {} },
-      log: () => {},
-    });
+    await start();
     await new Promise<void>((resolve) => {
       link = new RunnerLink({
         socket: `${home}/runner.sock`,
@@ -125,6 +178,26 @@ export function issueFixture(
     },
     get opened() {
       return opened;
+    },
+    interceptGit(callback: typeof afterGit) {
+      afterGit = callback;
+    },
+    get agent() {
+      return agent;
+    },
+    async restart() {
+      await runner.shutdown();
+      runnerDatabase.close();
+      await start();
+    },
+    async advanceTo(value: number) {
+      time = value;
+      const scheduled = Array.from(timers.entries());
+      for (const [callback, due] of scheduled) {
+        if (due > time) continue;
+        timers.delete(callback);
+        await callback();
+      }
     },
     get runner() {
       return runner;

@@ -4,13 +4,17 @@ import {
   designEvents,
   designSubmittedSchema,
   designPrCreatedSchema,
+  designPrTargetFromRecordedUrl,
   designApprovalEventSchema,
+  designReflectionPlanSchema,
   designConflict,
   designReflecting,
   designNotFound,
   designStale,
   type DesignSubmission,
+  type DesignPrTarget,
 } from "../../../../shared/api/design";
+import { designPrStarted } from "../domain/design-pr-activity";
 import type { DesignRecord } from "../../../../shared/design/records";
 import type {
   WorktreeActivityLease,
@@ -28,6 +32,7 @@ import {
 import {
   designInternal,
   type DesignFlowDependencies,
+  type DesignPr,
   type DesignWorktree,
 } from "../domain/design-ports";
 
@@ -56,6 +61,17 @@ export function createReflectDesign(
     return ok({ record, submission: submission.data, submissionSeq: history.submission!.seq });
   }
 
+  async function prDestination(record: DesignRecord, tree: DesignWorktree) {
+    if (!record.project.usesGithub)
+      return err({
+        message: "このプロジェクトで PR は作れません。反映のしかたを直接入れる設定にしてください",
+      });
+    const remote = await deps.git.pushRemote(tree.path);
+    if (remote.isErr()) return err(remote.error);
+    const target = await deps.gh.target(record.project, remote.value);
+    return target.map((prTarget) => ({ prTarget, remote: remote.value }));
+  }
+
   async function approve(id: string, headCommit: string, callerCancelled = () => false) {
     if (callerCancelled()) return err(unavailableRunnerError);
     if (busy.has(id)) return err(designReflecting);
@@ -80,6 +96,13 @@ export function createReflectDesign(
       );
       if (callerCancelled()) return err(unavailableRunnerError);
       if (changes.isErr()) return err(designStale);
+      const destination =
+        changes.value && record.project.designMergeMode === "pr"
+          ? await prDestination(record, tree)
+          : null;
+      if (callerCancelled()) return err(unavailableRunnerError);
+      if (destination?.isErr()) return err(designInternal(destination.error.message));
+      const prTarget = destination?.isOk() ? destination.value.prTarget : undefined;
       const lease = deps.activity.acquire([tree.id]);
       if (lease.isErr()) return err(lease.error);
       let headGuard: Awaited<ReturnType<typeof deps.git.protectHead>> | undefined;
@@ -98,10 +121,17 @@ export function createReflectDesign(
             if (current.value.submissionSeq !== submissionSeq) return err(designStale);
             const latest = current.value.record;
             const mode: Mode = changes.value ? latest.project.designMergeMode : "none";
+            if (
+              mode === "pr" &&
+              (!prTarget ||
+                !latest.project.usesGithub ||
+                prTarget.base !== latest.project.defaultBranch)
+            )
+              return err(designStale);
             const notice = repo.append(
               latest,
               "design_approved",
-              { headCommit, mode },
+              { headCommit, mode, ...(mode === "pr" && prTarget ? { prTarget } : {}) },
               deps.clock.now(),
             );
             if (callerCancelled()) throw new ApprovalExpired();
@@ -118,30 +148,7 @@ export function createReflectDesign(
       })();
       if (accepted.isErr()) return err(accepted.error);
       const { latest, mode, notice } = accepted.value;
-      const reflectionRun = projectRun;
-      const background = Promise.resolve()
-        .then(() => guardReleased)
-        .then(() => reflectApproved(latest, tree, submission, mode))
-        .catch((error: unknown) => {
-          deps.log(error);
-          try {
-            recordFailure(
-              latest,
-              "設計書を反映できませんでした。状態を確認してから、もう一度操作してください",
-            );
-          } catch (failure) {
-            deps.log(failure);
-          }
-        })
-        .finally(() => {
-          try {
-            reflectionRun.release();
-          } finally {
-            busy.delete(id);
-            jobs.delete(background);
-          }
-        });
-      jobs.add(background);
+      void scheduleReflection(latest, tree, submission, mode, projectRun, guardReleased);
       scheduled = true;
       deps.notices.publish(notice);
       return ok({ status: "reflecting" as const });
@@ -157,6 +164,74 @@ export function createReflectDesign(
         }
       }
     }
+  }
+
+  function scheduleReflection(
+    record: DesignRecord,
+    tree: DesignWorktree,
+    submission: DesignSubmission,
+    mode: Mode,
+    projectRun: ProjectRunReservation,
+    guardReleased?: Promise<void>,
+    recovering = false,
+  ) {
+    const id = record.issue.id;
+    const background = Promise.resolve(guardReleased)
+      .then(() => reflectApproved(record, tree, submission, mode, recovering))
+      .catch((error: unknown) => {
+        deps.log(error);
+        try {
+          recordFailure(
+            record,
+            "設計書を反映できませんでした。状態を確認してから、もう一度操作してください",
+          );
+        } catch (failure) {
+          deps.log(failure);
+        }
+      })
+      .finally(() => {
+        projectRun.release();
+        busy.delete(id);
+        jobs.delete(background);
+      });
+    jobs.add(background);
+    return background;
+  }
+
+  async function recoverApproval(id: string) {
+    if (busy.has(id) || runtime.closing) return;
+    const record = deps.repo.read(id);
+    if (!record || record.issue.state !== "design_review") return;
+    const history = designEvents(record.events);
+    const approval = designApprovalEventSchema.safeParse(history.approval?.payload);
+    const submission = designSubmittedSchema.safeParse(history.submission?.payload);
+    if (!history.reflecting || !approval.success || !submission.success) return;
+    const tree = deps.repo.findTree(id, record.project.id, record.issue.number);
+    if (
+      !tree ||
+      tree.branch !== submission.data.branch ||
+      record.conversation?.worktreeId !== tree.id
+    ) {
+      recordFailure(record, "設計の worktree を確認できませんでした");
+      return;
+    }
+    const projectRun = runtime.store.reserveProjectRun(record.project.id);
+    busy.add(id);
+    if (approval.data.headCommit !== submission.data.headCommit) {
+      projectRun.release();
+      busy.delete(id);
+      recordFailure(record, designStale.message);
+      return;
+    }
+    await scheduleReflection(
+      record,
+      tree,
+      submission.data,
+      approval.data.mode,
+      projectRun,
+      undefined,
+      true,
+    );
   }
 
   function recordFailure(
@@ -183,6 +258,7 @@ export function createReflectDesign(
       | {
           type: "design_reflected";
           payload: { mode: Mode; commit: string | null; prUrl: string | null };
+          reconciledPr?: boolean;
         }
       | { type: "design_pr_created"; payload: { prUrl: string } }
       | { type: "design_pr_not_merged"; detail: string },
@@ -193,6 +269,21 @@ export function createReflectDesign(
       const now = deps.clock.now();
       const detail = operation.type === "design_pr_not_merged" ? operation.detail : undefined;
       if (!repo.move(latest, operation.type, now, detail)) return null;
+      if (
+        operation.type === "design_pr_created" ||
+        (operation.type === "design_reflected" && operation.reconciledPr)
+      ) {
+        const conversationSeq = latest.conversation
+          ? runtime.store.get(latest.conversation.id)?.lastSeq
+          : undefined;
+        const created = repo.append(
+          latest,
+          "design_pr_created",
+          { prUrl: operation.payload.prUrl, conversationSeq },
+          now,
+        );
+        if (operation.type === "design_pr_created") return created;
+      }
       if (operation.type !== "design_pr_not_merged")
         return repo.append(latest, operation.type, operation.payload, now);
       const saved = repo.read(record.issue.id)!;
@@ -212,6 +303,7 @@ export function createReflectDesign(
     tree: DesignWorktree,
     submission: DesignSubmission,
     mode: Mode,
+    recovering: boolean,
   ) {
     const conversationId = record.conversation!.id;
     const release = await runtime.release(conversationId);
@@ -222,7 +314,7 @@ export function createReflectDesign(
       const latest = deps.repo.read(record.issue.id);
       if (latest?.issue.state !== "design_review" || !designEvents(latest.events).reflecting)
         return;
-      return await reflect(latest, tree, submission, mode, lease.value);
+      return await reflect(latest, tree, submission, mode, lease.value, recovering);
     } finally {
       lease.value.release();
     }
@@ -234,51 +326,52 @@ export function createReflectDesign(
     submission: DesignSubmission,
     mode: Mode,
     lease: WorktreeActivityLease,
+    recovering: boolean,
   ) {
+    const history = designEvents(record.events);
+    const approval = designApprovalEventSchema.safeParse(history.approval?.payload);
+    if (
+      !approval.success ||
+      approval.data.headCommit !== submission.headCommit ||
+      approval.data.mode !== mode
+    )
+      return recordFailure(record, designStale.message, lease);
     if (mode === "pr") {
-      if (!record.project.usesGithub)
+      const target = approval.data.prTarget;
+      if (!target)
         return recordFailure(
           record,
-          "このプロジェクトで PR は作れません。反映のしかたを直接入れる設定にしてください",
+          "承認時の PR の作成先を確認できませんでした。origin と既定ブランチを確認して、同じ版をもう一度承認してください",
           lease,
         );
-      const pushed = await deps.git.pushBranch(tree, submission.headCommit);
-      if (pushed.isErr())
-        return recordFailure(
-          record,
-          `設計のブランチを push できませんでした: ${pushed.error.message}。状態を確認してから、もう一度承認してください`,
-          lease,
-        );
-      const pr = await deps.gh.create(
-        record.project,
-        tree.branch,
-        `設計: #${record.issue.number} ${record.issue.title}`,
-        [
-          "## 修正方針",
-          "",
-          submission.policy,
-          "",
-          "## AI が確かめたい点",
-          "",
-          ...(submission.checks.length
-            ? submission.checks.map((check) => `- ${check}`)
-            : ["ありません"]),
-        ].join("\n"),
+      const previous = record.events.findLast(
+        (event) => event.type === "design_approved" && event.seq < history.approval!.seq,
       );
-      if (pr.isErr()) return recordFailure(record, pr.error.message, lease);
-      if (!transition(record, lease, { type: "design_pr_created", payload: { prUrl: pr.value } }))
-        return recordFailure(
-          record,
-          "設計書の PR は作成されましたが、反映の状態を記録できませんでした。issue を読み直してください",
-          lease,
-        );
-      lease.release();
-      await sendPrInstruction(record.issue.id, pr.value);
-      return;
+      const previousApproval = designApprovalEventSchema.safeParse(previous?.payload);
+      const retrying =
+        previousApproval.success &&
+        previousApproval.data.mode === "pr" &&
+        previousApproval.data.headCommit === submission.headCommit;
+      return reflectPr(record, tree, submission, lease, target, recovering || retrying);
     }
     let commit: string | null = null;
     if (mode === "direct") {
-      const reflected = await deps.git.reflect(record.project, tree, submission);
+      const plan = designReflectionPlanSchema.safeParse(history.plan?.payload);
+      const reflected = await deps.git.reflect(record.project, tree, submission, {
+        plan: plan.success ? plan.data : undefined,
+        savePlan: (planned) =>
+          deps.transaction((repo) => {
+            const latest = repo.read(record.issue.id);
+            if (
+              !latest ||
+              latest.issue.state !== "design_review" ||
+              designEvents(latest.events).approval?.seq !== history.approval?.seq
+            )
+              return false;
+            repo.append(latest, "design_reflection_prepared", planned, deps.clock.now());
+            return true;
+          }, lease),
+      });
       if (reflected.isErr()) return recordFailure(record, reflected.error.message, lease);
       commit = reflected.value;
     } else {
@@ -301,6 +394,109 @@ export function createReflectDesign(
     await cleanup(record, mode === "direct" ? submission.headCommit : undefined);
   }
 
+  async function reflectPr(
+    record: DesignRecord,
+    tree: DesignWorktree,
+    submission: DesignSubmission,
+    lease: WorktreeActivityLease,
+    target: DesignPrTarget,
+    checkExisting: boolean,
+  ) {
+    const { project, issue } = record;
+    const { headCommit } = submission;
+    const failure = (message: string) => recordFailure(record, message, lease);
+    const changed =
+      "承認した設計の PR の作成先が変わりました。origin と既定ブランチを確認してから、もう一度承認してください";
+    let pr: DesignPr | null = null;
+    if (checkExisting) {
+      const existing = await deps.gh.find(project, target, tree.branch, headCommit);
+      if (existing.isErr()) return failure(existing.error.message);
+      pr = existing.value;
+      if (pr?.state === "MERGED") {
+        const verified = await deps.gh.verify(project, target, pr.url, tree.branch, headCommit);
+        if (verified.isErr()) return failure(verified.error.message);
+        if (verified.value.state !== "MERGED")
+          return failure("設計書の PR の merge コミットを確認できませんでした");
+        pr = verified.value;
+      }
+    }
+
+    if (!pr) {
+      const destination = await prDestination(record, tree);
+      if (destination.isErr()) return failure(destination.error.message);
+      const { prTarget, remote } = destination.value;
+      const latest = deps.repo.read(issue.id);
+      if (
+        prTarget.repository.toLowerCase() !== target.repository.toLowerCase() ||
+        prTarget.base !== target.base ||
+        latest?.project.defaultBranch !== target.base ||
+        !latest.project.usesGithub
+      )
+        return failure(changed);
+      const pushed = await deps.git.pushBranch(tree, headCommit, remote);
+      if (pushed.isErr())
+        return failure(
+          `設計のブランチを push できませんでした: ${pushed.error.message}。状態を確認してから、もう一度承認してください`,
+        );
+      const created = await deps.gh.create(
+        project,
+        target,
+        tree.branch,
+        `設計: #${issue.number} ${issue.title}`,
+        [
+          "## 修正方針",
+          "",
+          submission.policy,
+          "",
+          "## AI が確かめたい点",
+          "",
+          ...(submission.checks.length
+            ? submission.checks.map((check) => `- ${check}`)
+            : ["ありません"]),
+        ].join("\n"),
+      );
+      if (created.isErr()) return failure(created.error.message);
+      const verified = await deps.gh.verify(
+        project,
+        target,
+        created.value,
+        tree.branch,
+        headCommit,
+      );
+      if (verified.isErr()) return failure(verified.error.message);
+      pr = verified.value;
+    }
+
+    if (pr.state === "CLOSED") return failure("作成した設計書の PR は閉じています");
+    if (pr.state === "MERGED") {
+      if (!pr.mergeCommit) return failure("設計書の PR の merge コミットを確認できませんでした");
+      if (
+        !transition(record, lease, {
+          type: "design_reflected",
+          payload: { mode: "pr", commit: pr.mergeCommit, prUrl: pr.url },
+          reconciledPr: true,
+        })
+      )
+        return failure("設計の反映結果を記録できませんでした。issue を読み直してください");
+      lease.release();
+      await cleanup(record);
+      return;
+    }
+    if (!transition(record, lease, { type: "design_pr_created", payload: { prUrl: pr.url } }))
+      return failure(
+        "設計書の PR は作成されましたが、反映の状態を記録できませんでした。issue を読み直してください",
+      );
+    lease.release();
+    await sendPrInstruction(issue.id, pr.url);
+  }
+
+  function allowsPr(record: DesignRecord) {
+    return (
+      deps.allowPrInstruction?.(record.project.id) ??
+      (!record.project.flowPaused && record.project.autoStages.includes("design"))
+    );
+  }
+
   async function sendPrInstruction(id: string, url: string) {
     const initial = deps.repo.read(id);
     const conversationId = initial?.conversation?.id;
@@ -310,27 +506,41 @@ export function createReflectDesign(
       const conversation = runtime.store.get(conversationId);
       if (!latest || !conversation || conversation.closedAt !== null || runtime.closing)
         return err(designConflict);
-      if (latest.project.flowPaused || !latest.project.autoStages.includes("design"))
-        return ok(undefined);
+      if (!allowsPr(latest)) return ok(undefined);
       const pending = designEvents(latest.events);
       const activePr = designPrCreatedSchema.safeParse(pending.pr?.payload);
       if (latest.issue.state !== "design" || !activePr.success || activePr.data.prUrl !== url)
         return err(designConflict);
-      if (latest.events.some((event) => event.type === "ai_started" && event.seq > pending.pr!.seq))
-        return ok(undefined);
+      const mark = pending.pr!;
+      const eligible = () => {
+        const record = deps.repo.read(id);
+        const latestPr = record && designEvents(record.events).pr;
+        return (
+          record?.issue.state === "design" &&
+          latestPr?.seq === mark.seq &&
+          allowsPr(record) &&
+          !runtime.store
+            .list()
+            .some(
+              (c) =>
+                c.issueId === id &&
+                c.kind !== "chat" &&
+                c.kind !== "thread" &&
+                activeStates.includes(c.runState),
+            ) &&
+          !designPrStarted(mark, record.events, runtime.store.events(conversationId))
+        );
+      };
+      if (!eligible()) return ok(undefined);
       let notice: ReturnType<typeof deps.repo.append> | undefined;
       const result = await runtime.deliver(
         conversationId,
         { text: prPrompt(url), images: [], origin: "flow" },
         {
           events: [],
+          check: () => (eligible() ? null : designConflict),
           before: () => {
-            const recorded = deps.repo.read(id);
-            const updated = recorded && designEvents(recorded.events);
-            if (recorded?.issue.state !== "design" || updated?.pr?.seq !== pending.pr?.seq)
-              throw new Error("設計の PR の状態が変わりました");
-            if (recorded.project.flowPaused || !recorded.project.autoStages.includes("design"))
-              throw new Error("設計の自動処理は一時停止中です");
+            const recorded = deps.repo.read(id)!;
             notice = deps.repo.append(
               recorded,
               "ai_started",
@@ -343,9 +553,10 @@ export function createReflectDesign(
             );
           },
         },
-        { includeQueued: false, interrupt: activeStates.includes(conversation.runState) },
+        { includeQueued: false },
       );
       if (result.isErr()) {
+        if (!eligible()) return ok(undefined);
         deps.alert(id, result.error.message);
         return err(result.error);
       }
@@ -374,7 +585,18 @@ export function createReflectDesign(
     if (lease.isErr()) return err(lease.error);
     busy.add(id);
     try {
-      const remote = await deps.gh.view(record.project, pr.data.prUrl);
+      const target =
+        approval.data.prTarget ??
+        designPrTargetFromRecordedUrl(pr.data.prUrl, record.project.defaultBranch);
+      if (!target)
+        return err(designInternal("記録した設計書の PR のリポジトリを確認できませんでした"));
+      const remote = await deps.gh.verify(
+        record.project,
+        target,
+        pr.data.prUrl,
+        tree.branch,
+        approval.data.headCommit,
+      );
       if (remote.isErr()) return err(designInternal(remote.error.message));
       if (remote.value.state === "MERGED" && remote.value.mergeCommit === null)
         return err(designInternal("設計書の PR の merge コミットを確認できませんでした"));
@@ -405,6 +627,7 @@ export function createReflectDesign(
     approve,
     completePr,
     sendPrInstruction,
+    recoverApproval,
     reflecting: (id: string) => busy.has(id),
     drain,
   };

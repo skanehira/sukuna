@@ -1,25 +1,28 @@
 import { dirname, join, basename } from "node:path";
 import { err, ok, type Result } from "neverthrow";
-import { activeStates, type ConversationRuntime } from "../../conversation/usecase/runtime";
+import {
+  activeStates,
+  InputRefused,
+  type ConversationRuntime,
+} from "../../conversation/usecase/runtime";
 import {
   designConflict,
   designNotFound,
   designPrCreatedSchema,
   type DesignError,
 } from "../../../../shared/api/design";
+import { unavailableRunnerError } from "../../../../shared/ipc";
 import type { DesignRecord } from "../../../../shared/design/records";
 import {
   designInternal,
   type DesignFlowDependencies,
   type DesignWorktree,
+  type DesignWorkspaceRequest,
 } from "../domain/design-ports";
 
 export function createDesignWorkspace(deps: DesignFlowDependencies, runtime: ConversationRuntime) {
   const creating = new Map<string, Promise<Result<DesignWorktree, DesignError>>>();
-  function workspace(input: {
-    issueId: string;
-    conversationId: string;
-  }): Promise<Result<DesignWorktree, DesignError>> {
+  function workspace(input: DesignWorkspaceRequest): Promise<Result<DesignWorktree, DesignError>> {
     const pending = creating.get(input.issueId);
     if (pending) return Promise.resolve(err(designConflict));
     const job = prepare(input).finally(() => creating.delete(input.issueId));
@@ -27,7 +30,13 @@ export function createDesignWorkspace(deps: DesignFlowDependencies, runtime: Con
     return job;
   }
 
-  async function prepare({ issueId, conversationId }: { issueId: string; conversationId: string }) {
+  async function prepare({
+    issueId,
+    conversationId,
+    cancelled = () => false,
+    prepareOnly,
+  }: DesignWorkspaceRequest) {
+    if (cancelled()) return err(unavailableRunnerError);
     const record = deps.repo.read(issueId);
     if (!record) return err(designNotFound);
     if (
@@ -36,8 +45,22 @@ export function createDesignWorkspace(deps: DesignFlowDependencies, runtime: Con
     )
       return err(designConflict);
     const { project } = record;
+    const reportFailure = (
+      detail: string,
+      reservation?: Parameters<DesignFlowDependencies["transaction"]>[1],
+    ) => failed(record, conversationId, detail, cancelled, reservation);
+    const finish = (
+      tree: DesignWorktree,
+      reservation: Parameters<DesignFlowDependencies["transaction"]>[1],
+    ) =>
+      cancelled()
+        ? err(unavailableRunnerError)
+        : prepareOnly
+          ? ok(tree)
+          : attach(record, conversationId, tree, reservation);
+
     const list = await deps.workspace.list(project.path);
-    if (list.isErr()) return failed(record, conversationId, list.error.message);
+    if (list.isErr()) return reportFailure(list.error.message);
     const old = deps.repo.findTree(issueId, project.id, record.issue.number);
     if (old) {
       const oldPath = await deps.git.canonical(old.path);
@@ -45,19 +68,20 @@ export function createDesignWorkspace(deps: DesignFlowDependencies, runtime: Con
         const lease = deps.activity.acquire([old.id]);
         if (lease.isErr()) return err(lease.error);
         try {
-          return attach(record, conversationId, old, lease.value);
+          return finish(old, lease.value);
         } finally {
           lease.value.release();
         }
       }
       const exists = await deps.workspace.exists(old.path);
-      if (exists.isErr()) return failed(record, conversationId, exists.error.message);
-      if (exists.value)
-        return failed(record, conversationId, "記録した worktree のブランチが変わりました");
+      if (exists.isErr()) return reportFailure(exists.error.message);
+      if (exists.value) return reportFailure("記録した worktree のブランチが変わりました");
+      if (cancelled()) return err(unavailableRunnerError);
       deps.repo.abandonTree(old.id, deps.clock.now());
     }
+    if (cancelled()) return err(unavailableRunnerError);
     const excluded = await deps.workspace.exclude(project.path);
-    if (excluded.isErr()) return failed(record, conversationId, excluded.error.message);
+    if (excluded.isErr()) return reportFailure(excluded.error.message);
     const fetched =
       project.usesGithub && (await deps.workspace.fetch(project.path, project.defaultBranch));
     const start =
@@ -76,11 +100,12 @@ export function createDesignWorkspace(deps: DesignFlowDependencies, runtime: Con
       )
         continue;
       const pathExists = await deps.workspace.exists(path);
-      if (pathExists.isErr()) return failed(record, conversationId, pathExists.error.message);
+      if (pathExists.isErr()) return reportFailure(pathExists.error.message);
       if (pathExists.value) continue;
       const branchExists = await deps.workspace.branchExists(project.path, branch);
-      if (branchExists.isErr()) return failed(record, conversationId, branchExists.error.message);
+      if (branchExists.isErr()) return reportFailure(branchExists.error.message);
       if (branchExists.value) continue;
+      if (cancelled()) return err(unavailableRunnerError);
       const tree = { id: deps.clock.id(), path, branch };
       const lease = deps.activity.acquire([tree.id]);
       if (lease.isErr()) return err(lease.error);
@@ -98,12 +123,13 @@ export function createDesignWorkspace(deps: DesignFlowDependencies, runtime: Con
           return true;
         }, lease.value);
         if (!reserved) return err(designConflict);
+        if (cancelled()) return err(unavailableRunnerError);
         const created = await deps.workspace.add(project.path, path, branch, start);
         if (created.isErr()) {
           deps.repo.abandonTree(tree.id, deps.clock.now());
-          return failed(record, conversationId, created.error.message, lease.value);
+          return reportFailure(created.error.message, lease.value);
         }
-        return attach(record, conversationId, tree, lease.value);
+        return finish(tree, lease.value);
       } finally {
         lease.value.release();
       }
@@ -130,32 +156,63 @@ export function createDesignWorkspace(deps: DesignFlowDependencies, runtime: Con
     return result ? ok({ id: tree.id, path: tree.path, branch: tree.branch }) : err(designConflict);
   }
 
+  function attachWorkspace(
+    issueId: string,
+    conversationId: string,
+    tree: DesignWorktree,
+    reservation: NonNullable<Parameters<DesignFlowDependencies["transaction"]>[1]>,
+  ) {
+    const record = deps.repo.read(issueId);
+    if (!record) return err(designNotFound);
+    const current = deps.repo.findTree(issueId, record.project.id, record.issue.number);
+    if (
+      !current ||
+      current.id !== tree.id ||
+      current.path !== tree.path ||
+      current.branch !== tree.branch
+    )
+      return err(designConflict);
+    return attach(record, conversationId, tree, reservation);
+  }
+
   function failed(
     record: DesignRecord,
     conversationId: string,
     detail: string,
+    cancelled: () => boolean,
     reservation?: Parameters<DesignFlowDependencies["transaction"]>[1],
   ) {
+    if (cancelled()) return err(unavailableRunnerError);
     const message = `設計の worktree を作れませんでした: ${detail.split(/\r?\n/)[0]}。状態を確認してから再開してください`;
     let notice: ReturnType<typeof deps.repo.append> | null = null;
-    runtime.record(
-      conversationId,
-      [{ type: "stopped", payload: { reason: "error", detail: message } }],
-      () => {
-        notice = deps.transaction((repo) => {
-          if (!repo.move(record, "worktree_failed", deps.clock.now(), message, false)) return null;
-          const updated = repo.read(record.issue.id)!;
-          const last = updated.events.at(-1)!;
-          return {
-            kind: "issue",
-            issue_id: record.issue.id,
-            project_id: record.project.id,
-            seq: last.seq,
-          };
-        }, reservation);
-      },
-      () => deps.repo.read(record.issue.id)?.issue.state === record.issue.state,
-    );
+    try {
+      runtime.record(
+        conversationId,
+        [{ type: "stopped", payload: { reason: "error", detail: message } }],
+        () => {
+          notice = deps.transaction((repo) => {
+            if (!repo.move(record, "worktree_failed", deps.clock.now(), message, false))
+              return null;
+            const updated = repo.read(record.issue.id)!;
+            const last = updated.events.at(-1)!;
+            return {
+              kind: "issue",
+              issue_id: record.issue.id,
+              project_id: record.project.id,
+              seq: last.seq,
+            };
+          }, reservation);
+        },
+        () => deps.repo.read(record.issue.id)?.issue.state === record.issue.state,
+        () => {
+          if (cancelled()) throw new InputRefused(unavailableRunnerError);
+        },
+      );
+    } catch (error) {
+      if (error instanceof InputRefused && error.refusal.code === "runner_unavailable")
+        return err(unavailableRunnerError);
+      throw error;
+    }
     if (notice) deps.notices.publish(notice);
     return err(designInternal(message));
   }
@@ -249,5 +306,5 @@ export function createDesignWorkspace(deps: DesignFlowDependencies, runtime: Con
       if (notice) deps.notices.publish(notice);
     }
   }
-  return { workspace, cleanup };
+  return { workspace, attachWorkspace, cleanup };
 }

@@ -35,7 +35,7 @@ export interface ClockPort {
 }
 
 export interface StopConversationPort {
-  stop(conversationId: string): Promise<void>;
-  prepareStop?(conversationId: string): () => Promise<void>;
+  stop(conversationId: string, cause?: "dependency_withdrawn"): Promise<void>;
+  prepareStop?(conversationId: string, cause?: "dependency_withdrawn"): () => Promise<void>;
 }
 export type FinishWithdrawal = (issueId: string, stop: () => Promise<void>) => void;
