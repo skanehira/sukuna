@@ -1,0 +1,141 @@
+import type { Extension, Range } from "@codemirror/state";
+import {
+  Decoration,
+  EditorView,
+  ViewPlugin,
+  WidgetType,
+  type DecorationSet,
+  type ViewUpdate,
+} from "@codemirror/view";
+import { GFM, parser } from "@lezer/markdown";
+
+const markdown = parser.configure(GFM);
+const format: Record<string, string> = {
+  StrongEmphasis: "cm-file-strong",
+  Emphasis: "cm-file-emphasis",
+  InlineCode: "cm-file-inline-code",
+};
+const linkClass = "cm-file-link";
+const linkParents = new Set(["Link", "Image", "Autolink", "LinkReference"]);
+class ImageLabel extends WidgetType {
+  private readonly alt: string;
+
+  constructor(alt: string) {
+    super();
+    this.alt = alt;
+  }
+  eq(other: ImageLabel): boolean {
+    return this.alt === other.alt;
+  }
+  toDOM(): HTMLElement {
+    const span = document.createElement("span");
+    span.textContent = `[画像: ${this.alt}]`;
+    span.className = "cm-file-link";
+    return span;
+  }
+}
+
+function decorations(view: EditorView, tree: ReturnType<typeof markdown.parse>): DecorationSet {
+  const { doc, selection } = view.state;
+  const active = doc.lineAt(selection.main.head).number;
+  const ranges: Range<Decoration>[] = [];
+  const hide = (from: number, to: number, widget?: WidgetType) => {
+    for (let number = doc.lineAt(from).number; number <= doc.lineAt(to).number; number++) {
+      const line = doc.line(number);
+      const start = Math.max(line.from, from);
+      const end = Math.min(line.to, to);
+      if (number !== active && start < end) {
+        ranges.push(Decoration.replace({ widget }).range(start, end));
+        widget = undefined;
+      }
+    }
+  };
+  const mark = (from: number, to: number, className: string) => {
+    if (from < to) ranges.push(Decoration.mark({ class: className }).range(from, to));
+  };
+
+  tree.iterate({
+    enter(ref) {
+      const { name, from, to } = ref;
+      if (name === "Table" || name === "HTMLBlock" || name === "HTMLTag") return false;
+      if (/^(ATX|Setext)Heading[1-6]$/.test(name)) {
+        ranges.push(
+          Decoration.line({ class: `cm-file-heading cm-file-heading-${name.at(-1)}` }).range(
+            doc.lineAt(from).from,
+          ),
+        );
+      } else if (name === "HeaderMark") {
+        const line = doc.lineAt(from);
+        const space = /^[ \t]*/.exec(doc.sliceString(to, line.to))?.[0].length ?? 0;
+        hide(from, to + space);
+      } else if (name === "Autolink") {
+        for (const marker of ref.node.getChildren("LinkMark")) hide(marker.from, marker.to);
+        const url = ref.node.getChild("URL");
+        if (url) mark(url.from, url.to, linkClass);
+        return false;
+      } else if (name === "URL") {
+        if (!linkParents.has(ref.node.parent?.name ?? "")) mark(from, to, linkClass);
+      } else if (name === "Link" || name === "Image") {
+        const marks = ref.node.getChildren("LinkMark");
+        const opening = marks[0];
+        const closing = marks[1];
+        if (opening && closing) {
+          if (name === "Image") {
+            hide(
+              from,
+              to,
+              new ImageLabel(doc.sliceString(opening.to, closing.from).replace(/\s+/g, " ")),
+            );
+            return false;
+          }
+          hide(from, opening.to);
+          hide(closing.from, to);
+          mark(opening.to, closing.from, linkClass);
+        }
+      } else if (["EmphasisMark", "CodeMark", "CodeInfo"].includes(name)) {
+        hide(from, to);
+      } else if (name === "CodeText") {
+        for (let number = doc.lineAt(from).number; number <= doc.lineAt(to).number; number++) {
+          ranges.push(Decoration.line({ class: "cm-file-code-line" }).range(doc.line(number).from));
+        }
+      } else if (Object.hasOwn(format, name)) {
+        mark(from, to, format[name]);
+      }
+      return undefined;
+    },
+  });
+  return Decoration.set(ranges, true);
+}
+
+export const markdownPreview: Extension = [
+  ViewPlugin.fromClass(
+    class {
+      tree: ReturnType<typeof markdown.parse>;
+      decorations: DecorationSet;
+
+      constructor(view: EditorView) {
+        this.tree = markdown.parse(view.state.doc.toString());
+        this.decorations = decorations(view, this.tree);
+      }
+      update(update: ViewUpdate) {
+        if (update.docChanged) this.tree = markdown.parse(update.state.doc.toString());
+        if (update.docChanged || update.selectionSet) {
+          this.decorations = decorations(update.view, this.tree);
+        }
+      }
+    },
+    { decorations: (plugin) => plugin.decorations },
+  ),
+  EditorView.theme({
+    ".cm-file-heading": { fontWeight: "700", fontSize: "1.12em" },
+    ".cm-file-heading-1": { fontSize: "1.4em" },
+    ".cm-file-heading-2": { fontSize: "1.25em" },
+    ".cm-file-strong": { fontWeight: "700" },
+    ".cm-file-emphasis": { fontStyle: "italic" },
+    ".cm-file-inline-code, .cm-file-code-line": {
+      fontFamily: "var(--font-mono)",
+      backgroundColor: "var(--color-ground)",
+    },
+    ".cm-file-link": { color: "var(--color-accent)" },
+  }),
+];

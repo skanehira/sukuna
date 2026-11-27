@@ -9,7 +9,7 @@ import { Buffer } from "./buffer/Buffer";
 import { Frame } from "./buffer/Frame";
 import { Layout } from "./buffer/Layout";
 import type { LineInfo } from "./buffer/line";
-import { requestsConversationTail, routeUrl, type Route } from "./lib/routes";
+import { requestsConversationTail, screenKey, type Route } from "./lib/routes";
 import type { NavigationPort, StorePort } from "./shell/navigation";
 import { createNavigation } from "./shell/navigation";
 import { Notices, type NoticePort } from "./shell/notices";
@@ -21,6 +21,11 @@ import type { RightView } from "./buffer/right-window";
 const empty: LineInfo[] = [];
 const initial: LineInfo[] = [{ kind: "note", text: "表示する項目はありません。" }];
 const online: StorePort<boolean> = { snapshot: () => true, subscribe: () => () => undefined };
+const fileVisit = {
+  provider: () => new Map(),
+  revalidateOnFocus: false,
+  revalidateOnReconnect: false,
+};
 const missing = {
   code: "not_found",
   message: "開いた対象が見つかりません。一覧から選び直してください。",
@@ -78,6 +83,11 @@ export function App({
   const route = useSyncExternalStore(navigation.subscribe, navigation.snapshot);
   const opening = controller.screenOpening();
   const connected = useSyncExternalStore(connection.subscribe, connection.snapshot);
+  const cache = requestsConversationTail(route)
+    ? openingCache
+    : route.kind === "conversation" && route.view === "file"
+      ? fileVisit
+      : undefined;
   const screen = (
     <MainWindow
       route={route}
@@ -117,13 +127,9 @@ export function App({
         main={
           <>
             <div className="min-h-0 flex flex-1 flex-col">
-              <ShellBoundary key={`${routeUrl(route)}:${opening}`}>
+              <ShellBoundary key={`${screenKey(route)}:${opening}`}>
                 <ScreenOpeningContext value={opening}>
-                  {requestsConversationTail(route) ? (
-                    <SWRConfig value={openingCache}>{screen}</SWRConfig>
-                  ) : (
-                    screen
-                  )}
+                  {cache ? <SWRConfig value={cache}>{screen}</SWRConfig> : screen}
                 </ScreenOpeningContext>
               </ShellBoundary>
             </div>
@@ -164,7 +170,7 @@ function MainWindow({
     isLoading,
     mutate,
   } = useSWR(
-    loadScreen ? ["screen", routeUrl(route)] : null,
+    loadScreen ? ["screen", screenKey(route)] : null,
     async () => {
       const result = await loadScreen!(route);
       if (result.kind === "error" && result.error.code === "network_error")
@@ -227,7 +233,7 @@ function MainWindow({
     );
   return (
     <Frame title={title} side="main" active>
-      <ShellBoundary key={routeUrl(route)}>
+      <ShellBoundary key={screenKey(route)}>
         {failure ? (
           <WindowError
             message={identityRecovery?.message ?? failure.message}

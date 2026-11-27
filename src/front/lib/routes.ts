@@ -1,4 +1,11 @@
-export type Route = { kind: string; id?: string; view?: string; thread?: string; query?: string };
+export type Route = {
+  kind: string;
+  id?: string;
+  view?: string;
+  thread?: string;
+  query?: string;
+  entry?: string;
+};
 export function requestsConversationTail(route: Route): boolean {
   return (
     route.kind === "conversation" &&
@@ -53,6 +60,9 @@ export function routeUrl(route: Route): string {
   if (route.thread) params.set("thread", route.thread);
   return `${path}${params.size ? `?${params}` : ""}`;
 }
-export function openRoute(url: string, open: (route: Route) => void): void {
-  open(parseRoute(url));
+export function screenKey(route: Route): string {
+  return route.entry === undefined ? routeUrl(route) : `${routeUrl(route)}:${route.entry}`;
+}
+export function openRoute(url: string, open: (route: Route) => void, entry?: string): void {
+  open({ ...parseRoute(url), ...(entry !== undefined ? { entry } : {}) });
 }

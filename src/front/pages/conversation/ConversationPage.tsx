@@ -11,11 +11,15 @@ export function ConversationPage({
   activity,
   openAtTail = false,
   subscribe,
+  recordSeq,
+  positionKey,
 }: {
   session: ConversationSession;
   activity?: ReactNode;
   openAtTail?: boolean;
   subscribe?: (session: ConversationSession) => () => void;
+  recordSeq?: number;
+  positionKey?: string;
 }) {
   const { data } = useSyncExternalStore(session.subscribe, session.snapshot, session.snapshot);
   useEffect(() => {
@@ -31,11 +35,20 @@ export function ConversationPage({
       <Buffer
         side="main"
         viewName="conversation"
-        posKey={`/conversations/${session.id}:main`}
+        posKey={positionKey ?? `/conversations/${session.id}:main`}
         lines={loading}
         followTail
         scrollPastEnd
-        onReady={(handle) => session.bind(handle, openAtTail)}
+        restorePosition={
+          recordSeq !== undefined ||
+          (!openAtTail && (session.controller.options.restoringPosition === true || !session.recap))
+        }
+        onReady={(handle) => {
+          session.bind(handle, openAtTail);
+          if (recordSeq === undefined) return;
+          const record = handle.findSeq(recordSeq);
+          if (record !== null) handle.jumpTo(record, { remember: false });
+        }}
       />
       {data?.conversation.runState === "working" && activity ? (
         <div

@@ -16,10 +16,11 @@ export class JumpHistory {
   async back(
     url: string,
     port: { open(url: string, jump: Jump): void | Promise<void>; place(jump: Jump): void },
+    entry?: string,
   ): Promise<void> {
     const jump = this.pop();
     if (jump === null) return;
-    if (jump.url !== url) await port.open(jump.url, jump);
+    if (jump.url !== url || jump.entry !== entry) await port.open(jump.url, jump);
     port.place(jump);
   }
 }

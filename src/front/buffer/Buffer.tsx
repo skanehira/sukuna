@@ -3,6 +3,7 @@ import { useContext, useRef, useSyncExternalStore } from "react";
 import { useEffect } from "react";
 import {
   ChangeSet,
+  Compartment,
   EditorSelection,
   EditorState,
   type Extension,
@@ -54,12 +55,19 @@ import {
 import { bufferGutters } from "./gutters";
 import { bufferTheme, type BufferSide } from "./theme";
 
+type LinePosition = { line: number; column?: number };
+type LinePositionOptions = { remember?: boolean; topLine?: number; column?: number };
+
 export type BufferHandle = {
   append(lines: LineInfo[], clearTail?: TailPart[]): void;
   replace(from: number, to: number, lines: LineInfo[]): void;
   setTail(part: TailPart, lines: LineInfo[]): void;
-  replaceAll(lines: LineInfo[], options?: { missingCursorTarget?: string; ready?: boolean }): void;
-  jumpTo(line: number, options?: { remember?: boolean; topLine?: number; column?: number }): void;
+  replaceAll(
+    lines: LineInfo[],
+    options?: { missingCursorTarget?: string; ready?: boolean; position?: LinePosition },
+  ): void;
+  setDisplay?(extension: Extension): void;
+  jumpTo(line: number, options?: LinePositionOptions): void;
   cursorRevision?(): number;
   pushJump(line: number): void;
   findSeq(seq: number, seqLine?: number): number | null;
@@ -73,8 +81,10 @@ export type BufferProps = {
   lines: LineInfo[];
   columns?: ColumnDef[];
   startLine?: number;
+  display?: Extension;
   followTail?: boolean;
   scrollPastEnd?: boolean;
+  restorePosition?: boolean;
   temporary?: boolean;
   ready?: boolean;
   onReady: (handle: BufferHandle) => void;
@@ -84,7 +94,7 @@ type CursorIntent =
   | { kind: "append" }
   | { kind: "setTail"; from: number; to: number; count: number }
   | { kind: "replace"; from: number; to: number; count: number }
-  | { kind: "replaceAll"; missingCursorTarget?: string };
+  | { kind: "replaceAll"; position?: LinePosition; missingCursorTarget?: string };
 
 type Batch = {
   ready?: boolean;
@@ -154,6 +164,15 @@ function cursorSelection(
     return EditorSelection.single(Math.min(start + column, start + nextLines[target].text.length));
   }
 
+  if (intent.kind === "replaceAll" && intent.position && nextLines.length > 0) {
+    const requested = Math.max(0, Math.min(intent.position.line, nextLines.length - 1));
+    const target = initialLine(nextLines, requested);
+    return EditorSelection.single(
+      lineStart(nextLines, target) +
+        Math.min(intent.position.column ?? 0, nextLines[target].text.length),
+    );
+  }
+
   const id = lines[cursorLine]?.id;
   if (id !== undefined) {
     const index = nextLines.findIndex((line) => line.id === id);
@@ -181,8 +200,10 @@ export function Buffer({
   lines,
   columns,
   startLine,
+  display,
   followTail = false,
   scrollPastEnd = false,
+  restorePosition = true,
   temporary = false,
   ready = true,
   onReady,
@@ -205,6 +226,7 @@ export function Buffer({
     lines,
     columns: columns ?? [],
     startLine,
+    display,
     followTail,
     scrollPastEnd,
     onReady,
@@ -217,6 +239,7 @@ export function Buffer({
     let contentReady = ready;
     const content = createContent(numberMenus(config.lines));
     const initial = initialLine(config.lines, config.startLine);
+    const display = new Compartment();
     let rememberSelection = () => {};
     let cursorRevision = 0;
     const extensions: Extension[] = [
@@ -243,6 +266,7 @@ export function Buffer({
       bufferField.init((state) => initialBufferView(state, content, config.columns)),
       ...bufferGutters(config.side),
       bufferTheme(config.side),
+      display.of(config.display ?? []),
       EditorView.contentAttributes.of({ tabindex: "0", "aria-label": "バッファ" }),
     ];
     const state = EditorState.create({
@@ -254,6 +278,10 @@ export function Buffer({
     });
     const view = new EditorView({ parent: host, state });
     viewRef.current = view;
+    if (config.startLine !== undefined)
+      view.dispatch({
+        effects: EditorView.scrollIntoView(view.state.selection.main.head),
+      });
 
     const flush = (): void => {
       frameRef.current = null;
@@ -283,7 +311,10 @@ export function Buffer({
         selection = resolved ?? selection.map(changes);
         if (resolved !== undefined) {
           options.selection = selection;
-          if (follow && (intent.kind === "append" || intent.kind === "setTail")) {
+          if (
+            (follow && (intent.kind === "append" || intent.kind === "setTail")) ||
+            (intent.kind === "replaceAll" && intent.position !== undefined)
+          ) {
             options.scrollIntoView = true;
           }
         } else if (options.selection !== undefined) {
@@ -346,6 +377,9 @@ export function Buffer({
       name: name ?? frameTitle ?? side,
       url: controller?.options.url ?? "/",
       opening: logicalSide === "main" ? (opening ?? controller?.screenOpening()) : undefined,
+      entry: controller?.options.entry,
+      restorePosition,
+      historyKey: logicalSide === "main" ? undefined : posKey,
       temporary,
       view: viewName ?? side,
       posKey: posKey ?? `${controller?.options.url ?? "/"}:${logicalSide}:${viewName ?? side}`,
@@ -363,20 +397,29 @@ export function Buffer({
           topLine:
             view.state.doc.lineAt(view.lineBlockAtHeight(view.scrollDOM.scrollTop).from).number - 1,
           ...(info?.id ? { id: info.id } : {}),
+          ...(info?.seq === undefined ? {} : { seq: info.seq }),
+          ...(info?.seqLine === undefined ? {} : { seqLine: info.seqLine }),
         };
       },
       place: (position) => {
         const lines = view.state.field(bufferField).lines;
         const byId = position.id ? lines.findIndex((line) => line.id === position.id) : -1;
-        const target = Math.max(
-          0,
-          Math.min(byId >= 0 ? byId : position.line, view.state.doc.lines - 1),
-        );
+        const bySeq =
+          byId < 0 && position.seq !== undefined
+            ? findSeqLine(lines, position.seq, position.seqLine)
+            : null;
+        const requested = byId >= 0 ? byId : (bySeq ?? position.line);
+        const target = Math.max(0, Math.min(requested, view.state.doc.lines - 1));
         const line = view.state.doc.line(target + 1);
         view.dispatch({
           selection: EditorSelection.single(Math.min(line.to, line.from + position.column)),
           effects: EditorView.scrollIntoView(
-            view.state.doc.line(Math.min(position.topLine + 1, view.state.doc.lines)).from,
+            view.state.doc.line(
+              Math.max(
+                1,
+                Math.min(position.topLine + requested - position.line + 1, view.state.doc.lines),
+              ),
+            ).from,
             { y: "start" },
           ),
         });
@@ -410,12 +453,15 @@ export function Buffer({
           (base) => setTailLines(base, part, tailLines),
         );
       },
-      replaceAll(allLines, { ready = true, missingCursorTarget } = {}) {
+      replaceAll(allLines, { ready = true, missingCursorTarget, position } = {}) {
         enqueue(
-          { kind: "replaceAll", missingCursorTarget },
+          { kind: "replaceAll", missingCursorTarget, position },
           (base) => replaceAllLines(base, allLines),
           ready,
         );
+      },
+      setDisplay(extension) {
+        if (viewRef.current === view) view.dispatch({ effects: display.reconfigure(extension) });
       },
       jumpTo(line, options) {
         if (viewRef.current !== view) return;

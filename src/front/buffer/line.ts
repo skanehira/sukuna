@@ -27,6 +27,8 @@ export type LineInfo = {
   colDef?: string;
   id?: string;
   target?: OpenTarget;
+  open?: () => void | Promise<void>;
+  cursor?: true;
   action?: string;
   status?: string;
   main?: boolean;

@@ -17,11 +17,14 @@ import { RecapSession } from "../recap/session";
 import { recapActions, recapCommands, recapItemActions } from "../recap/keymap";
 import type { RecapApi } from "../recap/api";
 import type { TabStorage } from "../recap/read-tracking";
+import type { FilesApi } from "../files/api";
+import { createFileRealtime } from "../files/realtime";
+import { createFilesWorkspace, filesRouteViews } from "../files/workspace";
 import { Realtime, type RealtimeSocket } from "../realtime";
-import { parseRoute, requestsConversationTail } from "../routes";
+import { parseRoute, requestsConversationTail, screenKey, type Route } from "../routes";
 import { ConversationApiError } from "./api";
 import { ConversationSession, type ConversationEnvironment } from "./session";
-import type { ConversationApi } from "./types";
+import type { ConversationApi, Conversation } from "./types";
 import type { InboxStore } from "../inbox-store";
 
 export function createConversationWorkspace(
@@ -31,6 +34,7 @@ export function createConversationWorkspace(
   socket: () => RealtimeSocket,
   {
     recap,
+    files: filesApi,
     lifecycle: lifecycleOptions,
     settingsChanged,
     inbox,
@@ -41,6 +45,7 @@ export function createConversationWorkspace(
     settingsChanged?: () => void;
     inbox?: Pick<InboxStore, "reload" | "receive">;
     notifications?: { receive(message: ServerMessage): void };
+    files?: FilesApi;
   } = {},
 ) {
   const sessions = new Map<string, ConversationSession>();
@@ -56,6 +61,7 @@ export function createConversationWorkspace(
     if (topic === "app") settingsChanged?.();
     changes.get(topic)?.forEach((receive) => receive());
     if (topic === "inbox") void inbox?.reload();
+    fileRealtime?.reload(topic);
     for (const session of active)
       if (topic === `conversation:${session.id}`)
         void session
@@ -72,6 +78,7 @@ export function createConversationWorkspace(
     setTimeout: (callback, ms) => env.schedule(callback, ms),
     unavailable: (value) => {
       connected = !value;
+      if (!value) fileRealtime?.connected();
       active.forEach((session) => session.connection(connected));
       listeners.forEach((listener) => listener());
     },
@@ -82,6 +89,7 @@ export function createConversationWorkspace(
       notifications?.receive(message);
       if (message.topic === "app" && message.type === "settings_changed") settingsChanged?.();
       active.forEach((session) => session.receive(message));
+      fileRealtime?.receive(message);
       if (message.type !== "resync")
         changes.get(message.topic)?.forEach((receive) => receive(message));
     },
@@ -126,6 +134,50 @@ export function createConversationWorkspace(
       subscribe: subscribeChanges,
       lookup: (id) => sessions.get(id)?.snapshot().data?.conversation,
     });
+  const fileScopes = new Map<string, Conversation>();
+  const storedConversation = (id: string) =>
+    sessions.get(id)?.snapshot().data?.conversation ?? fileScopes.get(id);
+  const getConversation = async (id: string) => {
+    const { conversation } = await api.get(id);
+    fileScopes.set(id, conversation);
+    return conversation;
+  };
+  const fileRealtime =
+    filesApi &&
+    createFileRealtime(
+      realtime,
+      filesApi,
+      getConversation,
+      (id, after) => api.events(id, after),
+      (message) => controller.notify(message, "error"),
+      (id) => [...active].find((session) => session.id === id)?.receivedThrough(),
+    );
+  const files =
+    filesApi &&
+    fileRealtime &&
+    createFilesWorkspace({
+      api: filesApi,
+      controller,
+      scope: (id) => {
+        const conversation = storedConversation(id);
+        const root = conversation?.parentConversationId
+          ? storedConversation(conversation.parentConversationId)
+          : conversation;
+        if (!root) return undefined;
+        return {
+          id: root.id,
+          cwd: root.cwd,
+          lastSeq: Math.max(root.lastSeq, sessions.get(root.id)?.receivedThrough() ?? 0),
+        };
+      },
+      schedule: (callback, ms) => env.schedule(callback, ms),
+      watch: (scope, listener, replaySignal) =>
+        fileRealtime.subscribe(scope, listener, replaySignal),
+      prepare: (scope, signal) => fileRealtime.prepare(scope, signal),
+      readStart: fileRealtime.readStart,
+      refreshScope: getConversation,
+      entryId: () => env.id(),
+    });
   const connection = {
     snapshot: () => connected,
     subscribe: (listener: () => void) => {
@@ -149,19 +201,28 @@ export function createConversationWorkspace(
       unshow();
     };
   };
-  const conversationScreen = (session: ConversationSession, openAtTail: boolean): ReadyScreen => ({
-    kind: "ready",
-    title: `会話: ${session.snapshot().data!.conversation.title}`,
-    fullWindow: true,
-    content: (
-      <ConversationPage
-        key={session.id}
-        session={session}
-        subscribe={subscribe}
-        openAtTail={openAtTail}
-      />
-    ),
-  });
+  const conversationScreen = (
+    session: ConversationSession,
+    route: Route,
+    openAtTail = requestsConversationTail(route),
+  ): ReadyScreen => {
+    const seq = Number(new URLSearchParams(route.query).get("seq"));
+    return {
+      kind: "ready",
+      title: `会話: ${session.snapshot().data!.conversation.title}`,
+      fullWindow: true,
+      content: (
+        <ConversationPage
+          key={session.id}
+          session={session}
+          subscribe={subscribe}
+          openAtTail={openAtTail}
+          recordSeq={Number.isSafeInteger(seq) && seq > 0 ? seq : undefined}
+          positionKey={`${screenKey(route)}:main`}
+        />
+      ),
+    };
+  };
   const loadScreen: ScreenLoader = async (route) => {
     if (
       currentSession &&
@@ -170,6 +231,7 @@ export function createConversationWorkspace(
       currentSession.recap?.leave();
       currentSession = null;
     }
+    const openAtTail = requestsConversationTail(route);
     const lifecycleScreen = lifecycle?.screen(route);
     if (lifecycleScreen) return lifecycleScreen;
     if (route.kind === "home")
@@ -184,7 +246,11 @@ export function createConversationWorkspace(
           />
         ),
       };
-    if (route.kind !== "conversation" || !route.id || route.view)
+    if (
+      route.kind !== "conversation" ||
+      !route.id ||
+      (route.view && (!files || !filesRouteViews.has(route.view)))
+    )
       return {
         kind: "error",
         error: {
@@ -192,32 +258,48 @@ export function createConversationWorkspace(
           message: "開いた対象が見つかりません。一覧から選び直してください。",
         },
       };
-    let session = sessions.get(route.id);
-    if (!session) {
-      session = new ConversationSession(route.id, api, controller, env);
-      if (recap)
-        session.recap = new RecapSession(session, recap.api, recap.storage, (fn, ms) =>
-          env.schedule(fn, ms),
-        );
-      sessions.set(route.id, session);
-    }
-    const openAtTail = requestsConversationTail(route);
     try {
+      if (route.view && files) {
+        const opening = files.takePrepared(route);
+        if (opening) return files.render(route, opening.scope, opening);
+        const conversation = await getConversation(route.id);
+        const root = conversation.parentConversationId
+          ? await getConversation(conversation.parentConversationId)
+          : conversation;
+        controller.update({});
+        return files.render(route, root);
+      }
+      let session = sessions.get(route.id);
+      if (!session) {
+        session = new ConversationSession(route.id, api, controller, env);
+        if (recap)
+          session.recap = new RecapSession(session, recap.api, recap.storage, (fn, ms) =>
+            env.schedule(fn, ms),
+          );
+        sessions.set(route.id, session);
+      }
       currentSession = session;
       session.recap?.visibility(visible);
       await session.load();
+      const parent = session.snapshot().data?.conversation.parentConversationId;
+      if (files && parent && !storedConversation(parent)) await getConversation(parent);
+      if (files) controller.update({});
       loadedSessions.add(session);
-      return conversationScreen(session, openAtTail);
+      return conversationScreen(session, route);
     } catch (error) {
       const code = error instanceof ConversationApiError ? error.code : "network_error";
+      const cachedSession = sessions.get(route.id);
       return {
         kind: "error",
         error: {
           code,
           message: error instanceof Error ? error.message : "会話を取得できませんでした",
         },
-        ...(code === "network_error" && openAtTail && loadedSessions.has(session)
-          ? { cached: conversationScreen(session, false) }
+        ...(code === "network_error" &&
+        openAtTail &&
+        cachedSession &&
+        loadedSessions.has(cachedSession)
+          ? { cached: conversationScreen(cachedSession, route, false) }
           : {}),
       };
     }
@@ -226,6 +308,7 @@ export function createConversationWorkspace(
     loadScreen,
     connection,
     renderRight: (view: RightView) => {
+      if (view.view === "file-tree") return files?.tree(view.target) ?? null;
       if (["recent", "toc", "decisions", "recap-search"].includes(view.view)) {
         const recap = sessions.get(view.target)?.recap;
         return recap ? (
@@ -259,6 +342,7 @@ export function createConversationWorkspace(
       const unsubscribeApp =
         settingsChanged || notifications ? realtime.subscribe("app") : undefined;
       const unsubscribeInbox = inbox ? realtime.subscribe("inbox") : undefined;
+      const stopFiles = files?.start();
       realtime.start();
       return () => {
         unregister();
@@ -267,6 +351,7 @@ export function createConversationWorkspace(
         removeCommandHelp();
         unsubscribeApp?.();
         unsubscribeInbox?.();
+        stopFiles?.();
         realtime.stop();
       };
     },

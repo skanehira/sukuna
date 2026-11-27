@@ -1,8 +1,12 @@
 import { BufferController } from "../buffer/controller";
 import { browserClipboard } from "../buffer/clipboard";
 import { PositionStore } from "../buffer/position-store";
-import { parseRoute, type Route } from "./routes";
+import { openRoute, parseRoute, type Route } from "./routes";
 import { z } from "zod";
+const historyState = z.object({
+  sukunaDepth: z.number().int().nonnegative(),
+  sukunaEntry: z.string().optional(),
+});
 export function createBrowserController(
   browser: Window,
   open: (route: Route) => void,
@@ -13,23 +17,27 @@ export function createBrowserController(
       return () => browser.clearTimeout(id);
     },
   });
-  let depth =
-    z.object({ sukunaDepth: z.number().int().nonnegative() }).safeParse(browser.history.state).data
-      ?.sukunaDepth ?? 0;
-  browser.history.replaceState({ sukunaDepth: depth }, "");
+  const initial = historyState.safeParse(browser.history.state).data;
+  let depth = initial?.sukunaDepth ?? 0;
+  const stateFor = (entry?: string) => ({
+    sukunaDepth: depth,
+    ...(entry === undefined ? {} : { sukunaEntry: entry }),
+  });
+  browser.history.replaceState(stateFor(initial?.sukunaEntry), "");
   const controller = new BufferController({
     positions,
     url: `${browser.location.pathname}${browser.location.search}`,
-    navigate(url) {
+    entry: initial?.sukunaEntry,
+    navigate(url, entry) {
       const current = parseRoute(`${browser.location.pathname}${browser.location.search}`);
       const next = parseRoute(url);
       if (current.kind === "issue" && next.kind === "issue" && current.id === next.id)
-        browser.history.replaceState({ sukunaDepth: depth }, "", url);
+        browser.history.replaceState(stateFor(entry), "", url);
       else {
         depth += 1;
-        browser.history.pushState({ sukunaDepth: depth }, "", url);
+        browser.history.pushState(stateFor(entry), "", url);
       }
-      display(url);
+      display(url, entry);
     },
     back() {
       if (depth === 0) return false;
@@ -43,29 +51,35 @@ export function createBrowserController(
     browser.isSecureContext,
     controller.notify,
   );
-  const display = (url: string, initial = false) => {
+  const display = (url: string, entry?: string, initial = false) => {
     const route = parseRoute(url);
-    if (!initial) {
+    const destination = route.kind === "conversation" && route.view ? route.view : route.kind;
+    if (!initial || ["grep", "files", "changes"].includes(destination)) {
       const previous = controller.right.current;
-      controller.right.navigate(route.view === "file" ? "file" : route.kind, route.id ?? "");
+      controller.right.navigate(destination, route.id ?? "");
       controller.positions.setRight(controller.right.state());
       controller.update({});
-      if (previous && !controller.right.current && !route.thread) controller.focus("main");
+      if (previous && !controller.right.current && !route.thread) {
+        if (controller.snapshot().active === "right") {
+          controller.positions.setActive("main");
+          controller.update({ active: "main" });
+        }
+        controller.focus("main");
+      }
     }
     if (route.thread) controller.openRight({ view: "thread", target: route.thread });
-    open(route);
+    openRoute(url, open, entry);
   };
   const pop = () => {
-    depth =
-      z.object({ sukunaDepth: z.number().int().nonnegative() }).safeParse(browser.history.state)
-        .data?.sukunaDepth ?? 0;
+    const state = historyState.safeParse(browser.history.state).data;
+    depth = state?.sukunaDepth ?? 0;
     const url = `${browser.location.pathname}${browser.location.search}`;
-    controller.changeScreen(url);
-    display(url);
+    controller.changeScreen(url, state?.sukunaEntry, true);
+    display(url, state?.sukunaEntry);
   };
   browser.addEventListener("pagehide", positions.flush);
   browser.addEventListener("popstate", pop);
-  display(`${browser.location.pathname}${browser.location.search}`, true);
+  display(`${browser.location.pathname}${browser.location.search}`, initial?.sukunaEntry, true);
   return {
     controller,
     dispose() {

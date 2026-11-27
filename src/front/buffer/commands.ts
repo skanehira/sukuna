@@ -1,7 +1,7 @@
 import type { ActionRegistry, KeymapEntry } from "./keymap/registry";
 import { normalizeKeys, parseKeys } from "./keymap/notation";
 export type CommandInfo = { name: string; label: string; where?: string };
-export type CommandDef = CommandInfo & { run(args: string[]): void | Promise<void> };
+export type CommandDef = CommandInfo & { run(args: string[], raw: string): void | Promise<void> };
 export class CommandRetry extends Error {
   readonly run: () => Promise<void>;
   constructor(message: string, run: () => Promise<void>) {
@@ -101,7 +101,11 @@ export async function executeCommand(input: string, env: CommandEnvironment): Pr
   }
   const command = env.commands.get(name);
   if (command) {
-    await command.run(args);
+    const raw = input
+      .trimStart()
+      .replace(/^:/, "")
+      .slice(name.length + 1);
+    await command.run(args, raw);
     return;
   }
   env.notify(`コマンド :${name} はありません。:h で一覧を見られます`, "error");
