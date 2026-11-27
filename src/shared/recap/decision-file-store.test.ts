@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -38,7 +39,7 @@ describe("決まったことのファイルの保存", () => {
       replaceDecisionItems(content, [item]),
     );
     const content =
-      "# 決まったこと: 予約 API\n\n- 種別: 決定台帳\n- 会話: c\n\n- [決定] D1: 決めたこと <!-- seq=4 -->\n";
+      '<!-- sukuna-decisions:v2 -->\n# 決まったこと: 予約 API\n\n- 種別: 決定台帳\n- 会話: c\n\n- [決定] D1: "決めたこと" <!-- seq=4 -->\n';
     expect(saved._unsafeUnwrap()).toEqual({
       path: "docs/decisions/c.md",
       exists: true,
@@ -77,7 +78,9 @@ describe("決まったことのファイルの保存", () => {
       replaceDecisionItems(content, [item]),
     );
     expect(saved._unsafeUnwrap().items).toEqual([item]);
-    expect(readFileSync(file, "utf8")).toBe("手書き 2\n- [決定] D1: 決めたこと <!-- seq=4 -->\n");
+    expect(readFileSync(file, "utf8")).toBe(
+      '<!-- sukuna-decisions:v2 -->\n手書き 2\n- [決定] D1: "決めたこと" <!-- seq=4 -->\n',
+    );
     expect(writes()).toBe(3);
     expect(readdirSync(dirname(file))).toEqual(["c.md"]);
   });
@@ -140,6 +143,12 @@ describe("決まったことのファイルの保存", () => {
     });
     expect(readFileSync(file, "utf8")).toBe("元の文\n");
     expect(readdirSync(dirname(file))).toEqual(["c.md"]);
+    expect(
+      createDecisionFileStore()
+        .update(root, "c", "予約 API", (content) => replaceDecisionItems(content, [item]))
+        ._unsafeUnwrap().items,
+    ).toEqual([item]);
+    expect(readdirSync(dirname(file))).toEqual(["c.md"]);
   });
   it("項目を足して直しても理由に含む区切りの文は保たれる", () => {
     const store = createDecisionFileStore();
@@ -148,5 +157,39 @@ describe("決まったことのファイルの保存", () => {
       replaceDecisionItems(content, [decision]),
     );
     expect(parseDecisionFile(saved._unsafeUnwrap().content)).toEqual([decision]);
+  });
+  it.each(["file", "parent", "project"])(
+    "%s のアクセス拒否は不存在にせず内部エラーにする",
+    (target) => {
+      const store = createDecisionFileStore();
+      expect(store.read(root, "c")._unsafeUnwrap()).toEqual({
+        path: "docs/decisions/c.md",
+        exists: false,
+        hash: null,
+        content: "",
+        items: [],
+      });
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, "手書き\n");
+      const path = target === "file" ? file : target === "parent" ? dirname(file) : root;
+      const mode = statSync(path).mode;
+      try {
+        chmodSync(path, 0);
+        expect(store.read(root, "c")._unsafeUnwrapErr()).toEqual({
+          code: "internal",
+          message: `決まったことのファイルを読めませんでした (${root})。パスとアクセス権を確認してください。`,
+        });
+      } finally {
+        chmodSync(path, mode);
+      }
+      expect(store.read(root, "c")._unsafeUnwrap().content).toBe("手書き\n");
+    },
+  );
+  it("途中のパスが通常ファイルなら不存在にせず内部エラーにする", () => {
+    writeFileSync(join(root, "docs"), "ディレクトリではない");
+    expect(createDecisionFileStore().read(root, "c")._unsafeUnwrapErr()).toEqual({
+      code: "internal",
+      message: `決まったことのファイルを読めませんでした (${root})。パスとアクセス権を確認してください。`,
+    });
   });
 });

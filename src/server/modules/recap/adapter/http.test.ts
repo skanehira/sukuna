@@ -293,18 +293,25 @@ describe("会話の直近・目次・決まったこと API", () => {
     ]);
   });
   it("既読は増やす方向に last_seq まで進め、位置は後着の端末の値にする", async () => {
-    for (const body of [
-      { readSeq: 12, position: 10 },
-      { readSeq: 3, position: 2 },
-      { readSeq: 50 },
-      {},
-    ])
+    for (const [body, expected] of [
+      [
+        { readSeq: 12, position: 10 },
+        { last_read_seq: 12, last_position: 10 },
+      ],
+      [
+        { readSeq: 3, position: 2 },
+        { last_read_seq: 12, last_position: 2 },
+      ],
+      [{ readSeq: 50 }, { last_read_seq: 20, last_position: 2 }],
+      [{}, { last_read_seq: 20, last_position: 2 }],
+    ]) {
       expect((await request("c/read", "POST", body)).status).toBe(204);
-    expect(
-      database.sqlite
-        .prepare("SELECT last_read_seq,last_position FROM conversations WHERE id='c'")
-        .get(),
-    ).toEqual({ last_read_seq: 20, last_position: 2 });
+      expect(
+        database.sqlite
+          .prepare("SELECT last_read_seq,last_position FROM conversations WHERE id='c'")
+          .get(),
+      ).toEqual(expected);
+    }
     expect(notices).toEqual(["c", "c", "c", "c"]);
   });
   it("目次は章の範囲の現在の決定だけ返す", async () => {
@@ -313,7 +320,7 @@ describe("会話の直近・目次・決まったこと API", () => {
       .run();
     writeFileSync(
       file,
-      `${line}- [決定] D2: 古い → D3 <!-- seq=5 -->\n- [保留] D3: 保留 <!-- seq=6 -->\n- [決定] D4: 新しい <!-- seq=10 -->\n- [決定] D5: 手書き\n`,
+      `${line}- [決定] D2: 古い → D3 <!-- seq=5 -->\n- [保留] D3: 保留 <!-- seq=6 -->\n- [決定] D4: 新しい <!-- seq=10 -->\n- [決定] D5: 手書き\n- [決定] D6: 章末の決定 <!-- seq=9 -->\n`,
     );
     const response = await request("c/toc");
     expect(tocResponseSchema.parse(await response.json())).toEqual({
@@ -323,7 +330,10 @@ describe("会話の直近・目次・決まったこと API", () => {
           title: "最初",
           startSeq: 1,
           endSeq: 9,
-          decisions: [{ id: "D1", text: "24 時間前" }],
+          decisions: [
+            { id: "D1", text: "24 時間前" },
+            { id: "D6", text: "章末の決定" },
+          ],
         },
         {
           position: 2,
@@ -414,7 +424,8 @@ describe("会話の直近・目次・決まったこと API", () => {
       baseHash: hash(source),
       items: [edited],
     });
-    const updated = "# 手書きの題名\n- [保留] D1: 12 時間前 — 再検討 <!-- seq=4 -->\n手書きの文\n";
+    const updated =
+      '<!-- sukuna-decisions:v2 -->\n# 手書きの題名\n- [保留] D1: "12 時間前" — "再検討" <!-- seq=4 -->\n手書きの文\n';
     expect(response.status).toBe(200);
     expect(decisionsResponseSchema.parse(await response.json())).toEqual({
       path: "docs/decisions/c.md",
@@ -435,10 +446,15 @@ describe("会話の直近・目次・決まったこと API", () => {
     expect((await request("c/decisions", "PUT", { baseHash: hash(line), items: [] })).status).toBe(
       200,
     );
-    expect(readFileSync(file, "utf8")).toBe("");
-    const restored = await request("c/decisions", "PUT", { baseHash: hash(""), items: [item] });
+    expect(readFileSync(file, "utf8")).toBe("<!-- sukuna-decisions:v2 -->\n");
+    const restored = await request("c/decisions", "PUT", {
+      baseHash: hash("<!-- sukuna-decisions:v2 -->\n"),
+      items: [item],
+    });
     expect(restored.status).toBe(200);
-    expect(readFileSync(file, "utf8")).toBe(line);
+    expect(readFileSync(file, "utf8")).toBe(
+      '<!-- sukuna-decisions:v2 -->\n- [決定] D1: "24 時間前" <!-- seq=4 -->\n',
+    );
     writeFileSync(file, line.replace("24", "48"));
     expect(await (await request("c/decisions")).json()).toEqual({
       path: "docs/decisions/c.md",
@@ -455,6 +471,47 @@ describe("会話の直近・目次・決まったこと API", () => {
       await (await request("c/decisions", "PUT", { baseHash: null, items: [] })).json(),
     ).toEqual(expected);
   });
+  it.each([false, true])(
+    "ファイル形式 %s の上限内の項目だけを API に返し、契約外の原文は保存でも残す",
+    async (quoted) => {
+      const valid = {
+        ...item,
+        id: "D9007199254740993",
+        text: "🙂".repeat(200),
+        reason: "",
+        seq: Number.MAX_SAFE_INTEGER,
+      };
+      const line = (text: string, reason: string | null, seq: string, id = "D9") =>
+        `- [決定] ${id}: ${quoted ? JSON.stringify(text) : text}${reason === null ? "" : ` — ${quoted ? JSON.stringify(reason) : reason}`} <!-- seq=${seq} -->`;
+      const invalid = [
+        line("🙂".repeat(201), null, "1"),
+        line("本文", "🙂".repeat(201), "1"),
+        line("本文", null, "9007199254740993"),
+        line("本文", null, "9".repeat(400)),
+      ];
+      const source = `${quoted ? "<!-- sukuna-decisions:v2 -->\n" : ""}${line(valid.text, valid.reason, String(valid.seq), valid.id)}\n${invalid.join("\n")}\n`;
+      writeFileSync(file, source);
+      const expected = {
+        path: "docs/decisions/c.md",
+        exists: true,
+        hash: hash(source),
+        items: [valid],
+        state,
+      };
+      expect(decisionsResponseSchema.parse(await (await request("c/decisions")).json())).toEqual(
+        expected,
+      );
+      const saved = await request("c/decisions", "PUT", { baseHash: hash(source), items: [valid] });
+      expect(saved.status).toBe(200);
+      const updated = readFileSync(file, "utf8");
+      expect(decisionsResponseSchema.parse(await saved.json())).toEqual({
+        ...expected,
+        hash: hash(updated),
+      });
+      for (const original of invalid)
+        expect(updated.split("\n").filter((line) => line === original)).toEqual([original]);
+    },
+  );
   it.each(
     [
       [{ ...item, text: "" }],
@@ -475,6 +532,11 @@ describe("会話の直近・目次・決まったこと API", () => {
     { text: "内容 <!-- seq=99 -->", reason: null },
     { text: "改行\n行", reason: null },
     { text: "本文", reason: "理由 <!-- seq=99 -->" },
+    {
+      text: '本文 "引用"\n次の行 — 文 → D9 <!-- seq=90 -->',
+      reason: '理由 "引用"\r\n次の行 — 理由 → D8 <!-- seq=80 -->',
+    },
+    { text: "本文", reason: "" },
   ])(
     "許可される内容と理由 %j を保存しても同じ項目として読み直せ、手書き行を残す",
     async (values) => {
@@ -486,19 +548,19 @@ describe("会話の直近・目次・決まったこと API", () => {
         items: [edited],
       });
       expect(saved.status).toBe(200);
-      expect(
-        readFileSync(file, "utf8")
-          .split("\n")
-          .filter((line) => line === "# 手書きの題名" || line === "手で書いた文"),
-      ).toEqual(["# 手書きの題名", "手で書いた文"]);
-      const response = await request("c/decisions");
-      expect(decisionsResponseSchema.parse(await response.json())).toEqual({
+      expect(readFileSync(file, "utf8")).toBe(
+        `<!-- sukuna-decisions:v2 -->\n# 手書きの題名\n- [決定] D1: ${JSON.stringify(edited.text)}${edited.reason === null ? "" : ` — ${JSON.stringify(edited.reason)}`} <!-- seq=4 -->\n手で書いた文\n`,
+      );
+      const expected = {
         path: "docs/decisions/c.md",
         exists: true,
         hash: hash(readFileSync(file, "utf8")),
         items: [edited],
         state,
-      });
+      };
+      expect(decisionsResponseSchema.parse(await saved.json())).toEqual(expected);
+      const response = await request("c/decisions");
+      expect(decisionsResponseSchema.parse(await response.json())).toEqual(expected);
     },
   );
   it("読めないプロジェクトのパスを内部エラーに含める", async () => {

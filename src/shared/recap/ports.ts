@@ -21,3 +21,11 @@ export interface DecisionFileStore {
     baseHash?: string | null,
   ): Result<DecisionSnapshot, RecapError>;
 }
+
+export interface DecisionFileLock {
+  run<T>(
+    projectPath: string,
+    relativePath: string,
+    operation: () => Result<T, RecapError>,
+  ): Result<T, RecapError>;
+}

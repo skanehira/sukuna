@@ -1,17 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { err, ok, Result } from "neverthrow";
 import { parseDecisionFile } from "./decision-file";
-import type { DecisionFileStore, DecisionSnapshot, RecapError } from "./ports";
+import { createDecisionFileLock } from "./decision-file-lock";
+import type { DecisionFileLock, DecisionFileStore, DecisionSnapshot, RecapError } from "./ports";
 
 type FileIO = {
   read(path: string): string | null;
@@ -22,7 +15,14 @@ type FileIO = {
   temporary(path: string): string;
 };
 const nodeIO: FileIO = {
-  read: (path) => (existsSync(path) ? readFileSync(path, "utf8") : null),
+  read: (path) => {
+    try {
+      return readFileSync(path, "utf8");
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+      throw error;
+    }
+  },
   directory: (path) => {
     if (!statSync(path).isDirectory())
       throw new Error("プロジェクトのパスがディレクトリではありません");
@@ -45,7 +45,10 @@ function snapshot(path: string, content: string | null): DecisionSnapshot {
     items: parseDecisionFile(content ?? ""),
   };
 }
-export function createDecisionFileStore(io: FileIO = nodeIO): DecisionFileStore {
+export function createDecisionFileStore(
+  io: FileIO = nodeIO,
+  lock: DecisionFileLock = createDecisionFileLock(),
+): DecisionFileStore {
   function read(projectPath: string, conversationId: string) {
     return Result.fromThrowable(
       () => {
@@ -63,53 +66,59 @@ export function createDecisionFileStore(io: FileIO = nodeIO): DecisionFileStore 
   }
   return {
     read,
-    update: (projectPath, conversationId, title, transform, baseHash) => {
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        const current = read(projectPath, conversationId);
-        if (current.isErr()) return err(current.error);
-        if (baseHash !== undefined && current.value.hash !== baseHash)
-          return err({
-            code: "conflict",
-            message: "決まったことのファイルが変わりました。読み直して、もう一度保存してください。",
-          });
-        const original = current.value.content;
-        const updated = transform(original);
-        if (updated === original) return current;
-        const content = current.value.exists
-          ? updated
-          : `# 決まったこと: ${title.replace(/[\r\n]/g, " ")}\n\n- 種別: 決定台帳\n- 会話: ${conversationId}\n\n${updated}`;
-        const path = join(projectPath, current.value.path);
-        const temporary = io.temporary(path);
-        const write = Result.fromThrowable(
-          () => {
-            io.write(temporary, content);
-            const latest = read(projectPath, conversationId);
-            if (latest.isErr()) return err(latest.error);
-            if (latest.value.hash !== current.value.hash) return ok(false);
-            io.rename(temporary, path);
-            return ok(true);
-          },
-          (): RecapError => ({
-            code: "internal",
-            message: `決まったことのファイルを保存できませんでした (${path})。パスとアクセス権を確認してください。`,
-          }),
-        )().andThen((result) => result);
-        const cleanup = Result.fromThrowable(
-          () => io.remove(temporary),
-          (): RecapError => ({
-            code: "internal",
-            message: `一時ファイルを削除できませんでした (${temporary})。アクセス権を確認してください。`,
-          }),
-        )();
-        if (write.isErr()) return err(write.error);
-        if (cleanup.isErr()) return err(cleanup.error);
-        if (write.value) return ok(snapshot(current.value.path, content));
-      }
-      return err({
-        code: "conflict",
-        message:
-          "決まったことのファイルの変更が続いています。読み直して、もう一度保存してください。",
-      });
-    },
+    update: (projectPath, conversationId, title, transform, baseHash) =>
+      lock.run(projectPath, `docs/decisions/${conversationId}.md`, () => {
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          const current = read(projectPath, conversationId);
+          if (current.isErr()) return err(current.error);
+          if (baseHash !== undefined && current.value.hash !== baseHash)
+            return err({
+              code: "conflict",
+              message:
+                "決まったことのファイルが変わりました。読み直して、もう一度保存してください。",
+            });
+          const original = current.value.content;
+          const source = current.value.exists
+            ? original
+            : `# 決まったこと: ${title.replace(/[\r\n]/g, " ")}\n\n- 種別: 決定台帳\n- 会話: ${conversationId}\n\n`;
+          const content = transform(source);
+          if (
+            content === original ||
+            (!current.value.exists && parseDecisionFile(content).length === 0)
+          )
+            return current;
+          const path = join(projectPath, current.value.path);
+          const temporary = io.temporary(path);
+          const write = Result.fromThrowable(
+            () => {
+              io.write(temporary, content);
+              const latest = read(projectPath, conversationId);
+              if (latest.isErr()) return err(latest.error);
+              if (latest.value.hash !== current.value.hash) return ok(false);
+              io.rename(temporary, path);
+              return ok(true);
+            },
+            (): RecapError => ({
+              code: "internal",
+              message: `決まったことのファイルを保存できませんでした (${path})。パスとアクセス権を確認してください。`,
+            }),
+          )().andThen((result) => result);
+          const cleanup = Result.fromThrowable(
+            () => io.remove(temporary),
+            (): RecapError => ({
+              code: "internal",
+              message: `一時ファイルを削除できませんでした (${temporary})。アクセス権を確認してください。`,
+            }),
+          )();
+          if (write.isErr()) return err(write.error);
+          if (cleanup.isErr()) return err(cleanup.error);
+          if (write.value) return ok(snapshot(current.value.path, content));
+        }
+        return err({
+          code: "conflict",
+          message:
+            "決まったことのファイルの変更が続いています。読み直して、もう一度保存してください。",
+        });
+      }),
   };
 }
