@@ -135,6 +135,8 @@ issue の中の「設計」の表示である (UI_SKETCH.html の `pc-issue-desi
 
 ランナーの `flow` は、設計のブランチの先頭が変わらないように Git の参照をロックし、最新の状態を確かめて `design_approved` を記録する。IPC の期限内に記録したら応答を返し、反映を始める。1 つの issue で同時に受け付ける承認は 1 件までとする。
 
+ランナーは、Git で承認対象の版を確認する前にプロジェクトを予約する。反映の結果保存と作業場所の片付けが終わるまで、同じプロジェクトの登録解除を断る。先に解除を始めた場合は、承認を記録する前に 409 を返す。PR では作成を記録し、merge を頼む指示の処理を終えたら予約を解く。PR の merge を待つ間は登録を解除できる。
+
 **設計書の変更が無いとき** (`baseCommit` から `headCommit` の差分が空):
 
 1. `design_reflected` を記録し、issue を実装待ちにする
@@ -253,7 +255,7 @@ issue の中の「設計」の表示である (UI_SKETCH.html の `pc-issue-desi
 
 - リクエスト: `{ "headCommit": "3f2a9c1..." }`
 - 応答: 202 `{ "status": "reflecting" }`。設計書の変更が無いときも同じ形で返し、すぐに実装待ちへ移る
-- 409 `conflict`: 設計レビューではない / 反映中 / `headCommit` が最新の設計と違う。`message` に読み直しや待つことを書く
+- 409 `conflict`: 設計レビューではない / 反映中 / `headCommit` が最新の設計と違う / プロジェクトの登録を解除中。`message` に読み直しや待つことを書く
 - 503 `runner_unavailable`: 承認を記録する前にランナーとの接続が切れたか、期限を過ぎた
 
 ### POST `/api/issues/:id/design/reject`
