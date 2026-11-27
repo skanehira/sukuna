@@ -149,9 +149,9 @@
 ### GitHub の issue の取り込み
 
 1. 設定の画面のメニュー「GitHub の issue を下書きとして取り込む」で、主のウィンドウに取り込みの画面を開く
-2. `gh issue list --state open --limit 200 --json number,title,labels,createdAt,url` の結果を、番号の大きい順に並べる。列は「番号と題名 / ラベル / 作った日 / 取り込み」とする。取り込み済みの行は「取り込み済み」と出し、薄くする。200 件あれば「新しい 200 件だけを並べています」を出す
+2. `gh issue list --state open --limit 200 --json number,title,labels,createdAt,url` に、`--repo` で `origin` のリポジトリを指定する。結果を番号の大きい順に並べる。列は「番号と題名 / ラベル / 作った日 / 取り込み」とする。取り込み済みの行は「取り込み済み」と出し、薄くする。200 件あれば「新しい 200 件だけを並べています」を出す
 3. カーソルの行か、V で選んだ範囲の行を、メニュー「選んだ issue を下書きとして取り込む」で取り込む
-4. 選んだ番号ごとに `gh issue view <番号> --json number,title,body,state,url` で最新の内容を取り、open のものだけを下書きの issue として作る。本文の末尾に「GitHub から取り込んだ issue: <URL>」を足し、`issues.github_number` に番号を記録する
+4. 選んだ番号ごとに `gh issue view <番号> --json number,title,body,state,url` に同じ `--repo` を付けて最新の内容を取り、open のものだけを下書きの issue として作る。本文の末尾に「GitHub から取り込んだ issue: <URL>」を足し、`issues.github_number` に番号を記録する
 5. 結果を「3 件を下書きとして取り込みました (取り込み済みの 1 件は飛ばしました)」のお知らせに出し、一覧を取り直す
 
 - 取り込み済みとは、そのプロジェクトに同じ `github_number` の issue があることを指す
@@ -180,12 +180,13 @@
 
 **プロジェクトと issue ごとの利用量**:
 
-- 番の終わりの記録 (`conversation_events` の `turn_end`) の `usage` (`input`、`output`、`cache_creation`、`cache_read` のトークン数) と `cost_usd` を集める。Agent SDK のメッセージからの写し方は `features/runtime.md`「Agent SDK のメッセージからの写し方」に従う
-- 表のトークン数は、入力、出力、キャッシュの作成、キャッシュの読み取りの合計とする
-- スレッドの利用量は、元の会話を辿り、いちばん上の会話の issue とプロジェクトに数える
-- 期間は、イベントの `created_at` が「今の時刻 − 5 時間」以降か、「今の時刻 − 7 日」以降かで分ける
+- 番の終わりの記録 (`conversation_events` の `turn_end`) を集計する。目次など、会話の番に記録しない処理の利用量は含めない
+- トークン数は各番の入力、出力、キャッシュの作成、キャッシュの読み取りの合計とする
+- 料金は、同じ会話で前の番が返した累計との差を数える。最初の番か、累計が減ってリセットされた番では、その番の値を使う
+- 利用量の期間には、イベントの `created_at` が「今の時刻 − 5 時間」か「今の時刻 − 7 日」ちょうどを含む。直前の番が期間外でも、料金の差を出す基準には使う
+- スレッドの利用量は、元の会話を辿り、いちばん上の会話の issue とプロジェクトに数える。料金の差は各スレッドで求める
 
-<!-- POC_NEEDED: id=usage-per-turn, scope=番の終わりのイベントが持つトークンの数と料金が、1 回の番の値か、実行を始めてからの累計かを確かめる, risk=low, blocker=false -->
+トークンと料金の値の意味は [FEASIBILITY.md「PoC 結果 > usage-per-turn」](../FEASIBILITY.md#usage-per-turn--verified-confidence-095) に従う。記録する値の形は `features/runtime.md`「Agent SDK のメッセージからの写し方」を参照する。
 
 ## API
 

@@ -544,7 +544,7 @@ UC-001〜UC-016 の全部を対象にする。Mac Studio に常駐し、Claude C
 - 失敗 → 会話の記録をアプリの側へ複製し、消えた会話は要約を付けた新しい会話で続ける
 
 ### PoC: 番ごとの利用量
-<!-- POC_STATUS: id=usage-per-turn, blocker=false, status=unresolved -->
+<!-- POC_STATUS: id=usage-per-turn, blocker=false, status=verified, confidence=0.95 -->
 
 **id**: usage-per-turn
 **目的**: 番の終わりのイベントが持つトークンの数と料金が、1 回の番の値か、実行を始めてからの累計かを確かめる
@@ -626,6 +626,13 @@ UC-001〜UC-016 の全部を対象にする。Mac Studio に常駐し、Claude C
 2. [x] blocker=false の PoC 3 件を検証する
 
 ## PoC 結果
+
+### usage-per-turn — verified (confidence 0.95)
+- 検証日: 2026-11-28
+- 観測した事実: Claude Agent SDK 0.3.332 と Claude Code 2.1.332 を使い、既知のトークン数を返すローカル Messages API に接続した。同じ実行で 2 番を送り、同じ会話の再開と、その会話から分岐したスレッドでも各 1 番を送った。4 番の `result.usage` の入力は 201、102、53、43 で、各番の応答と一致した。出力とキャッシュの作成・読み取りも各番の応答に一致した。同じ会話の `result.total_cost_usd` は 0.00036335、0.00052980、0.00062445 で、再開をまたいで累計になった。分岐先の最初は 0.00007445 で、その番の料金だけだった
+- 結論: トークン数は番ごと、料金は会話ごとの累計だった。スレッドには元の会話の料金が継承されなかった。既知の応答を使って SDK の集計を検証した
+- 推奨アプローチ: トークンは各番の値を足す。料金は、同じ会話の前の番との差を足す。集計の開始時刻より前の番も料金の差の基準にする。スレッドの料金の差を求めてから、元の会話の利用量に足す
+
 
 ### agent-sdk-conversation — verified (confidence 0.88)
 - 検証日: 2026-11-26
