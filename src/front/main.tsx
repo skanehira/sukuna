@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import "./index.css";
 import { App } from "./App";
 import { createBrowserController } from "./lib/browser";
+import { createBuildCheck } from "./lib/build-check";
 import { parseRoute } from "./lib/routes";
 import { AuthenticationGuard, createIdentityLoader } from "./shell/AuthenticationGuard";
 import { createNavigation } from "./shell/navigation";
@@ -58,6 +59,11 @@ const timer = {
   },
 };
 const notices = createNotices(timer);
+const buildCheck = createBuildCheck({
+  build: __SUKUNA_BUILD_ID__,
+  show: notices.showUpdate,
+});
+const stopWatchingChunks = buildCheck.watchChunks(window);
 controller.options.notify = notices.notify;
 const notifications = createBrowserNotifications({
   notify: notices.notify,
@@ -117,7 +123,7 @@ const conversations = createConversationWorkspace(
   {
     inbox,
     files: createFilesApi(request),
-    verifyConnection: restoreConnection.verify,
+    verifyConnection: (signal) => restoreConnection.verify(signal, buildCheck.observe),
     recap: { api: createRecapApi(request), storage: window.sessionStorage },
     lifecycle: {
       api: createLifecycleApi(request),
@@ -182,6 +188,7 @@ const dismissNotice = (event: KeyboardEvent) => {
 window.addEventListener("keydown", dismissNotice);
 import.meta.hot?.dispose(() => {
   window.removeEventListener("keydown", dismissNotice);
+  stopWatchingChunks();
   notices.dispose();
   window.removeEventListener("pagehide", pagehide);
   stopSettingsCommands();

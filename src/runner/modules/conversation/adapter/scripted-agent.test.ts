@@ -109,3 +109,26 @@ describe("台本型の AI", () => {
     }
   });
 });
+
+it("台本の連続出力を指定回数だけ送り、停止した場合は残りを送らない", async () => {
+  const agent = new ScriptedAgent({
+    rules: [],
+    fallback: [{ stream: { prefix: "出力 ", count: 3, interval_ms: 2 } }, { end: "success" }],
+  });
+  const session = agent.open(params);
+  const output = session.output[Symbol.asyncIterator]();
+  try {
+    session.send({ text: "run", images: [] });
+    expect(
+      (await turn(output)).flatMap((event) =>
+        event.kind === "assistant_text" ? [event.text] : [],
+      ),
+    ).toEqual(["出力 1", "出力 2", "出力 3"]);
+
+    session.send({ text: "cancel", images: [] });
+    await session.interrupt();
+    expect((await turn(output)).map((event) => event.kind)).toEqual(["turn_end"]);
+  } finally {
+    session.close();
+  }
+});

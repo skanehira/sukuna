@@ -1,6 +1,11 @@
 import { useSyncExternalStore } from "react";
 
-export type NoticeSnapshot = { error: string | null; info: string | null; result?: string };
+export type NoticeSnapshot = {
+  error: string | null;
+  info: string | null;
+  result?: string;
+  update?: string;
+};
 export type TimerPort = { schedule(callback: () => void, ms: number): () => void };
 export type NoticePort = ReturnType<typeof createNotices>;
 
@@ -30,12 +35,18 @@ export function createNotices(timer: TimerPort) {
     replaceInfoWithResult(previous: string, message: string, kind: "info" | "error") {
       const info = state.info === previous ? null : state.info;
       if (info === null) cancel?.();
-      update(
-        kind === "error" ? { info, error: message } : { info, error: state.error, result: message },
-      );
+      const next = { ...state, info };
+      if (kind === "error") {
+        next.error = message;
+        delete next.result;
+      } else {
+        next.result = message;
+      }
+      update(next);
     },
+    showUpdate: (message: string) => update({ ...state, update: message }),
     dismissError: () => {
-      update({ info: state.info, error: null });
+      update({ error: null, info: state.info });
     },
     dispose: () => {
       cancel?.();
@@ -47,6 +58,15 @@ export function Notices({ notices }: { notices: NoticePort }) {
   const state = useSyncExternalStore(notices.subscribe, notices.snapshot);
   return (
     <div className="pointer-events-none absolute bottom-9 right-2 z-20 flex max-w-[calc(100%-1rem)] flex-col gap-2 text-[13px]">
+      {state.update !== undefined ? (
+        <div
+          role="alert"
+          aria-label="アプリの更新"
+          className="rounded-md border border-wait/30 bg-surface px-4 py-3 text-wait shadow-lg break-words"
+        >
+          {state.update}
+        </div>
+      ) : null}
       {state.error !== null ? (
         <div
           role="alert"
