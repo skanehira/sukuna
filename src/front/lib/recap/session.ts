@@ -9,7 +9,7 @@ import type { Event, Snapshot } from "../conversation/types";
 import { ConversationApiError } from "../conversation/api";
 import { eventLines } from "../conversation/lines";
 import type { RecapApi } from "./api";
-import { recapAction, recapActions, recapCommands } from "./keymap";
+import { recapAction, recapActions, recapCommands, recapItemActions } from "./keymap";
 import { openPosition } from "./open-position";
 import {
   forgetOpening,
@@ -159,13 +159,13 @@ export class RecapSession {
         controller.openRight({ view: "recap-search", target: this.conversation.id });
       }),
     );
-    for (const [name, label, run] of [
-      ["item.edit", "直す", () => this.edit()],
-      ["item.delete", "消す", () => this.remove()],
-      ["item.undo", "戻す", () => this.restore()],
+    for (const [action, run] of [
+      [recapItemActions.edit, () => this.edit()],
+      [recapItemActions.delete, () => this.remove()],
+      [recapItemActions.undo, () => this.restore()],
     ] as const) {
-      const old = controller.actions.get(name);
-      register(recapAction(name, label, ["conversation", "toc", "decisions"]), () =>
+      const old = controller.actions.get(action.name);
+      register({ ...action, views: ["conversation", ...action.views] }, () =>
         controller.context().view === "conversation" ? old?.run(controller.context()) : run(),
       );
       if (old)

@@ -58,7 +58,7 @@ export class ActionRegistry {
     };
   }
   describe(name: string): ActionInfo | undefined {
-    return this.actions.get(name) ?? this.help.get(name);
+    return this.help.get(name) ?? this.actions.get(name);
   }
   get(name: string): ActionDef | undefined {
     return this.actions.get(name);
@@ -74,7 +74,10 @@ export class ActionRegistry {
   };
   snapshot = (): ActionInfo[] => this.current;
   private emit(): void {
-    this.current = [...new Map<string, ActionInfo>([...this.help, ...this.actions]).values()];
+    const descriptions = new Map(this.help);
+    for (const [name, action] of this.actions)
+      if (!descriptions.has(name)) descriptions.set(name, action);
+    this.current = [...descriptions.values()];
     this.listeners.forEach((listener) => listener());
   }
 }

@@ -1,12 +1,13 @@
 import type { CommandInfo } from "../../buffer/commands";
 import type { ActionInfo } from "../../buffer/keymap/registry";
+import { conversationActions } from "../conversation/keymap";
 
 export function recapAction(
   name: string,
   label: string,
   views: string[],
   where = "会話",
-): ActionInfo {
+): ActionInfo & { views: string[] } {
   return { name, label, group: "状況を思い出す", where, views };
 }
 
@@ -22,6 +23,14 @@ export const recapActions = {
     ["toc", "decisions"],
     "目次・決まったこと",
   ),
+};
+
+const editable = ["toc", "decisions"];
+const editingPlace = "目次・決定";
+export const recapItemActions = {
+  edit: recapAction(conversationActions.editItem.name, "直す", editable, editingPlace),
+  delete: recapAction(conversationActions.deleteItem.name, "消す", editable, editingPlace),
+  undo: recapAction(conversationActions.undoItem.name, "戻す", editable, editingPlace),
 };
 
 export const recapCommands = {

@@ -6,7 +6,7 @@ import type { ColumnDef } from "../buffer/line";
 import { SettingsBuffer } from "../components/settings/SettingsBuffer";
 
 const columns: ColumnDef[] = [
-  { name: "help", widths: [24, 25, 14], heads: ["キー", "動作", "使える場所"] },
+  { name: "help", widths: [24, 21, 18], heads: ["キー", "動作", "使える場所"] },
 ];
 
 export function HelpPage({ controller }: { controller: BufferController }) {

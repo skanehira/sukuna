@@ -1,11 +1,13 @@
 import type { CommandInfo } from "../../buffer/commands";
 import type { ActionInfo } from "../../buffer/keymap/registry";
 
+type ScopedAction = ActionInfo & { views: string[] };
+
 export function conversationAction(
   name: string,
   label: string,
   group: ActionInfo["group"] = "会話",
-): ActionInfo {
+): ScopedAction {
   return { name, label, group, where: "会話", views: ["conversation"] };
 }
 
@@ -22,6 +24,26 @@ export const conversationActions = {
   expandDiff: conversationAction("diff.expand", "差分を開く"),
   collapseDiff: conversationAction("diff.collapse", "差分を畳む"),
 };
+
+const itemLabels: Record<string, string> = {
+  [conversationActions.deleteItem.name]: "選んだ項目を消す",
+  [conversationActions.editItem.name]: "選んだ項目を直す",
+  [conversationActions.undoItem.name]: "消した項目を戻す",
+};
+
+export function conversationActionHelp(additionalItems: ScopedAction[]): ActionInfo[] {
+  return Object.values(conversationActions).map((action) => {
+    const additional = additionalItems.filter((item) => item.name === action.name);
+    if (additional.length === 0) return action;
+    const places = [action, ...additional];
+    return {
+      ...action,
+      label: itemLabels[action.name] ?? action.label,
+      where: places.map((place) => place.where).join("・"),
+      views: places.flatMap((place) => place.views),
+    };
+  });
+}
 
 export const conversationCommands = {
   stop: { name: "stop", label: "AI を止める", where: "会話" },

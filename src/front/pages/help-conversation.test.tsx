@@ -98,6 +98,22 @@ async function start(
       return Response.json({ events: [], lastSeq: 0, hasMore: false });
     }
     if (path === "/api/conversations/keymap-conversation/stop") return Response.json({});
+    if (path === "/api/projects")
+      return Response.json({ projects: [{ id: "p1", name: "project" }] });
+    if (path === "/api/projects/p1/conversations")
+      return Response.json({
+        conversations: [
+          {
+            id: conversation.conversation.id,
+            title: conversation.conversation.title,
+            runState: conversation.conversation.runState,
+            closedAt: null,
+            lastActivityAt: 1000,
+            threads: [],
+          },
+        ],
+        issueThreads: [],
+      });
     throw new Error(`Unexpected request ${path}`);
   };
   const navigation = createNavigation(
@@ -370,6 +386,66 @@ describe("設定の通常操作", () => {
       ),
     );
   });
+
+  it("一覧とヘルプのどちらで割り当てても、目次と削除が重なるときは保存前に確認する", async () => {
+    const f = await start({ withRecap: true, withLifecycle: true });
+    const toc = { keys: "Q", context: "normal", to: { action: "recap.toc" } } as const;
+    await f.command(":map Q recap.toc");
+    await f.command(":convs");
+    const list = await screen.findByRole("region", { name: "会話とスレッドの一覧" });
+    await within(list).findByText(/予約 API/);
+
+    await f.command(":map Q item.delete");
+    expect(await screen.findByLabelText("操作の確認")).toHaveTextContent("Q は「目次」");
+    await act(async () => {
+      f.controller.answer(new KeyboardEvent("keydown", { key: "n" }));
+    });
+    expect(f.entries()).toEqual([toc]);
+
+    await f.command(":h");
+    await screen.findByRole("region", { name: "ヘルプ" });
+    await f.command(":map Q item.delete");
+    expect(await screen.findByLabelText("操作の確認")).toHaveTextContent("Q は「目次」");
+    await act(async () => {
+      f.controller.answer(new KeyboardEvent("keydown", { key: "y" }));
+    });
+    await waitFor(() =>
+      expect(f.entries()).toEqual([
+        toc,
+        { keys: "Q", context: "normal", to: null },
+        { keys: "Q", context: "normal", to: { action: "item.delete" } },
+      ]),
+    );
+  });
+
+  it("保存済みの重なりには画面をまたいで同じ割り当てを適用し、設定は書き換えない", async () => {
+    const entries: KeymapEntry[] = [
+      { keys: "Q", context: "normal", to: { action: "recap.toc" } },
+      { keys: "Q", context: "normal", to: { action: "item.delete" } },
+    ];
+    const f = await start({ entries, withRecap: true, withLifecycle: true });
+    const effective = () => f.controller.entries().filter((entry) => entry.keys === "Q");
+    expect(effective()).toEqual([entries[1]]);
+    await f.command(":convs");
+    const list = await screen.findByRole("region", { name: "会話とスレッドの一覧" });
+    await within(list).findByText(/予約 API/);
+    expect(effective()).toEqual([entries[1]]);
+    expect(f.entries()).toEqual(entries);
+    expect(f.calls).not.toContain("PUT /api/settings/keymap");
+  });
+
+  it.each(["item.edit", "item.undo"])(
+    "ヘルプで %s を割り当てるときも、決まったことの検索との重なりを確認する",
+    async (action) => {
+      const search = { keys: "Q", context: "normal", to: { action: "recap.search" } } as const;
+      const f = await start({ screen: "help", entries: [search], withRecap: true });
+      await f.command(`:map Q ${action}`);
+      expect(screen.getByLabelText("操作の確認")).toHaveTextContent(
+        "Q は「目次と決まったことを検索する」",
+      );
+      expect(f.entries()).toEqual([search]);
+    },
+  );
 
   it.each([
     ["conversation.answers.send", "回答をまとめて送る"],

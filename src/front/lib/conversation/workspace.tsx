@@ -1,7 +1,8 @@
-import { conversationActions, conversationCommands } from "./keymap";
+import { conversationActionHelp, conversationCommands } from "./keymap";
 import type { ScreenLoader } from "../../App";
 import type { ServerMessage } from "../../../shared/ws";
 import type { RightView } from "../../buffer/right-window";
+import { listDeleteAction } from "../../components/lifecycle/ConversationList";
 import type { LifecycleFeed } from "../../components/lifecycle/use-lifecycle";
 import { createLifecycleWorkspace, type LifecycleOptions } from "../lifecycle/workspace";
 import { Buffer } from "../../buffer/Buffer";
@@ -13,7 +14,7 @@ import {
 import { ConversationPage } from "../../pages/conversation/ConversationPage";
 import { RecapPanel } from "../../components/recap/RecapPanel";
 import { RecapSession } from "../recap/session";
-import { recapActions, recapCommands } from "../recap/keymap";
+import { recapActions, recapCommands, recapItemActions } from "../recap/keymap";
 import type { RecapApi } from "../recap/api";
 import type { TabStorage } from "../recap/read-tracking";
 import { Realtime, type RealtimeSocket } from "../realtime";
@@ -229,7 +230,10 @@ export function createConversationWorkspace(
       const unregister = registerConversationSwitch(controller);
       const unregisterLifecycle = lifecycle?.start();
       const removeActionHelp = controller.actions.declareHelp([
-        ...Object.values(conversationActions),
+        ...conversationActionHelp([
+          ...(recap ? Object.values(recapItemActions) : []),
+          ...(lifecycle ? [listDeleteAction] : []),
+        ]),
         ...(recap ? Object.values(recapActions) : []),
       ]);
       const removeCommandHelp = controller.commands.declareHelp([
