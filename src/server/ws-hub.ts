@@ -5,6 +5,8 @@ import type { RunState, StopReason } from "../shared/events";
 import { createNotificationRepository } from "./modules/inbox/adapter/notification-repository";
 import type { InboxDependencies } from "./modules/inbox/domain/ports";
 import { createNotifications } from "./modules/inbox/usecase/notify";
+import type { NotificationWithdrawal } from "./modules/inbox/domain/notification";
+import type { NotificationPush } from "./modules/inbox/domain/push-port";
 
 export type HubClient = { bufferedAmount: number; send(data: string): unknown; close(): unknown };
 type Subscription = { after: number };
@@ -39,6 +41,7 @@ export class WsHub {
       now(): number;
       id(): string;
       onError?(error: unknown): void;
+      notificationPush?: NotificationPush;
     },
   ) {
     this.database = database;
@@ -54,16 +57,25 @@ export class WsHub {
         },
         repository: createNotificationRepository(database),
         shown: () => this.shownTopics(),
-        publish: ({ message: text, tag, url }) => {
+        publish: (notification) => {
+          const { tag, title, body, url } = notification;
           const message: ServerMessage = {
             topic: "app",
             seq: ++this.seq,
             type: "notice",
-            payload: { level: "info", message: text, notification: { tag, url } },
+            payload: { level: "info", message: title + ": " + body, notification: { tag, url } },
           };
           for (const client of this.clients.keys()) this.send(client, message);
+          const push = options.notificationPush;
+          if (push)
+            void Promise.resolve()
+              .then(() => push(notification))
+              .catch((error: unknown) => this.notificationError?.(error));
         },
       });
+  }
+  async withdrawNotifications(target: NotificationWithdrawal): Promise<void> {
+    await this.notifications?.withdraw(target);
   }
   projectRemoved(id: string, at: number): void {
     this.notifications?.dismissProject(id, at);

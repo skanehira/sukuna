@@ -82,6 +82,40 @@ describe("一覧の通知と配信", () => {
   }
   const stored = () => f.db.select().from(notifications).all();
 
+  it("新しい通知がすでにあっても、別端末に残る古いIDだけを取り下げる", async () => {
+    const sent: unknown[] = [];
+    const hub = new WsHub(f.sqlite, {
+      inbox: { repository: createInboxRepository(() => f.db), resetTime: () => "12:34" },
+      now: () => 1000,
+      id: () => "unused",
+      notificationPush: async (message) => {
+        sent.push(message);
+      },
+    });
+    f.conversation("chat");
+    f.db
+      .insert(notifications)
+      .values(
+        ["old", "new"].map((id, index) => ({
+          id,
+          targetKind: "conversation",
+          targetId: "chat",
+          reason: "question",
+          title: "確認",
+          body: "どちらですか",
+          createdAt: 100 + index,
+        })),
+      )
+      .run();
+
+    await hub.withdrawNotifications({ kind: "notifications", ids: ["old"] });
+    expect(stored()).toMatchObject([
+      { id: "old", dismissedAt: 1000 },
+      { id: "new", dismissedAt: null },
+    ]);
+    expect(sent).toEqual([{ type: "dismiss", tag: "conversation:chat", ids: ["old"] }]);
+  });
+
   it("判断待ちの会話をSQLiteに1回だけ記録し、全接続に知らせる", () => {
     const x = fixture();
     f.conversation("c", { runState: "working" });

@@ -25,6 +25,7 @@ import type { ProgressDependencies } from "./modules/conversation/domain/progres
 import { WebSocketServer, type WebSocket } from "ws";
 import { RunnerLink } from "./runner-link";
 import { WsHub } from "./ws-hub";
+import type { NotificationPush } from "./modules/inbox/domain/push-port";
 import { createInboxRepository, formatResetTime } from "./modules/inbox/adapter/inbox-repository";
 import { createLogger, type Logger } from "../shared/log";
 import type { IncomingMessage } from "node:http";
@@ -205,7 +206,7 @@ heartbeat.unref();
 
 export async function initializeRuntime(
   options?: StartupOptions,
-  connection?: { socket?: string; log?: Logger },
+  connection?: { socket?: string; log?: Logger; notificationPush?: NotificationPush },
 ): Promise<Result<void, StartupError>> {
   if (database !== undefined) return ok(undefined);
   if (initializing) return initializing;
@@ -221,6 +222,7 @@ export async function initializeRuntime(
       },
       now,
       id: ulid,
+      notificationPush: connection?.notificationPush,
       onError: () =>
         log({
           level: "error",
@@ -326,7 +328,7 @@ export function getLifecycleDependencies(): LifecycleDependencies {
     gh: createGhRunner(process.env.SUKUNA_GH ?? null),
     log: writeRuntimeLog,
     now,
-    withdraw: async () => {},
+    withdraw: (target) => getWsHub().withdrawNotifications(target),
     changed: (projectId, ids, parentId) => {
       const hub = getWsHub();
       const parent = parentId ? hub.conversationParts(parentId, ["stock", "threads"]) : undefined;

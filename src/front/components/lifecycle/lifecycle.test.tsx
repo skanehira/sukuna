@@ -2,6 +2,7 @@ import { EditorView } from "@codemirror/view";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { SWRConfig } from "swr";
 import { beforeEach, expect, it, vi } from "vite-plus/test";
+import { createLifecycleSearchFixture } from "../../../test/lifecycle-search-fixture";
 import { App } from "../../App";
 import { createBrowserController } from "../../lib/browser";
 import { createConversationApi } from "../../lib/conversation/api";
@@ -342,6 +343,33 @@ it.each([
     }
   } finally {
     app.close();
+  }
+});
+
+it("SQLite の検索応答で閉じた会話・終えたスレッド・下書き issue を表示し、Enter で開く", async () => {
+  const server = createLifecycleSearchFixture();
+  const query = "在庫";
+  const searchUrl = "/search?" + new URLSearchParams({ q: query });
+  const app = mount(searchUrl, ({ path }) =>
+    path.startsWith("/api/search?") ? server.request(path) : undefined,
+  );
+  try {
+    const targets = [
+      ["在庫の閉じた相談", "/conversations/closed"],
+      ["在庫の終えたスレッド", "/conversations/closed?thread=t1"],
+      ["引き当ての改善", "/issues/i1/edit"],
+    ] as const;
+    for (const [title] of targets) await find(searchTitle, title);
+    expect(editor(searchTitle).state.doc.toString()).toContain("3 件");
+    for (const [title, url] of targets) {
+      await find(searchTitle, title);
+      key(choose(searchTitle, title), "Enter");
+      await waitFor(() => expect(location.pathname + location.search).toBe(url));
+      await act(async () => app.controller.navigate(searchUrl));
+    }
+  } finally {
+    await act(async () => app.close());
+    server.close();
   }
 });
 
