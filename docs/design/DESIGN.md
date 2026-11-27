@@ -272,6 +272,7 @@ SQLite のファイルを 1 つ使う。識別子は ULID の文字列、時刻�
 | GET | `/api/settings` | アプリの設定 (キーの割り当てを含む) | `features/operations.md` |
 | PUT | `/api/settings/keymap` | キーの割り当てを変える | `features/operations.md` |
 | POST | `/api/backup/restore` | バックアップから復元する | `features/operations.md` |
+| GET | `/api/backup/restore/:requestId` | 依頼した復元の結果を確認する | `features/operations.md` |
 
 WebSocket は 2 本とする。
 
@@ -443,6 +444,7 @@ issue の状態の移り変わりは `features/issue-flow.md` の表が正本で
 - `vp dev` の `localhost` は `::1` で待ち受けることがあるため、開発用の本人の値は `127.0.0.1` と `::1` の両方を手元として扱う
 - SQLite の `PRAGMA journal_mode = WAL` はファイルに残るが、`busy_timeout` と `foreign_keys` は接続ごとの設定である。`journal_mode` と `foreign_keys` はトランザクションの中では変えられない。接続を開いた直後に 3 つとも設定する
 - ロックファイルの PID を読んでから削除する間には、別のプロセスが同じパスを取得できる。読み直すだけではこの競合を防げない。ファイルの作成・確認・削除を OS の排他の中で行う手順は `features/operations.md`「データベースのロック」に従う
+- Node.js の ECDH で得た P-256 の秘密鍵が 32 バイトより短いときは、先頭をゼロで埋める。VAPID の鍵は 32 バイトで保存する
 - TypeScript 7 には JS の API が無い。Stryker は既定で `tsconfig.json` をこの API で読み書きするので、`TypeError: ts.parseConfigFileTextToJson is not a function` で起動に失敗する。`stryker.config.json` の `tsconfigFile` に存在しないファイルの名前を指定して、この処理を止める。このリポジトリの tsconfig は Stryker の sandbox の外を参照しないので、書き換えは要らない
 - Vite は `import.meta.glob` の引数を、文字列と object のリテラルとしてしか読めない。Stryker が引数を変異させると、そのモジュールを import するテストが `Parse failed` で落ちる。`import.meta.glob` の呼び出しは `// Stryker disable all: <理由>` と `// Stryker restore all` で囲む
 - `src/runner/dev.test.ts` は、子のプロセスで開発用ランナーを起動する結合テストである。`src` 全体を変異の対象にすると、Stryker の初回のテスト実行で落ちる。`stryker.config.json` の `ignorePatterns` で、Stryker の sandbox から外す。いつものテストでは流れる
