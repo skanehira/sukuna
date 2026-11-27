@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import type { Readable } from "node:stream";
 import { lstat } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
@@ -54,9 +55,25 @@ async function symlinkNames(cwd: string): Promise<string[]> {
   return links.filter((path) => !excluded.has(path));
 }
 
+type RgSearchProcess = {
+  stdout: Readable;
+  stderr: Readable;
+  kill(): void;
+  on(event: "error", callback: () => void): void;
+  on(event: "close", callback: (code: number | null) => void): void;
+};
+type StartContentSearch = (cwd: string, query: string, env: NodeJS.ProcessEnv) => RgSearchProcess;
+const startContentSearch: StartContentSearch = (cwd, query, env) =>
+  spawn("rg", ["--json", "--hidden", "-g", "!.git", "--max-columns", "500", "-e", query], {
+    cwd,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
 export function createRg(
   clock: SearchClockPort = searchClock,
   environment: NodeJS.ProcessEnv = process.env,
+  start: StartContentSearch = startContentSearch,
 ): SearchPort {
   const env = Object.fromEntries(
     Object.entries(environment).filter(([name]) => name !== "RIPGREP_CONFIG_PATH"),
@@ -89,11 +106,7 @@ export function createRg(
     },
     content: (cwd, query) =>
       new Promise((resolve) => {
-        const child = spawn(
-          "rg",
-          ["--json", "--hidden", "-g", "!.git", "--max-columns", "500", "-e", query],
-          { cwd, env, stdio: ["ignore", "pipe", "pipe"] },
-        );
+        const child = start(cwd, query, env);
         const matches: ContentMatch[] = [];
         let pending = "";
         let stderr = "";
