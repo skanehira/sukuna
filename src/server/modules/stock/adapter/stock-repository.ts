@@ -1,14 +1,14 @@
 import { and, asc, eq, isNull, ne, sql } from "drizzle-orm";
 import { Result } from "neverthrow";
 import type { OpenedDatabase } from "../../../../shared/db/open";
-import { conversations, stockItems } from "../../../../shared/db/schema";
+import { conversations, drafts, stockItems } from "../../../../shared/db/schema";
 import { releaseReservationKey } from "../../../../shared/ipc";
 import { quoteSchema } from "../../../../shared/stock";
 import type { StockRecord, StockRepositoryPort } from "../domain/ports";
 
 export function createStockRepository(database: () => OpenedDatabase["db"]): StockRepositoryPort {
-  const query = () =>
-    database()
+  const query = (db = database()) =>
+    db
       .select({ stock: stockItems, thread: conversations })
       .from(stockItems)
       .leftJoin(conversations, eq(stockItems.threadConversationId, conversations.id));
@@ -33,8 +33,8 @@ export function createStockRepository(database: () => OpenedDatabase["db"]): Sto
             closed: thread.closedAt !== null,
           },
   });
-  const read = (id: string) => {
-    const row = query().where(eq(stockItems.id, id)).get();
+  const read = (id: string, db = database()) => {
+    const row = query(db).where(eq(stockItems.id, id)).get();
     return row === undefined ? undefined : record(row);
   };
   const guard = <T>(operation: () => T) =>
@@ -42,6 +42,19 @@ export function createStockRepository(database: () => OpenedDatabase["db"]): Sto
       code: "internal" as const,
       message: "質問・指示を読み書きできませんでした。もう一度操作してください",
     }))();
+  const close = (db: OpenedDatabase["db"], id: string, at: number, token: string) =>
+    db
+      .update(conversations)
+      .set({ closedAt: at })
+      .where(
+        and(
+          eq(conversations.id, id),
+          eq(conversations.kind, "thread"),
+          isNull(conversations.closedAt),
+          sql`EXISTS (SELECT 1 FROM settings WHERE key=${releaseReservationKey(id)} AND json_extract(value, '$.token')=${token} AND json_extract(value, '$.expiresAt') > unixepoch('subsec') * 1000)`,
+        ),
+      )
+      .run().changes === 1;
   return {
     conversation: (id) =>
       guard(() =>
@@ -114,21 +127,59 @@ export function createStockRepository(database: () => OpenedDatabase["db"]): Sto
             lastActivityAt: conversation.lastActivityAt,
           })),
       ),
-    close: (id, at, token) =>
-      guard(
-        () =>
-          database()
-            .update(conversations)
-            .set({ closedAt: at })
-            .where(
-              and(
-                eq(conversations.id, id),
-                eq(conversations.kind, "thread"),
-                isNull(conversations.closedAt),
-                sql`EXISTS (SELECT 1 FROM settings WHERE key=${releaseReservationKey(id)} AND json_extract(value, '$.token')=${token} AND json_extract(value, '$.expiresAt') > unixepoch('subsec') * 1000)`,
-              ),
-            )
-            .run().changes === 1,
+    finishTransaction: (operation) =>
+      guard(() =>
+        database().transaction(
+          (tx) =>
+            operation({
+              sourceQuestion: (id) => {
+                const source = tx
+                  .select({ conversationId: stockItems.conversationId, quote: stockItems.quote })
+                  .from(stockItems)
+                  .innerJoin(
+                    conversations,
+                    and(
+                      eq(conversations.id, id),
+                      eq(conversations.parentConversationId, stockItems.conversationId),
+                    ),
+                  )
+                  .where(
+                    and(
+                      eq(stockItems.threadConversationId, id),
+                      eq(stockItems.kind, "question"),
+                      eq(stockItems.state, "sent"),
+                    ),
+                  )
+                  .get();
+                return (
+                  source && {
+                    ...source,
+                    quote: quoteSchema.parse(JSON.parse(source.quote ?? "null")),
+                  }
+                );
+              },
+              close: (id, at, token) => close(tx, id, at, token),
+              addInstruction: (id, conversationId, threadId, text, quote) => {
+                tx.insert(stockItems)
+                  .values({
+                    id,
+                    conversationId,
+                    quote: JSON.stringify(quote),
+                    text,
+                    kind: "instruction",
+                    state: "stocked",
+                    threadConversationId: threadId,
+                  })
+                  .run();
+                return read(id, tx)!;
+              },
+              deleteDraft: (id) => {
+                tx.delete(drafts).where(eq(drafts.conversationId, id)).run();
+              },
+            }),
+          { behavior: "immediate" },
+        ),
       ),
+    close: (id, at, token) => guard(() => close(database(), id, at, token)),
   };
 }

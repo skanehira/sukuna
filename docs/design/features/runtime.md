@@ -111,6 +111,7 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 | `settings` のキー `usage.rate_limit` | ランナー | AI の実行の知らせから決まる (`features/project-settings.md`) |
 | `settings` のキー `runner-release:<会話の id>` | ランナー | 終了保存までの実行の予約 (`features/stock-thread.md`「終了の予約に使う内部の口」) |
 | `settings` のキー `runner-workspace-switch:<要求の UUID>` | ランナー、画面のサーバー | ランナーが切り替え結果を、画面のサーバーが取消しを書く (`features/worktree-terminal.md` の作業場所の切り替え API) |
+| `settings` の `runner-stock-send:` で始まるキー | ランナー、画面のサーバー | ストック送信の受付結果と取消し (`features/stock-thread.md`「POST /api/conversations/:id/stock/send」) |
 | `settings` のキー `backup_status` | ランナー | バックアップはランナーがとる (`features/operations.md`) |
 | `settings` のキー `last_restore` と、復元のときの `flow_paused` | 復元の処理と、起動時の後始末 (`db.lock` の中) | 2 つのプロセスを止めてから書く (`features/operations.md`) |
 | `settings` のほかのキー、`projects` | 画面のサーバー | 開発者の操作 |
@@ -123,6 +124,7 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 2 つのプロセスが同じ列やキーを書けるのは、次の箇所だけである。既存の行を更新するときは、元の値を条件に付け、後から書いた方が前の変化を上書きしないようにする。
 
 - `stock_items` の `state` と `thread_conversation_id` (`features/stock-thread.md`)
+- `settings` の `runner-stock-send:` で始まるキー。ランナーが受付結果を、画面のサーバーが残りの受付の取消しを書く
 - 下書きから精査待ちへ移す `issues` (`features/issue.md`)
 - `toc_entries` の `title` と `start_seq`。ランナーが行を足し、画面のサーバーが開発者の修正を書く (`features/recap.md`)
 - `conversations` の `cwd` と `worktree_id`。worktree の削除では、画面のサーバーが `cwd` が消した worktree のパスのときだけ書く。merge のあとの直しなど、自動フローが worktree を用意したときと、開発者が作業場所を切り替えたときはランナーが書く。切り替えでは、読んだときの `cwd` を条件に付ける (`features/worktree-terminal.md`、`features/implementation-flow.md`)
@@ -154,9 +156,10 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 | GET | `/conversations/:id/commands` | スキルとスラッシュコマンドの候補 | なし | `commands` (`name`、`description`) |
 | POST | `/conversations/:id/workspace` | 開発者が始めた会話の作業ディレクトリを切り替える。開いている実行を閉じる (`features/worktree-terminal.md`「作業場所の切り替え」) | `cwd`、`worktree_id?`、`attempt?` (要求 ID と有効期限) | `cwd` |
 | POST | `/conversations/:id/release` | 実行を片付けて手放す (閉じる・削除の前)。利用枠の戻りを待つタイマーも外す | なし | `run_state` |
-| POST | `/conversations/:id/release/reserve` | スレッドの終了保存まで操作を予約する (`features/stock-thread.md`「終了の予約に使う内部の口」) | なし | `token` |
+| POST | `/conversations/:id/release/reserve` | スレッドの終了保存まで操作を予約する (`features/stock-thread.md`「終了の予約に使う内部の口」) | `idle_only?` | `token` |
 | POST | `/conversations/:id/release/complete` | 終了の予約を解除する (同上) | `token` | なし |
-| POST | `/conversations/:id/stock/send` | ストックを送る (`features/stock-thread.md`) | `kinds` | stock-thread.md の `POST /api/conversations/:id/stock/send` の 200 と同じ |
+| POST | `/conversations/:id/stock/send` | ストックを送る (`features/stock-thread.md`) | `kinds`、`stockIds?`、`attempt_id?` | stock-thread.md の `POST /api/conversations/:id/stock/send` の 200 と同じ |
+| POST | `/conversations/:id/finish/propose` | スレッドの確定事項の案を求める (`features/stock-thread.md`「スレッドを終える」) | なし | `run_state` (`working`) |
 | POST | `/conversations/:id/recap/rebuild` | 反映していない番から目次などの更新をやり直す (`features/recap.md`) | なし | `state` |
 | POST | `/flow/issues/:id/confirm` | 下書きを確定する (`features/issue.md`) | なし | `issue` |
 | POST | `/flow/issues/:id/withdraw` | 取り下げる (`features/issue.md`) | なし | `issue`、`stopped_dependents` |
@@ -177,7 +180,8 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 - `/flow/notify` は、画面のサーバーが issue の項目、プロジェクトの設定、一時停止を書いたあとに送る。全体の一時停止のように対象のプロジェクトが無いときは、どちらの id も付けない
 - PR の取得で GitHub で merge されたのを見たときも、画面のサーバーは `/flow/notify` を `issue_id` 付きで送る (`features/pr-review.md`「取得と最後に取得した内容」)
 - ランナーにつながらない、10 秒以内に応答がない、または知らせの流れが切れた場合、画面のサーバーは API に 503 (`runner_unavailable`) を返す。`message` は「AI を動かすプロセスにつながりません。少し待ってから、もう一度操作してください。」とする。作業場所の切り替えは共有 SQLite で確定を確認し、`features/worktree-terminal.md` の PUT の規則に従って応答する
-- 手動の再開と作業場所の切り替えを確定する前に、IPC の切断と期限を確認する。画面のサーバーは、10 秒後の時刻を Unix ミリ秒で `x-sukuna-ipc-deadline` に渡す
+- 手動の再開、作業場所の切り替え、ストック送信の受付を確定する前に、IPC の切断と期限を確認する。画面のサーバーは、10 秒後の時刻を Unix ミリ秒で `x-sukuna-ipc-deadline` に渡す
+- ストック送信の応答が途切れたときは、保存済みの受付結果を取り出す (`features/stock-thread.md`「POST /api/conversations/:id/stock/send」)
 - 質問と許可の確認の `request_id` は、ランナーが `question` / `permission_request` の記録の `payload` に入れる。画面のサーバーは、`pending_answers.question_seq` の記録から `request_id` を引いて回答の操作に渡す
 - 回答の操作の `result` は、質問を待っている会話に答えを返したとき `answered` とする。待ちの消えた質問の回答を指示の文にして送ったときは、指示を送る操作と同じく `delivered` か `queued` とする。`seq` は、記録を書いたときだけ返す
 - `/flow/projects/:id/stop` は、作業中と回答待ち・許可待ちの会話を止める。作業中でない `usage_limited` と `stopped` (`restarted`) の会話も、`stopped` (`user`) にし、利用枠の戻りを待つタイマーを外す
@@ -638,6 +642,7 @@ interface GhRunner {
 - `resets_at` が無いときは、15 分ごとに再開を試みる。再開して再び利用枠切れになったら、新しい `resets_at` でタイマーを張り直す
 - 開発者の再開を受け付けた番が開き直しの前に利用枠切れになった場合も、その停止にタイマーを張る。期限に達したら、同じ停止の会話が開いていることを確かめてから再開する
 - 枠が戻っても閉じたままなら、再開の受付から 15 秒まで開き直しを待つ。15 秒は、IPC の応答待ち 10 秒と SQLite の更新待ち 5 秒を合わせた時間である
+- ストックで受け付けた指示は、受付から 30 秒まで開き直しを待つ。IPC の応答待ち 10 秒とストック送信結果の照合待ち 20 秒を合わせた時間である
 - `credits_required` で止まった会話は、自動では再開しない
 - 自動で再開したときは、知らせの `notice` を出す
 - 実行を手放す操作 (`release`) は、その会話の利用枠の戻りを待つタイマーも外す。閉じた会話は、開発者が送るまで再開しない (`features/conversation-lifecycle.md`)

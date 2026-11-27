@@ -7,12 +7,21 @@ import {
   completeReleaseSchema,
   forkConversationSchema,
   permissionSchema,
+  reserveReleaseSchema,
+  sendStockIpcSchema,
+  type StockSendIpcInput,
   RUNNER_IPC_DEADLINE_HEADER,
   sendMessageSchema,
   startConversationSchema,
   workspaceSchema,
 } from "../../../../shared/ipc";
 import type { RecapState } from "../../../../shared/recap/api";
+import {
+  proposeThreadFinish,
+  threadFinishRefusal,
+} from "../../stock/usecase/propose-thread-finish";
+import { cancelledStockSend } from "../../stock/usecase/stock-send-refused";
+import type { StockSendResponse } from "../../../../shared/stock";
 import type { Logger } from "../../../../shared/log";
 import type { ConversationRuntime, DeliveryError, OperationError } from "../usecase/runtime";
 
@@ -28,6 +37,11 @@ function wireResult(value: unknown): unknown {
 export type IpcExtensions = {
   flow?: Hono;
   rebuildRecap?: (id: string) => Result<{ state: RecapState }, OperationError>;
+  sendStock?: (
+    id: string,
+    input: StockSendIpcInput,
+    cancelled: () => boolean,
+  ) => Promise<Result<StockSendResponse, DeliveryError>>;
   allowMerge?: (
     id: string,
     headSha: string,
@@ -133,6 +147,14 @@ export function createIpcRoutes(
       parentConversationId: p.parent_conversation_id,
     }),
   );
+  const sendStock = extensions.sendStock;
+  if (sendStock)
+    route("/conversations/:id/stock/send", sendStockIpcSchema, (id, input, _p, cancelled) =>
+      sendStock(id, input, cancelled),
+    );
+  route("/conversations/:id/finish/propose", empty, (id, _p, _params, cancelled) =>
+    proposeThreadFinish(runtime, id, cancelled),
+  );
   route("/conversations/:id/messages", sendMessageSchema, async (id, p) => {
     let duplicate = false;
     const result = await runtime.send(
@@ -170,7 +192,14 @@ export function createIpcRoutes(
     ),
   );
   route("/conversations/:id/release", empty, (id) => runtime.release(id));
-  route("/conversations/:id/release/reserve", empty, (id) => runtime.releases.reserve(id));
+  route("/conversations/:id/release/reserve", reserveReleaseSchema, (id, input, _p, cancelled) =>
+    runtime.releases.reserve(
+      id,
+      input.idle_only
+        ? () => (cancelled() ? cancelledStockSend : threadFinishRefusal(runtime, id))
+        : undefined,
+    ),
+  );
   route("/conversations/:id/release/complete", completeReleaseSchema, (id, p) =>
     Promise.resolve(runtime.releases.complete(id, p.token).map(() => ({}))),
   );

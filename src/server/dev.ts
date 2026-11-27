@@ -37,7 +37,7 @@ export default createApp({
   progress: getProgressDependencies(),
   conversations: getConversationDependencies(),
   stock: createStockDependencies({
-    database: () => getDatabase().db,
+    database: getDatabase,
     workspace,
     runner: getRunnerLink,
     changed: (id, parts) =>

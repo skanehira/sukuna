@@ -1,3 +1,4 @@
+import { stockSendSchema } from "./stock";
 import { z } from "zod";
 import { recapStateSchema } from "./recap/api";
 import { answersSchema, originSchema, runStateSchema } from "./events";
@@ -83,6 +84,14 @@ export const runnerNoticeSchema = z.discriminatedUnion("kind", [
 ]);
 export type RunnerNotice = z.infer<typeof runnerNoticeSchema>;
 
+export const STOCK_SEND_SETTLEMENT_TIMEOUT_MS = 20_000;
+export const sendStockIpcSchema = stockSendSchema.extend({ attempt_id: z.uuid().optional() });
+export type StockSendIpcInput = z.infer<typeof sendStockIpcSchema>;
+export const threadProposalIpcResponseSchema = z.strictObject({ run_state: z.literal("working") });
+export const reserveReleaseSchema = z.preprocess(
+  (input) => (input === undefined ? {} : input),
+  z.strictObject({ idle_only: z.boolean().optional() }),
+);
 export const releaseReservationSchema = z.object({ token: z.string().min(1) });
 export const completeReleaseSchema = z.object({ token: z.string().min(1) });
 export const RELEASE_RESERVATION_PREFIX = "runner-release:";
