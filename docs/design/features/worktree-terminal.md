@@ -78,12 +78,12 @@
 - 表の 1〜6 の判定と未 push の数え方 (上の例外を含む) は、`src/shared` の 1 つの関数に置き、画面のサーバーとランナーの `flow` の両方が使う (`features/implementation-flow.md`「worktree の片付け」)
 - この関数は入出力を持たず、表の 1〜6 の材料と、HEAD がその issue のどれかの merge 済みの PR の先頭と同じかを受け取る。返すのは、消してよいかと理由である。git と `gh` で材料を集めるのは、それぞれのプロセスの Port である
 - 消せるときは、その worktree で開いているターミナルを終わらせ、`git worktree remove <パス>` で消す。強制の指定は使わない
-- ブランチは、アプリが worktree と一緒に作ったもの (`worktrees.branch_created` が真) だけを消す。worktree の現在の HEAD と、消すブランチの先端の両方で、未 push のコミットが無いことを確かめる。merge 済み PR の例外も、それぞれの先端との一致で判定する
-- 画面のサーバーは、HEAD と参照をロックし、検査した先端が変わっていないことを確かめてから worktree を消す。所有ブランチの削除には `git update-ref --no-deref -d refs/heads/<ブランチ> <検査した先端>` を使う。検査後に先端が進めば削除せず、状態の変化を知らせる
-- 保存してある所有ブランチが既に無ければ、その削除は行わない。ほかの worktree で開かれている場合は、worktree のフォルダを消す前に拒否する
+- 画面のサーバーが消すのは、worktree のフォルダと Git の worktree 登録である。アプリが作ったブランチも、既存のブランチも残す。ランナーの自動フローによる片付けは `features/implementation-flow.md` に従う
+- 画面のサーバーは、worktree 単位の共有排他を取得してから、会話と issue の状態を最終検査する。物理削除と会話の移動が終わるまで排他を保ち、会話の開始・再開・作業場所の切替と flow の状態更新も同じ排他を使う
+- 画面のサーバーは、現在の HEAD と、その HEAD が指すブランチの参照をロックする。検査した先端とブランチが変わっていないことを確かめてから worktree を消す。状態が変わっていれば消さず、一覧の取り直しを促す
 - worktree のフォルダを消したら、`worktrees.removed_at` の記入と会話の移動を同じトランザクションで行う。その worktree を作業ディレクトリにしていた会話は、プロジェクトのディレクトリへ移し、`worktree_id` を空にする。トランザクションは、組み立て時に渡す Unit of Work をユースケースが呼び出す
-- 画面のサーバーは、削除の途中経過を `.git/sukuna-worktree-removals/<worktree の id>.json` に置く。所有ブランチの先端、Git の管理ディレクトリの識別情報、フォルダの削除が済んだかを保存する。フォルダを消した後のブランチ削除か DB 更新に失敗しても、この記録を読んで同じ削除要求を再試行できる
-- ブランチ削除に失敗しても、会話の移動を DB に反映してから失敗を返す。再試行では、既に消えた Git の記録とブランチを処理済みとして扱う。同じパスに作り直された別の worktree やフォルダがあれば触らずに拒否する。全て終わったら途中経過の記録を消す
+- 画面のサーバーは、削除の途中経過を `.git/sukuna-worktree-removals/<worktree の id>.json` に置く。フォルダが無くても Git の管理ディレクトリの識別情報を保存する。物理削除が済んだ記録は、DB 更新の成否にかかわらず保存する。フォルダを消した後の DB 更新に失敗しても、この記録を読んで同じ削除要求を再試行できる
+- 再試行では、既に消えた Git の記録を処理済みとして扱う。同じパスに作り直された別の worktree やフォルダがあれば触らずに拒否する。全て終わったら途中経過の記録を消す
 - フォルダが外で消されて git の記録だけが残る worktree は、一覧に「フォルダがありません」と出す。消すと、git の記録だけを片付ける (`git worktree prune`)
 
 ### 書くプロセス
@@ -101,7 +101,7 @@
 
 右のウィンドウ「worktree」である (UI_SKETCH.html の `pc-conv--worktree`)。列は「名前 / ブランチ / 使っているもの」とし、ウィンドウの見出しに列の見出しを置く。
 
-- 先頭の行は「main」(プロジェクトのディレクトリ) とし、その後の並びは「エッジケースの決定」の「並びと数え方」に従う
+- 先頭の行は「main」(プロジェクトのディレクトリ) とし、その後に作った順に並べる
 - 「使っているもの」には、使っている issue (`#42`)、会話の件数 (`会話 2 件`)、どちらも無ければ「会話なし」を書く。未コミットの変更か未 push のコミットがあれば、「未コミット 3」「未 push 2」を添える
 - いまの作業場所の行には、印 ● を付ける。作業場所は「作業場所の切り替え」の節で決まる
 - worktree の行の後に、メニュー「worktree を作る」(説明は「名前を付けて作る」) を置く
@@ -226,7 +226,8 @@ worktree の一覧の行で Enter を押すと、いま主のウィンドウに�
 
 ### DELETE `/api/worktrees/:id`
 
-- 応答: 200 `{ "removedBranch": true, "movedConversationIds": ["01J..."] }`
+- 応答: 200 `{ "removedBranch": false, "movedConversationIds": ["01J..."] }`
+- `removedBranch` は常に `false` とする (「消す」)
 - 409 `conflict`: 「消す」の表の 1〜6 に当てはまる。`message` に表の文を入れ、`error.details` に `{ "reason": "uncommitted" | "unpushed" | "flow" | "running" | "locked" | "main", "count": 3, "sample": ["src/a.ts"] }` を入れる
 - 404 `not_found`: 記録が無いか、削除とその後の片付けが全て終わっている
 
@@ -282,7 +283,7 @@ worktree の一覧の行で Enter を押すと、いま主のウィンドウに�
 | 一覧 → worktrees, conversations, issues | ユースケース | `src/server/modules/workspace/usecase/list-worktrees.ts` |
 | 作る → worktrees | ユースケース | `src/server/modules/workspace/usecase/create-worktree.ts` |
 | 消す → worktrees, conversations, issues, issue_events | ユースケース | `src/server/modules/workspace/usecase/remove-worktree.ts` |
-| git の実行 (`worktree list / add / remove / prune`、`status`、`rev-list`、`fetch`、先端の一致を条件にした `update-ref -d`) と、merge 済みの PR の先頭を取る `gh pr view` | インフラ (git と GitHub の Port) | `src/server/modules/workspace/adapter/git-cli.ts` |
+| git の実行 (`worktree list / add / remove / prune`、`status`、`rev-list`、`fetch`、現在の HEAD と参照のロック) と、merge 済みの PR の先頭を取る `gh pr view` | インフラ (git と GitHub の Port) | `src/server/modules/workspace/adapter/git-cli.ts` |
 | 画面のサーバーの worktree 削除の途中経過と、Git の管理ディレクトリの識別情報 | インフラ | `src/server/modules/workspace/adapter/worktree-removal-storage.ts` |
 | ターミナルを開く、作業ディレクトリと送り先を決める、数の上限 | ユースケース | `src/server/modules/workspace/usecase/open-terminal.ts` |
 | ターミナルの持ち方 (擬似端末と端末の状態) | インフラ (擬似端末の Port) | `src/server/modules/workspace/adapter/pty-session.ts` |
@@ -295,6 +296,8 @@ worktree の一覧の行で Enter を押すと、いま主のウィンドウに�
 | ターミナルの画面 (xterm.js、モードの切り替え、つなぎ直し) | UI | `src/front/pages/terminal/terminal-page.tsx` |
 | 端末の内容を Normal モードの行に直す | UI | `src/front/pages/terminal/terminal-lines.ts` |
 
+- 共有排他の口は `src/shared/workspace/worktree-activity.ts` の `WorktreeActivity` とする。実物は `src/shared/workspace/sqlite-worktree-activity.ts` の `createWorktreeActivity` が作り、同じ SQLite ファイルのパスを両プロセスから渡す。排他には `$SUKUNA_HOME/worktree-leases/<id>.db` を使い、接続を閉じるかプロセスが終わると解除される
+- 会話の作成は `SqliteConversationStore.create`、実行は `withWorkspace` で排他を保つ。状態更新の排他はトランザクションのコミットまで保つ。作業場所を切り替える実装は、共有排他の `run` 内で `acquire` に移動元と移動先の worktree の id を渡し、最新の状態確認と条件付き更新まで保つ
 - `/ws/terminals/:id` の upgrade は、`/ws` と同じ `ws` の受け口に、パスで分けて足す (DESIGN.md「既知の制約」の `vp dev` の項)
 - 使う列 (`worktrees` の `branch_created`・`port_slot`) の定義は DESIGN.md「データスキーマ」参照。`port_slot` は実装の worktree だけが使い、決め方は `features/implementation-flow.md` に従う
 
@@ -310,7 +313,7 @@ worktree の一覧の行で Enter を押すと、いま主のウィンドウに�
 8. **状態の移り変わり**: worktree は 作った → (消す) → 消した の 2 つだけを持つ。ターミナルは 動いている → 終わった の 2 つを持つ。開発者が作った worktree は、自動では消さない (BR-059)
 9. **自動で進むこと**: アプリは、開発者の worktree を自動で消さない。終わったシェルを自動で開き直さない。git の記録だけが残った worktree の片付け (`git worktree prune`) も、開発者が消すときだけ行う
 10. **端末と画面をまたぐこと**: worktree の記録は、どの端末でも同じである。ターミナルは画面のサーバーに 1 つあり、どの端末からつないでも同じ出力と入力を共有する。大きさは最後に送った画面のものになる。開いていたターミナルの id とモード、会話を開いていない画面で選んだ worktree は、ブラウザのタブごとに持つ。会話の作業場所はサーバーに置き、どの端末でも同じにする
-11. **並びと数え方**: 一覧は main を先頭に、`git worktree list` の順に並べる。未コミットの変更は `git status --porcelain` の 1 行を 1 件と数える。未 push のコミットは「消す」の節の式で数える
+11. **並びと数え方**: API は main を先頭に、`git worktree list` の出力順で返す。画面の表示順は「worktree の一覧の画面」に従う。未コミットの変更は `git status --porcelain` の 1 行を 1 件と数える。未 push のコミットは「消す」の節の式で数える
 
 ## テスト方針
 
@@ -328,6 +331,7 @@ worktree の一覧の行で Enter を押すと、いま主のウィンドウに�
 | （US-024）ターミナルの入力中に `Ctrl+[` を押すと、`Esc` としてターミナルの中のプログラムへ送られる | 単体 |
 
 - 結合: 画面のサーバーを、本物の SQLite と、一時ディレクトリに作った本物の git のリポジトリ (リモート役の bare リポジトリ付き) で動かす。worktree の一覧・作成・削除は API から確かめる。消せない場合は、未コミットのファイルを置いたもの、未 push のコミットを持つもの、自動フローの issue が開いているものの 3 つで、応答の `error.details` 全体を比べる
+- 結合 (削除): アプリが作ったブランチも、既存のブランチも、worktree の削除後に残ることを確かめる。別のブランチや detached HEAD に切り替えていた場合は、現在の HEAD の安全性で判定する。保存してあるブランチの未 push、ロック、ほかの worktree での利用は削除を妨げない
 - 結合 (ターミナル): 本物の `node-pty` でシェルを開き、`/ws/terminals/:id` に `pwd` を送り、出力のフレームに worktree のパスが出ることを確かめる。画面を閉じる行は、WebSocket を切ったあとにコマンドの出力を待ち、つなぎ直した `snapshot` にその出力があることを確かめる。待つのは出力の条件で、固定の時間は待たない
 - 単体: 入力のモードのキーの扱い (Ctrl+] でモードが変わり、プログラムへは送らない。Ctrl+[ は `\x1b` を送る) を、xterm.js を偽物に替えて確かめる。端末の内容を行に直す処理 (折り返しの連結、行末の空白) と、Normal モードで選んだ行からストックに入る引用の文を確かめる
 - E2E: プロジェクトの画面で worktree を作り、一覧のその行で Enter を押して切り替え、Space g でターミナルを開いて `pwd` を実行し、ターミナルに出力が出るまでを確かめる。作業ディレクトリが正しいことは、ターミナルの結合テストで確かめる

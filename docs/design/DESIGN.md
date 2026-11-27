@@ -189,6 +189,7 @@ SQLite のファイルを 1 つ使う。識別子は ULID の文字列、時刻�
 | 届く前の指示を届ける | `queued_instructions` の削除、開発者の発言の `conversation_events` への追加、ストックから来た指示の `stock_items.sent_seq` の更新 |
 | issue の状態を移す | `issues` の `state` の更新、`issue_events` への追加 |
 | issue を確定する | `issues` の追加または更新、`issue_dependencies` の入れ替え、`issue_events` への追加 |
+| worktree を消す | `worktrees.removed_at` の更新、その worktree を作業ディレクトリにしていた `conversations` の `cwd` と `worktree_id` の更新 |
 
 ## API 一覧
 
@@ -395,8 +396,8 @@ issue の状態の移り変わりは `features/issue-flow.md` の表が正本で
 
 ## 既知の制約
 
-- Git の参照は、検査した後にも別のプロセスが更新できる。削除は `git update-ref --no-deref -d <参照> <検査した先端>` で行い、先端の一致を条件にする ([Git の公式ガイド](https://git-scm.com/docs/git-update-ref))
-- `git worktree list` の出力順は作成順ではない。worktree の一覧は、main を先頭にした git の出力順を保つ ([Git の実装](https://github.com/git/git/blob/master/builtin/worktree.c#L1040-L1083))
+- Git の短い参照名は、同名のタグがあると曖昧になる。新規 worktree の開始点には `refs/heads/` か `refs/remotes/origin/` で始まる完全な参照名を使う
+- `git worktree list` の出力順は作成順ではない。worktree の一覧 API は、main を先頭にした git の出力順を保つ ([Git の実装](https://github.com/git/git/blob/master/builtin/worktree.c#L1040-L1083))
 - rg は `RIPGREP_CONFIG_PATH` の設定でリンクの追跡や無視の対象を変えられる。一覧と中身の検索では、子プロセスの環境からこの変数だけを除く ([公式ガイド](https://github.com/BurntSushi/ripgrep/blob/master/GUIDE.md#configuration-file))
 - ファイル名には改行も含まれる。rg の一覧は `--null`、Git の一覧は `-z` で NUL 区切りにし、改行で分けない
 - macOS では `/var` と `/private/var` のように同じディレクトリに別の絶対表記がある。記録の差分を相対パスへ直すときは、作業ディレクトリの表記と実体の表記をともに照合する
