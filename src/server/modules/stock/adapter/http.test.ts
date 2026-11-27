@@ -677,7 +677,12 @@ describe("ストックとスレッド API", () => {
         );
       const before = runner.runtime.store.get("c")!.lastSeq;
       const item = kinds === "all" ? await add() : undefined;
-      const questions = await Promise.all([addQuestion("第一の質問"), addQuestion("第二の質問")]);
+      const questions = [await addQuestion("第一の質問"), await addQuestion("第二の質問")];
+      if (slowAt === 0) {
+        vi.spyOn(runner.runtime.options, "id")
+          .mockReturnValueOnce("01J0000000ZZZZZZZZZZZZZZZZ")
+          .mockReturnValueOnce("01J00000000000000000000000");
+      }
       const fork = agent.fork.bind(agent);
       let seenSlow = () => {};
       const entered = new Promise<void>((resolve) => {
@@ -725,6 +730,14 @@ describe("ストックとスレッド API", () => {
       const threads = await listThreads();
       const queued = runner.runtime.store.queue("c").map(({ stockItemId }) => stockItemId);
       const acceptedQuestions = slowAt === 0 ? questions.length : slowAt - 1;
+      const accepted = questions.slice(0, acceptedQuestions).map(({ id: stockId }) => {
+        const threadId = stock.items.find((item) => item.id === stockId)?.thread?.id;
+        if (!threadId) throw new Error(`ストック ${stockId} のスレッドがありません`);
+        return { stockId, ok: true, threadId };
+      });
+      const listed = accepted
+        .map(({ stockId, threadId }) => ({ id: threadId, stockId }))
+        .sort((a, b) => a.id.localeCompare(b.id));
       if (slowAt === 1 && !item) {
         expect({ status, body }).toEqual({
           status: 503,
@@ -744,18 +757,17 @@ describe("ストックとスレッド API", () => {
               count: item ? 1 : 0,
               delivery: item ? (active ? "queued" : "delivered") : null,
             },
-            questions: questions.map(({ id }, index) =>
-              index < acceptedQuestions
-                ? { stockId: id, ok: true, threadId: threads[index]!.id }
-                : {
-                    stockId: id,
-                    ok: false,
-                    error: {
-                      code: "fork_failed",
-                      message:
-                        "スレッドを始められませんでした。AI を動かすプロセスにつながりません。少し待ってから、もう一度操作してください。",
-                    },
+            questions: questions.map(
+              ({ id }, index) =>
+                accepted[index] ?? {
+                  stockId: id,
+                  ok: false,
+                  error: {
+                    code: "fork_failed",
+                    message:
+                      "スレッドを始められませんでした。AI を動かすプロセスにつながりません。少し待ってから、もう一度操作してください。",
                   },
+                },
             ),
           },
         });
@@ -763,7 +775,7 @@ describe("ストックとスレッド API", () => {
       expect(last.closedAt).toBe(closedAgainAt ?? (active || item ? null : 1));
       expect({
         states,
-        threads: threads.map(({ stockId }) => stockId),
+        threads: threads.map(({ id, stockId }) => ({ id, stockId })),
         queued,
         lastSeq: last.lastSeq,
       }).toEqual({
@@ -775,7 +787,7 @@ describe("ストックとスレッド API", () => {
             sentSeq: null,
           })),
         ],
-        threads: questions.slice(0, acceptedQuestions).map(({ id }) => id),
+        threads: listed,
         queued: active && item ? [item.id] : [],
         lastSeq: expectedLastSeq,
       });
@@ -967,12 +979,16 @@ describe("ストックとスレッド API", () => {
     await add();
     const response = await sendStock({ kinds: "questions" });
     expect(response.status).toBe(200);
-    const [first, second] = await listThreads();
+    const listed = await listThreads();
+    const first = listed.find(({ stockId }) => stockId === "s001");
+    const second = listed.find(({ stockId }) => stockId === "s002");
+    if (!first || !second) throw new Error("質問に対応するスレッドがありません");
+    expect(listed.map(({ id }) => id)).toEqual([first.id, second.id].sort());
     expect(await response.json()).toEqual({
       instructions: { count: 0, delivery: null },
       questions: [
-        { stockId: "s001", ok: true, threadId: first!.id },
-        { stockId: "s002", ok: true, threadId: second!.id },
+        { stockId: "s001", ok: true, threadId: first.id },
+        { stockId: "s002", ok: true, threadId: second.id },
       ],
     });
     expect(
@@ -983,7 +999,7 @@ describe("ストックとスレッド API", () => {
     ]);
     expect(await (await request("/api/conversations/c/stock")).json()).toEqual({
       items: [
-        ...[first!, second!].map(({ id, title, stockId }) =>
+        ...[first, second].map(({ id, title, stockId }) =>
           baseItem(stockId, {
             kind: "question",
             text: title!,
@@ -999,7 +1015,7 @@ describe("ストックとスレッド API", () => {
       { id: parent.sessionId, dir: cwd },
       { id: parent.sessionId, dir: cwd },
     ]);
-    const threads = [first, second].map((t) => runner.runtime.store.get(t!.id)!);
+    const threads = [first, second].map((t) => runner.runtime.store.get(t.id)!);
     expect(
       threads.map(({ cwd, issueId, projectId, parentConversationId }) => ({
         cwd,
@@ -1012,7 +1028,7 @@ describe("ストックとスレッド API", () => {
       { cwd, issueId: null, projectId: "p", parentConversationId: "c" },
     ]);
     expect(new Set([parent.sessionId, ...threads.map(({ sessionId }) => sessionId)]).size).toBe(3);
-    const id = first!.id;
+    const id = first.id;
     expect(runner.runtime.store.get("c")).toEqual(parent);
     const changed = () =>
       messages.filter((message) => {
