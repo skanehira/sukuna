@@ -41,7 +41,7 @@ export const worktreeItemSchema = z.object({
 export const worktreeListSchema = z.object({ worktrees: z.array(worktreeItemSchema) });
 export const worktreeCreatedSchema = worktreeItemSchema.extend({ notice: z.string().nullable() });
 export const worktreeRemovedSchema = z.object({
-  removedBranch: z.boolean(),
+  removedBranch: z.literal(false),
   movedConversationIds: z.array(z.string()),
 });
 export type WorktreeItem = z.infer<typeof worktreeItemSchema>;

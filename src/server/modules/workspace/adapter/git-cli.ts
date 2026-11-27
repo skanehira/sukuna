@@ -63,16 +63,6 @@ export function createWorktreeGit(git: GitRunner, gh: GhRunner): WorktreeGitPort
     }))
       .map(() => true)
       .orElse((error) => (error.message.includes("ENOENT") ? ok(false) : err(error)));
-  const branchHead = async (cwd: string, branch: string) => {
-    const result = await git.run(["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], {
-      cwd,
-    });
-    return result.exitCode === 0
-      ? ok(result.stdout.trim())
-      : result.exitCode === 1
-        ? ok(null)
-        : err(gitError(result.stderr));
-  };
   const unpushed = async (project: { path: string; defaultBranch: string }, head: string) =>
     (
       await run(project.path, [
@@ -176,16 +166,13 @@ export function createWorktreeGit(git: GitRunner, gh: GhRunner): WorktreeGitPort
       (await run(cwd, ["worktree", "remove", path])).map(() => undefined),
     prune: async (cwd) =>
       (await run(cwd, ["worktree", "prune", "--expire", "now"])).map(() => undefined),
-    branchHead,
-    unpushed,
-    async protect(project, current, owned) {
+    async protect(project, current) {
       const requested: { cwd: string; ref: string }[] = [];
       if (current) {
         requested.push({ cwd: current.path, ref: "HEAD" });
         if (current.branch)
           requested.push({ cwd: project.path, ref: `refs/heads/${current.branch}` });
       }
-      if (owned) requested.push({ cwd: project.path, ref: `refs/heads/${owned.branch}` });
       const handles: { path: string; handle: Awaited<ReturnType<typeof open>> }[] = [];
       const release = async () => {
         for (const { path, handle } of handles.reverse()) {
@@ -239,38 +226,7 @@ export function createWorktreeGit(git: GitRunner, gh: GhRunner): WorktreeGitPort
           return err(WORKTREE_CHANGED);
         }
       }
-      if (owned) {
-        const head = await branchHead(project.path, owned.branch);
-        if (head.isErr() || head.value !== owned.head) {
-          await release();
-          return err(WORKTREE_CHANGED);
-        }
-      }
       return ok({ release });
-    },
-    async deleteBranch(cwd, branch, expectedHead) {
-      const current = await branchHead(cwd, branch);
-      if (current.isErr()) return err(current.error);
-      if (current.value === null) return ok(false);
-      if (current.value !== expectedHead) return err(WORKTREE_CHANGED);
-      const listed = await run(cwd, ["worktree", "list", "--porcelain", "-z"]);
-      if (listed.isErr()) return err(listed.error);
-      if (parseWorktrees(listed.value).some((entry) => entry.branch === branch))
-        return err(WORKTREE_CHANGED);
-      const removed = await run(cwd, [
-        "update-ref",
-        "--no-deref",
-        "-d",
-        `refs/heads/${branch}`,
-        expectedHead,
-      ]);
-      if (removed.isErr()) {
-        const after = await branchHead(cwd, branch);
-        return after.isOk() && after.value !== expectedHead
-          ? err(WORKTREE_CHANGED)
-          : err(removed.error);
-      }
-      return ok(true);
     },
     async mergedPrHeads(cwd, urls) {
       const heads: string[] = [];

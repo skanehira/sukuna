@@ -1,3 +1,9 @@
+import type { OpenedDatabase } from "../../../../shared/db/open";
+import { createWorktreeActivity } from "../../../../shared/workspace/sqlite-worktree-activity";
+import {
+  WorktreeActivityBusy,
+  type WorktreeActivityReservation,
+} from "../../../../shared/workspace/worktree-activity";
 import { and, asc, desc, eq, inArray, max } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import * as schema from "../../../../shared/db/schema";
@@ -8,14 +14,21 @@ type FlowDatabase = BetterSQLite3Database<typeof schema>;
 type QueryDatabase = Pick<FlowDatabase, "select" | "insert" | "update">;
 const { issues, issueEvents, issueDependencies, conversations } = schema;
 
-export function createIssueUnitOfWork(db: FlowDatabase): IssueUnitOfWorkPort {
+export function createIssueUnitOfWork(database: OpenedDatabase): IssueUnitOfWorkPort {
   return {
     run: (action) =>
-      db.transaction((tx) => action(createIssueRepository(tx)), { behavior: "immediate" }),
+      createWorktreeActivity(database.sqlite.name).run((reservation) =>
+        database.db.transaction((tx) => action(createIssueRepository(tx, reservation)), {
+          behavior: "immediate",
+        }),
+      ),
   };
 }
 
-export function createIssueRepository(db: QueryDatabase): IssueRepositoryPort {
+export function createIssueRepository(
+  db: QueryDatabase,
+  reservation: WorktreeActivityReservation,
+): IssueRepositoryPort {
   const withdrawnDependencies = (id: string) =>
     db
       .select({ number: issues.number })
@@ -93,6 +106,19 @@ export function createIssueRepository(db: QueryDatabase): IssueRepositoryPort {
     },
 
     saveStateChange: (issue, change: StateChanged, now) => {
+      try {
+        reservation.acquire(
+          db
+            .select({ id: schema.worktrees.id })
+            .from(schema.worktrees)
+            .where(and(eq(schema.worktrees.issueId, issue.id), eq(schema.worktrees.origin, "flow")))
+            .all()
+            .map((row) => row.id),
+        );
+      } catch (error) {
+        if (error instanceof WorktreeActivityBusy) return null;
+        throw error;
+      }
       const payload = stateChangedSchema.parse(change);
       const seq =
         (db

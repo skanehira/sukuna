@@ -1,3 +1,4 @@
+import type { WorktreeActivity } from "../../../../shared/workspace/worktree-activity";
 import type { Result } from "neverthrow";
 import type { WorktreeItem } from "../../../../shared/api/worktree";
 import type { WorktreeConflict } from "../../../../shared/workspace/worktree-safety";
@@ -78,18 +79,10 @@ export interface WorktreeGitPort {
   ): Promise<Result<void, WorktreeError>>;
   remove(cwd: string, path: string): Promise<Result<void, WorktreeError>>;
   prune(cwd: string): Promise<Result<void, WorktreeError>>;
-  branchHead(cwd: string, branch: string): Promise<Result<string | null, WorktreeError>>;
-  unpushed(project: WorktreeProject, head: string): Promise<Result<number, WorktreeError>>;
   protect(
     project: WorktreeProject,
     current: { path: string; head: string; branch: string | null } | null,
-    owned: { branch: string; head: string } | null,
   ): Promise<Result<{ release(): Promise<void> }, WorktreeError>>;
-  deleteBranch(
-    cwd: string,
-    branch: string,
-    expectedHead: string,
-  ): Promise<Result<boolean, WorktreeError>>;
   mergedPrHeads(cwd: string, urls: string[]): Promise<string[]>;
 }
 export interface WorktreeUnitOfWorkPort {
@@ -98,7 +91,6 @@ export interface WorktreeUnitOfWorkPort {
   ): Result<T, WorktreeError>;
 }
 export type WorktreeRemovalPlan = {
-  branchHead: string | null;
   worktreeRemoved: boolean;
   identity: string | null;
 };
@@ -113,10 +105,11 @@ export interface WorktreeRemovalStoragePort {
     plan: WorktreeRemovalPlan,
   ): Promise<Result<void, WorktreeError>>;
   clear(project: WorktreeProject, id: string): Promise<Result<void, WorktreeError>>;
-  identity(path: string): Promise<Result<string, WorktreeError>>;
+  identity(project: WorktreeProject, path: string): Promise<Result<string | null, WorktreeError>>;
 }
 export type WorktreeDependencies = {
   repository: WorktreeRepositoryPort;
+  activity: Pick<WorktreeActivity, "acquire">;
   unitOfWork: WorktreeUnitOfWorkPort;
   removals: WorktreeRemovalStoragePort;
   git: WorktreeGitPort;

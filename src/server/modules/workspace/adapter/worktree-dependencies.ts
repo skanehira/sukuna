@@ -1,3 +1,4 @@
+import { createWorktreeActivity } from "../../../../shared/workspace/sqlite-worktree-activity";
 import { err, Result } from "neverthrow";
 import { ulid } from "ulid";
 import type { OpenedDatabase } from "../../../../shared/db/open";
@@ -8,7 +9,7 @@ import { createWorktreeRemovalStorage } from "./worktree-removal-storage";
 import { createWorktreeRepository } from "./worktree-repository";
 
 export function createWorktreeDependencies(
-  database: () => OpenedDatabase["db"],
+  database: () => OpenedDatabase,
   options: {
     git?: GitRunner;
     gh?: GhRunner;
@@ -18,12 +19,15 @@ export function createWorktreeDependencies(
 ): WorktreeDependencies {
   const git = options.git ?? createGitCli();
   return {
+    activity: {
+      acquire: (ids) => createWorktreeActivity(database().sqlite.name).acquire(ids),
+    },
     unitOfWork: {
       run(operation) {
         let failure: WorktreeError | undefined;
         const result = Result.fromThrowable(
           () =>
-            database().transaction((tx) => {
+            database().db.transaction((tx) => {
               const result = operation(createWorktreeRepository(() => tx));
               if (result.isErr()) {
                 failure = result.error;
@@ -38,7 +42,7 @@ export function createWorktreeDependencies(
       },
     },
     removals: createWorktreeRemovalStorage(git),
-    repository: createWorktreeRepository(database),
+    repository: createWorktreeRepository(() => database().db),
     git: createWorktreeGit(git, options.gh ?? createGhRunner(process.env.SUKUNA_GH ?? null)),
     now: options.now ?? (() => Date.now()),
     id: options.id ?? ulid,

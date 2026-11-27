@@ -78,7 +78,7 @@ const server = serve(
         (issueId, projectId) =>
           getWsHub().notice({ kind: "issue", issue_id: issueId, project_id: projectId, seq: 0 }),
       ),
-      worktrees: createWorktreeDependencies(() => getDatabase().db),
+      worktrees: createWorktreeDependencies(getDatabase),
     }).fetch,
     port: env.port,
     hostname: "0.0.0.0",

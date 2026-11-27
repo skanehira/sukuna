@@ -1,3 +1,4 @@
+import { createWorktreeActivity } from "../../../../shared/workspace/sqlite-worktree-activity";
 import type { OpenedDatabase } from "../../../../shared/db/open";
 import {
   createIssueDataRepository,
@@ -9,13 +10,14 @@ import { createIssueOps } from "../usecase/issue-ops";
 import type { IssueClock } from "../../../../shared/issue/ports";
 import type { IssueNoticePort, StopConversationPort } from "../domain/ports";
 export function createIssueOperations(
-  db: OpenedDatabase["db"],
+  database: OpenedDatabase,
   clock: IssueClock,
   notices: IssueNoticePort,
   conversations: StopConversationPort,
 ) {
+  const { db } = database;
   const dependency = createDependencyWithdrawn({
-    unitOfWork: createIssueUnitOfWork(db),
+    unitOfWork: createIssueUnitOfWork(database),
     clock,
     notices,
     conversations,
@@ -27,8 +29,13 @@ export function createIssueOperations(
     withdraw: dependency.withdraw,
     clear: dependency.clear,
     run: (action) =>
-      db.transaction((tx) => action(createIssueDataRepository(tx), createIssueRepository(tx)), {
-        behavior: "immediate",
-      }),
+      createWorktreeActivity(database.sqlite.name).run((reservation) =>
+        db.transaction(
+          (tx) => action(createIssueDataRepository(tx), createIssueRepository(tx, reservation)),
+          {
+            behavior: "immediate",
+          },
+        ),
+      ),
   });
 }

@@ -28,11 +28,11 @@ export async function createWorktree(projectId: string, name: string, deps: Work
   if (branch.isErr()) return err(branch.error);
   const excluded = await deps.git.exclude(project.path);
   if (excluded.isErr()) return err(excluded.error);
-  let start = project.defaultBranch;
+  let start = `refs/heads/${project.defaultBranch}`;
   let notice: string | null = null;
   if (project.usesGithub && !branch.value) {
     const fetched = await deps.git.fetch(project.path, project.defaultBranch);
-    if (fetched.isOk()) start = `origin/${project.defaultBranch}`;
+    if (fetched.isOk()) start = `refs/remotes/origin/${project.defaultBranch}`;
     else notice = "GitHub から取得できなかったので、手元の既定ブランチから作りました";
   }
   const record: WorktreeRecord = {

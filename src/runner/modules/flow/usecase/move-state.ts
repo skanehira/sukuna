@@ -76,5 +76,5 @@ export function moveStateWithin(
             .join(" ")
         : (command.detail ?? null);
   const notice = repository.saveStateChange(issue, { ...next, cause: next.cause, detail }, now);
-  return { kind: "moved", notice };
+  return notice === null ? { kind: "unchanged" } : { kind: "moved", notice };
 }

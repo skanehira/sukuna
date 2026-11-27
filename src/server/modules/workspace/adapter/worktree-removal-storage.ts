@@ -1,12 +1,11 @@
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { err, ok, ResultAsync } from "neverthrow";
 import { z } from "zod";
 import type { WorktreeError, WorktreeRemovalStoragePort } from "../domain/worktree-ports";
 import type { GitRunner } from "./git-cli";
 
 const planSchema = z.object({
-  branchHead: z.string().nullable(),
   worktreeRemoved: z.boolean(),
   identity: z.string().nullable(),
 });
@@ -64,12 +63,27 @@ export function createWorktreeRemovalStorage(git: GitRunner): WorktreeRemovalSto
         ? err(file.error)
         : ResultAsync.fromPromise(rm(file.value, { force: true }), failure);
     },
-    async identity(path) {
-      const result = await git.run(["rev-parse", "--absolute-git-dir"], { cwd: path });
+    async identity(project, path) {
+      const result = await git.run(["rev-parse", "--git-common-dir"], { cwd: project.path });
       if (result.exitCode !== 0) return err(failure());
-      const gitDir = result.stdout.trim();
-      return ResultAsync.fromPromise(stat(gitDir, { bigint: true }), failure).map(
-        (info) => `${gitDir}\0${info.dev}\0${info.ino}`,
+      const registrations = join(resolve(project.path, result.stdout.trim()), "worktrees");
+      return ResultAsync.fromPromise(
+        (async () => {
+          const names = await readdir(registrations).catch((error: unknown) => {
+            if (missing(error)) return [];
+            throw error;
+          });
+          for (const name of names) {
+            const gitDir = join(registrations, name);
+            const target = (await readFile(join(gitDir, "gitdir"), "utf8")).trim();
+            if (dirname(resolve(gitDir, target)) !== path) continue;
+            const info = await stat(gitDir, { bigint: true });
+            const pointer = await stat(join(gitDir, "gitdir"), { bigint: true });
+            return `${gitDir}\0${info.dev}\0${info.ino}\0${info.birthtimeNs}\0${pointer.ino}\0${pointer.birthtimeNs}`;
+          }
+          return null;
+        })(),
+        failure,
       );
     },
   };

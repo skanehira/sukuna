@@ -16,7 +16,7 @@ export type IssueNotice = { kind: "issue"; issue_id: string; project_id: string;
 export interface IssueRepositoryPort {
   getIssue(id: string): FlowIssue | undefined;
   contextOf(issue: FlowIssue): TransitionContext;
-  saveStateChange(issue: FlowIssue, change: StateChanged, now: number): IssueNotice;
+  saveStateChange(issue: FlowIssue, change: StateChanged, now: number): IssueNotice | null;
   dependentIssueIds(id: string): string[];
   withdrawnDependencies(id: string): { number: number }[];
   workingStageConversationIds(id: string): string[];
