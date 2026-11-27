@@ -14,6 +14,7 @@ import { createLifecycleApi } from "./lib/lifecycle/api";
 import { createConversationWorkspace } from "./lib/conversation/workspace";
 import { createFilesApi } from "./lib/files/api";
 import type { RealtimeSocket } from "./lib/realtime";
+import { createProjectSettingsApi } from "./lib/project-settings-api";
 import { createSettingsApi, createSettingsStore } from "./lib/settings-store";
 import { loadSettingsScreen, registerSettingsCommands } from "./lib/settings-workspace";
 import { createProjectUsageApi } from "./lib/project-usage-api";
@@ -69,7 +70,6 @@ const reportSettingsError = (error: unknown) => {
 };
 const settings = createSettingsStore(createSettingsApi(request), reportSettingsError);
 controller.options.keymap = settings.keymap;
-const stopSettingsCommands = registerSettingsCommands(controller);
 const stopUsageCommand = registerUsageCommand(controller);
 const projectUsage = createProjectUsageApi(request);
 const timeFormat = new Intl.DateTimeFormat("ja-JP", {
@@ -131,6 +131,14 @@ const conversations = createConversationWorkspace(
     },
   },
 );
+const projectSettings = {
+  api: createProjectSettingsApi(request),
+  projects: inbox.projects,
+  subscribeInbox: (receive: Parameters<typeof conversations.subscribeChanges>[1]) =>
+    conversations.subscribeChanges("inbox", receive),
+  projectForConversation: conversations.projectForConversation,
+};
+const stopSettingsCommands = registerSettingsCommands(controller, projectSettings, settings);
 const loadScreen: ScreenLoader = async (route) => {
   if (route.kind === "home")
     return {
@@ -155,7 +163,7 @@ const loadScreen: ScreenLoader = async (route) => {
       ),
     };
   return (
-    loadSettingsScreen(route, controller, settings, formatTime) ??
+    loadSettingsScreen(route, controller, settings, formatTime, projectSettings) ??
     loadProjectUsageScreen(route, controller, projectUsage, formatTime) ??
     conversations.loadScreen(route)
   );

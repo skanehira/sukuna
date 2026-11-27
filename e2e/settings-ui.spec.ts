@@ -91,7 +91,9 @@ test("キーを変更し、別タブで開いているヘルプを更新して�
   const settings = page.getByRole("region", { name: "設定" });
   await expect(settings.getByText("キーの割り当てを既定に戻す", { exact: true })).toBeVisible();
   await capture(page, "変更した割り当てがある設定画面");
-  await page.keyboard.press("1");
+  const settingsRows = await settings.locator(".cm-line").allTextContents();
+  const resetRow = settingsRows.findIndex((line) => line.includes("キーの割り当てを既定に戻す"));
+  await command(page, String(resetRow + 1));
   await page.keyboard.press("Enter");
   await expect(page.getByLabel("操作の確認")).toBeVisible();
   await capture(page, "既定の割り当てに戻す前の確認");
