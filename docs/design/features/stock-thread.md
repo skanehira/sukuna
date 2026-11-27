@@ -382,7 +382,7 @@ DESIGN.md「API 一覧」のうち、本機能の 7 本を持つ。エラーの�
 - 質問の失敗の `code` は `no_session` (元の会話に応答が無い) / `fork_failed` (分岐に失敗したか、受け付ける前に応答期限が切れた) とする
 - 400 `invalid_input`: 種類または対象 ID の形式が合わない
 - 404 `not_found`: 会話が無い
-- 409 `conflict`: 会話がスレッドである。issue の担当でない段階の会話に指示を送った (`features/conversation.md`「指示を届ける規則」)
+- 409 `conflict`: 会話がスレッドである。会話の終了予約中に送ったか、ランナーの直列処理を待つ間に会話が閉じた。issue の担当でない段階の会話に指示を送った (`features/conversation.md`「指示を届ける規則」)
 - ランナーの応答を受け取れなくても、受け付け済みの件があれば 200 でその結果を返す。期限内に受け付けなかった質問は失敗として返し、`stocked` のまま残す
 - 503 `runner_unavailable`: ランナーの応答を受け取れず、受け付け済みの件が無い。すべての件が `stocked` のまま残る
 - 500 `worktree_failed`: 停止中の issue の会話で、worktree の作り直しに失敗した (`features/issue-flow.md`「停止中から戻る」)。どの件も `stocked` のまま残る
