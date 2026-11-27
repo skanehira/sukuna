@@ -8,6 +8,10 @@ import { AuthenticationGuard, createIdentityLoader } from "./shell/Authenticatio
 import { createNavigation } from "./shell/navigation";
 import { createNotices } from "./shell/notices";
 import { ShellBoundary } from "./shell/ShellBoundary";
+import { createConversationApi } from "./lib/conversation/api";
+import { createConversationWorkspace } from "./lib/conversation/workspace";
+import type { RealtimeSocket } from "./lib/realtime";
+import { ulid } from "ulid";
 
 const reload = () => window.location.reload();
 const navigation = createNavigation(
@@ -23,6 +27,27 @@ const notices = createNotices({
   },
 });
 controller.options.notify = notices.notify;
+const conversations = createConversationWorkspace(
+  createConversationApi(window.fetch.bind(window)),
+  controller,
+  {
+    clientId: ulid(),
+    id: ulid,
+    now: () => Date.now(),
+    schedule: (fn, ms) => {
+      const id = window.setTimeout(fn, ms);
+      return () => window.clearTimeout(id);
+    },
+  },
+  () =>
+    new WebSocket(
+      `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws`,
+    ) as unknown as RealtimeSocket,
+);
+const stopConversations = conversations.start();
+const visibility = () => conversations.visibility(document.visibilityState === "visible");
+document.addEventListener("visibilitychange", visibility);
+visibility();
 const dismissNotice = (event: KeyboardEvent) => {
   if (event.key === "Escape") notices.dismissError();
 };
@@ -30,6 +55,8 @@ window.addEventListener("keydown", dismissNotice);
 import.meta.hot?.dispose(() => {
   window.removeEventListener("keydown", dismissNotice);
   notices.dispose();
+  stopConversations();
+  document.removeEventListener("visibilitychange", visibility);
   dispose();
 });
 const loadIdentity = createIdentityLoader((url) => window.fetch(url));
@@ -44,6 +71,9 @@ createRoot(document.getElementById("root")!).render(
             navigation={navigation}
             notices={notices}
             identityRecovery={identityRecovery}
+            loadScreen={conversations.loadScreen}
+            renderRight={conversations.renderRight}
+            connection={conversations.connection}
           />
         )}
       </AuthenticationGuard>

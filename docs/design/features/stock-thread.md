@@ -192,7 +192,7 @@ type TerminalQuote = {
 
 送る操作は、画面のサーバーがランナーの「ストックを送る」に渡し、ランナーが会話ごとに 1 列に並べて行う。
 
-1. 選んだ種類で、状態が `stocked` の件を id (ULID) の順に取る。0 件なら何もせず、件数 0 を返す
+1. 「API > POST /api/conversations/:id/stock/send」の種類と対象 ID の条件で、状態が `stocked` の件を id (ULID) の順に取る。0 件なら何もせず、件数 0 を返す
 2. 指示があれば、届け方を会話の状態で決める。届け方の規則は `features/runtime.md`「画面のサーバーからランナーへの操作」の指示を送る操作と同じである
    - すぐに届けるとき: 全件を「指示の文」の形で 1 通にまとめ、`origin: "stock"` で届ける。同じトランザクションで、各件を `sent` にし、`sent_at` と `sent_seq` (届けた発言の `seq`) を書く
    - 預けるとき: 1 件ずつ、「指示の文」の 1 項目を本文にした届く前の指示 (`queued_instructions`) を作り、`stock_item_id` を書く。同じトランザクションで各件を `sent` にして `sent_at` を書き、`sent_seq` は空のままにする
@@ -351,11 +351,18 @@ DESIGN.md「API 一覧」のうち、本機能の 7 本を持つ。エラーの�
 
 ### POST /api/conversations/:id/stock/send
 
+指定した種類のストックを送る。取り消した指示を 1 件だけ送り直すときは、同じ口で対象の ID を指定する。
+
 ```json
 { "kinds": "all" }
 ```
 
+```json
+{ "kinds": "instructions", "stockIds": ["01J...その件のID"] }
+```
+
 - `kinds` は `all` / `questions` / `instructions` とする
+- `stockIds` は省略可能な対象 ID の配列とする。指定したときは、会話と `kinds` の条件に加えて ID で絞る。省略すると、選んだ種類の全件を送る
 - 200:
 
 ```json
@@ -375,7 +382,7 @@ DESIGN.md「API 一覧」のうち、本機能の 7 本を持つ。エラーの�
 - 503 `runner_unavailable`: ランナーにつながらない。どの件も `stocked` のまま残る
 - 500 `worktree_failed`: 停止中の issue の会話で、worktree の作り直しに失敗した (`features/issue-flow.md`「停止中から戻る」)。どの件も `stocked` のまま残る
 
-ランナーの口 (`src/shared/ipc.ts` に足す): `POST /conversations/:id/stock/send` (入力 `kinds`、出力は上の 200 と同じ)。
+ランナーの口 (`src/shared/ipc.ts` に足す) は `POST /conversations/:id/stock/send` とする。入力は `kinds` と省略可能な `stockIds`、出力は上の 200 と同じとする。
 
 ### GET /api/conversations/:id/threads
 

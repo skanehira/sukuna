@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { runStateSchema } from "./events";
 
+export type StockSendInput = {
+  kinds: "all" | "questions" | "instructions";
+  stockIds?: string[];
+};
+
 const textWithin = (min: number, max: number) =>
   z.string().refine((text) => {
     const length = Array.from(text).length;

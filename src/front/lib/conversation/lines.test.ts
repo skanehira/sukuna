@@ -1,0 +1,169 @@
+import { describe, expect, it } from "vite-plus/test";
+import { eventLines, switchLines } from "./lines";
+import type { Event } from "./types";
+
+const event = (seq: number, value: Omit<Event, "seq" | "createdAt">): Event =>
+  ({ ...value, seq, createdAt: 0 }) as Event;
+describe("会話の行", () => {
+  it.each(["create", "edit", "update"] as const)(
+    "%sの差分の本文を追加行として表示する",
+    (change) => {
+      const first = change === "create" ? 1 : 10;
+      const diff: Event = {
+        seq: 4,
+        createdAt: 0,
+        type: "diff",
+        payload: {
+          tool_use_id: "tool",
+          path: "new.ts",
+          change,
+          content: "1行目\n2行目\n",
+          hunks:
+            change === "create"
+              ? []
+              : [
+                  {
+                    old_start: 10,
+                    old_lines: 0,
+                    new_start: 10,
+                    new_lines: 2,
+                    lines: ["+1行目", "+2行目"],
+                  },
+                ],
+          truncated: false,
+        },
+      };
+      expect(eventLines(diff, "c1", "/project")).toEqual([
+        { kind: "add", text: `${first} +1行目`, seq: 4, seqLine: 0 },
+        { kind: "add", text: `${first + 1} +2行目`, seq: 4, seqLine: 1 },
+      ]);
+    },
+  );
+  it.each(["", "1行だけ", "1行だけ\n"])(
+    "新規ファイルの空本文と末尾改行を余分な行として数えない (%j)",
+    (content) => {
+      const diff: Event = {
+        seq: 4,
+        createdAt: 0,
+        type: "diff",
+        payload: {
+          tool_use_id: "tool",
+          path: "new.ts",
+          change: "create",
+          content,
+          hunks: [],
+          truncated: true,
+        },
+      };
+      expect(eventLines(diff, "c1", "/project")).toEqual(
+        content ? [{ kind: "add", text: "1 +1行だけ", seq: 4, seqLine: 0 }] : [],
+      );
+    },
+  );
+  it("発言は札と本文、画像の件数を順に並べる", () => {
+    expect(
+      eventLines(
+        event(1, {
+          type: "user_message",
+          payload: {
+            text: "指示\n次の行",
+            images: [{ path: "image-1", media_type: "image/png" }],
+            origin: "developer",
+          },
+        }),
+        "c1",
+        "/project",
+      ),
+    ).toEqual([
+      { kind: "speaker", text: "あなた", seq: 1 },
+      { kind: "text", text: "指示", seq: 1, seqLine: 0 },
+      { kind: "text", text: "次の行", seq: 1, seqLine: 1 },
+      { kind: "note", text: "画像 1 件", seq: 1 },
+    ]);
+  });
+  it.each([
+    [
+      "Read",
+      { file_path: "/project/src/a.ts" },
+      null,
+      "/conversations/c1/file?path=src%2Fa.ts&line=1",
+    ],
+    ["mcp__sukuna__issue_get", { number: 42 }, null, "/issues/42"],
+    ["mcp__sukuna__issue_create", {}, '{"issue":{"id":"issue-id","number":43}}', "/issues/43"],
+    ["mcp__sukuna__issue_list", {}, null, null],
+  ])("%s の行は対象を開く先を決める", (name, input, result, target) => {
+    const lines = eventLines(
+      event(2, {
+        type: "tool_use",
+        payload: { tool_use_id: "tool-1", name, input, parent_tool_use_id: null },
+      }),
+      "c1",
+      "/project",
+      result,
+    );
+    expect(lines.map((line) => line.target?.url ?? null)).toEqual([target]);
+  });
+  it.each(
+    ["create", "edit"].flatMap((change) =>
+      [25, 26].map((count) => ({ change: change as "create" | "edit", count })),
+    ),
+  )("$change の差分が $count 行なら25行を超えたときだけ畳む", ({ change, count }) => {
+    const diff = event(3, {
+      type: "diff",
+      payload: {
+        tool_use_id: "tool-1",
+        path: "a.ts",
+        change,
+        content: Array.from({ length: count }, (_, i) => `line ${i + 1}`).join("\n") + "\n",
+        hunks:
+          change === "create"
+            ? []
+            : [
+                {
+                  old_start: 1,
+                  old_lines: 0,
+                  new_start: 1,
+                  new_lines: count,
+                  lines: Array.from({ length: count }, (_, i) => `+line ${i + 1}`),
+                },
+              ],
+        truncated: false,
+      },
+    });
+    const lines = eventLines(diff, "c1", "/project");
+    expect(lines.map((line) => line.text)).toEqual(
+      count === 25
+        ? Array.from({ length: count }, (_, i) => `${i + 1} +line ${i + 1}`)
+        : [
+            ...Array.from({ length: 10 }, (_, i) => `${i + 1} +line ${i + 1}`),
+            "残り 16 行 (Enter か zo で開く)",
+          ],
+    );
+    expect(eventLines(diff, "c1", "/project", null, true).length).toBe(count);
+  });
+  it("切替一覧はプロジェクトごとに会話・対象 issue・開始メニューを並べ、現在のプロジェクトだけ worktree の開始を出す", () => {
+    const projects = [
+      {
+        id: "p1",
+        name: "one",
+        conversations: [{ id: "c1", title: "会話" }],
+        issues: ["draft", "done", "withdrawn", "ready"].map((state, i) => ({
+          id: `i${i}`,
+          number: i + 1,
+          title: state,
+          state,
+        })),
+      },
+      { id: "p2", name: "two", conversations: [], issues: [] },
+    ];
+    expect(switchLines(projects, "p1").map((line) => line.text)).toEqual([
+      "one",
+      "会話: 会話",
+      "#4 ready",
+      "one で会話を始める",
+      "worktree を作って会話を始める",
+      "two",
+      "two で会話を始める",
+    ]);
+  });
+});
