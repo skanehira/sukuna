@@ -4,9 +4,11 @@ import { ulid } from "ulid";
 import type { OpenedDatabase } from "../../../../shared/db/open";
 import { createGhRunner, type GhRunner } from "../../../../shared/gh/gh-runner";
 import type { WorktreeDependencies, WorktreeError } from "../domain/worktree-ports";
+import type { TerminalSessionsPort } from "../domain/terminal-ports";
 import { createGitCli, createWorktreeGit, type GitRunner } from "./git-cli";
 import { createWorktreeRemovalStorage } from "./worktree-removal-storage";
 import { createWorktreeRepository } from "./worktree-repository";
+import { createTerminalLocation } from "./terminal-location";
 
 export function createWorktreeDependencies(
   database: () => OpenedDatabase,
@@ -15,13 +17,15 @@ export function createWorktreeDependencies(
     gh?: GhRunner;
     now?: () => number;
     id?: () => string;
+    terminals?: TerminalSessionsPort;
   } = {},
 ): WorktreeDependencies {
   const git = options.git ?? createGitCli();
+  const activity: WorktreeDependencies["activity"] = {
+    acquire: (ids) => createWorktreeActivity(database().sqlite.name).acquire(ids),
+  };
   return {
-    activity: {
-      acquire: (ids) => createWorktreeActivity(database().sqlite.name).acquire(ids),
-    },
+    activity,
     unitOfWork: {
       run(operation) {
         let failure: WorktreeError | undefined;
@@ -46,5 +50,12 @@ export function createWorktreeDependencies(
     git: createWorktreeGit(git, options.gh ?? createGhRunner(process.env.SUKUNA_GH ?? null)),
     now: options.now ?? (() => Date.now()),
     id: options.id ?? ulid,
+    ...(options.terminals && {
+      terminals: {
+        location: createTerminalLocation(() => database().db),
+        sessions: options.terminals,
+        activity,
+      },
+    }),
   };
 }

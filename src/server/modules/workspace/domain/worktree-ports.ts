@@ -2,6 +2,7 @@ import type { WorktreeActivity } from "../../../../shared/workspace/worktree-act
 import type { Result } from "neverthrow";
 import type { WorktreeItem } from "../../../../shared/api/worktree";
 import type { WorktreeConflict } from "../../../../shared/workspace/worktree-safety";
+import type { TerminalDependencies } from "./terminal-ports";
 
 export type WorktreeError = {
   code: "invalid_input" | "not_found" | "conflict" | "internal" | "worktree_failed";
@@ -115,6 +116,7 @@ export type WorktreeDependencies = {
   git: WorktreeGitPort;
   now: () => number;
   id: () => string;
+  terminals?: TerminalDependencies;
 };
 export const WORKTREE_CONFLICT: WorktreeError = {
   code: "conflict",

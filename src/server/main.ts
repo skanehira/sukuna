@@ -17,6 +17,7 @@ import {
   getRunnerLink,
   getWsHub,
   initializeRuntime,
+  getPtySessions,
 } from "./runtime";
 import { ulid } from "ulid";
 import { createStockDependencies } from "./modules/stock/adapter/dependencies";
@@ -81,7 +82,7 @@ const server = serve(
         (issueId, projectId) =>
           getWsHub().notice({ kind: "issue", issue_id: issueId, project_id: projectId, seq: 0 }),
       ),
-      worktrees: createWorktreeDependencies(getDatabase),
+      worktrees: createWorktreeDependencies(getDatabase, { terminals: getPtySessions() }),
       recap: createRecapDependencies(
         () => getDatabase().db,
         { forward: (method, path) => getRunnerLink().forward(method, path) },
@@ -104,3 +105,11 @@ server.on("error", (error) => {
   process.exit(1);
 });
 attachUpgradeHandler(server);
+
+function shutdownTerminals() {
+  void getPtySessions()
+    .close()
+    .finally(() => process.exit(0));
+}
+process.once("SIGINT", shutdownTerminals);
+process.once("SIGTERM", shutdownTerminals);

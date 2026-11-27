@@ -4,16 +4,14 @@ import devServer from "@hono/vite-dev-server";
 import { execSync } from "node:child_process";
 import { defineConfig } from "vite-plus";
 import type { Plugin } from "vite";
-import type { Result } from "neverthrow";
-import type { StartupError, StartupOptions } from "./src/shared/db/startup";
-import type { UpgradeHandler } from "./src/server/runtime";
 
-type RuntimeModule = {
-  initializeRuntime: (options?: StartupOptions) => Promise<Result<void, StartupError>>;
-  handleUpgrade: UpgradeHandler;
-};
+type RuntimeModule = Pick<
+  typeof import("./src/server/runtime"),
+  "initializeRuntime" | "handleUpgrade" | "getPtySessions"
+>;
 
 function webSocketUpgrade(): Plugin {
+  let closeTerminals: (() => Promise<void>) | undefined;
   return {
     name: "sukuna:ws-upgrade",
     async configureServer(server) {
@@ -23,6 +21,28 @@ function webSocketUpgrade(): Plugin {
       const initialized = await runtime.initializeRuntime();
       if (initialized.isErr()) throw new Error(initialized.error.message);
       httpServer.on("upgrade", runtime.handleUpgrade);
+      const terminals = runtime.getPtySessions();
+      const interrupt = () => {
+        void server.close().then(
+          () => process.exit(130),
+          (error: unknown) => {
+            server.config.logger.error(String(error));
+            process.exit(1);
+          },
+        );
+      };
+      process.on("SIGINT", interrupt);
+      closeTerminals = async () => {
+        httpServer.off("upgrade", runtime.handleUpgrade);
+        try {
+          await terminals.close();
+        } finally {
+          process.off("SIGINT", interrupt);
+        }
+      };
+    },
+    closeServer() {
+      return closeTerminals?.();
     },
   };
 }
@@ -66,6 +86,7 @@ export default defineConfig({
     },
     server: {
       consumer: "server",
+      resolve: { external: ["node-pty"] },
       input: "src/server/main.ts",
       build: { outDir: "dist/server" },
     },
