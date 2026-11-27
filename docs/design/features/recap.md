@@ -108,7 +108,11 @@
 
 採らなかった案: 全会話で 1 つの `docs/DESIGN_NOTES.md` に書く (並行する会話と、worktree の枝どうしで、同じファイルの書き込みがぶつかる)。会話の作業ディレクトリに置く (worktree を消すと失われ、自動フローの PR に混ざる)。
 
-ファイルの先頭行に `<!-- sukuna-decisions:v2 -->` を置き、内容と理由を JSON 文字列で引用する。本文に区切り記号や改行があっても、項目のメタデータと区別して読み戻すためである。
+内容と理由は JSON 文字列で引用する。本文に区切り記号や改行があっても、項目のメタデータと区別して読み戻せる。
+
+- 先頭行に版の印 `<!-- sukuna-decisions:v2 -->`、またはランナーが書く `<!-- sukuna-decisions:v3 recap=<最後の seq>:<UUID> -->` を置く
+- v3 の最後の seq は先頭の 0 を含まない正の安全な整数とする。UUID は小文字の UUID v4 とする
+- 適用済みの番を示すのは、v3 の形に合う先頭行だけとする。本文中のコメントやコード例は手書きの行として保つ
 
 ```markdown
 <!-- sukuna-decisions:v2 -->
@@ -182,13 +186,19 @@
 - 最初の番は、必ず新しい章を始める
 - 更新は、既存の章の名前と区切り、既存の項目の内容を書き換えない (変わった項目には変わった先の印を足すだけ)。開発者が直した内容は、以後の更新でも保たれる (UC-003 D)
 - 章の名前は 30 文字まで、項目の内容と理由はそれぞれ 200 文字までとし、超えた分は切る
-- 番の反映が済んだら、同じトランザクションで `toc_entries` と `questions` を書き、`conversations.recap_seq` をその番の最後の `seq` まで進める。ファイルはその前に書く
+- ランナーは決定ファイルを先に保存する。そのあと同じトランザクションで `toc_entries` と `questions` を書き、`conversations.recap_seq` を番の最後の `seq` まで進める
+- 決定ファイルを置き換える前に、ランナーは `SUKUNA_HOME/runner/recap/` に差分と置換前後のハッシュを保存する。差分は会話 ID と番の最後の `seq`、イベントのハッシュで照合する
+- ランナーは置換時に v3 の版の印を先頭行に書き、その番の適用を記録する。画面の保存もこの印を保つ
+- 再開時は置換後のハッシュか適用印が合えば、決定ファイルを保ち、SQLite の反映だけを行う。置換前のハッシュが合えば、保存した差分をファイルに当てる
+- どちらも確認できないときは、外部で編集したファイルを保ち、更新に失敗した状態にする。SQLite を反映したら、一時保存した差分を消す
 - 更新の結果は `/ws` で配信し、開いている直近・目次・決まったことの表示を読み直させる
 
 失敗したとき:
 
 - 呼び出しが 30 秒で終わらない、呼び直しても形が合わない、ファイルに書けない、のどれかで失敗とする
 - 失敗したら `conversations.recap_failed_at` に時刻を書き、`recap_seq` は進めない。目次はそれまでの内容のまま残る
+- SQLite の書き込みが競合して失敗の時刻を書けないか消せないときは、同じ仕事で書き込みを再試行する
+- 失敗の時刻を書き直すのを待つ間に次の番が終わるか作り直しの依頼が来たら、古い失敗の保存をやめ、未反映の番から更新を再開する。ランナーの終了時は待機も終える
 - 次の番の終わりに、反映していない番から自動でやり直す (P2)
 - 開発者が「目次を作り直す」を選ぶと、すぐに同じやり直しをする (UC-003 E1)。全文を渡し直す作り方はしない
 
@@ -322,7 +332,8 @@ DESIGN.md「API 一覧」のうち本機能の分を書く。エラーの形と�
 | ファイルの読み書き (SHA-256 を比べて置き換える) | インフラ | `src/shared/recap/decision-file-store.ts` |
 | ファイルごとのプロセス間の排他 | インフラ | `src/shared/recap/decision-file-lock.ts`、`src/shared/recap/ports.ts` |
 | 更新に渡す文の組み立て、返された結果の検査と当て方 | ドメイン | `src/runner/modules/recap/domain/` |
-| 番ごとの更新とやり直し → toc_entries、questions、conversations | ユースケース | `src/runner/modules/recap/usecase/update-recap.ts` |
+| 番ごとの更新とやり直し → toc_entries、questions、conversations | ユースケース | `src/runner/modules/recap/usecase/update-recap.ts`、`src/runner/modules/recap/usecase/save-recap.ts` |
+| 決定ファイルを置き換える前に差分を一時保存する | インフラ | `src/runner/modules/recap/adapter/pending-recap-files.ts` |
 | 要約の呼び出し (Port と Agent SDK の実装) | インフラ | `src/runner/modules/recap/domain/summarizer-port.ts`、`src/runner/modules/recap/adapter/summarizer.ts` |
 | アプリのツール `recap_read` | インフラ | `src/runner/modules/recap/adapter/recap-tool.ts` |
 | 直近・目次・決まったこと・検索の結果の表示 | UI | `src/front/components/recap/` |

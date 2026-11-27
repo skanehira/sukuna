@@ -116,6 +116,7 @@ plist の中身:
 | `vapid.json` | Web Push の VAPID の鍵 (権限 0600) | 導入のコマンド |
 | `runner.sock` | ランナーの Unix ドメインソケット (既定のパス。`features/runtime.md`「プロセスと起動」) | ランナー |
 | `runner/children` | ランナーが起動した Claude Code の子プロセスの PID (`features/runtime.md`「ランナーの再起動」) | ランナー |
+| `runner/recap/` | 決定ファイルの置換前に一時保存する差分とハッシュ (`features/recap.md`「番ごとの更新」) | ランナー |
 | `runner-build.sha` | 前回入れ替えたランナーの成果物のハッシュ (下の「更新」) | 導入のコマンド |
 | `backups/` | バックアップ (下の「バックアップ」) | ランナー、復元の処理 |
 | `logs/` | 3 つのプロセスのログ | launchd |

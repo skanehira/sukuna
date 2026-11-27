@@ -241,7 +241,7 @@ issue の会話 (`kind` が `triage` / `design` / `impl`) へ開発者の指示�
 ### AI の実行の設定
 
 - 会話の実行を開くとき、ランナーは次を渡す。再開するたびに同じものを渡す (DESIGN.md「既知の制約」)
-  - 会話の `cwd`
+  - 会話の `cwd` と追加の読み取りディレクトリ。追加する条件は `features/recap.md`「会話の AI が一覧を読む」に従う
   - プロジェクトのモデルと許可の扱い。値の読み方は `features/project-settings.md` が決める
   - アプリのツール (`features/issue.md`「AI に渡すツール」)
   - 追加の指示。`features/issue.md`「issue の扱いの追加の指示」の文と、`features/recap.md`「会話の AI が一覧を読む」の文を、どの会話の実行にも渡す

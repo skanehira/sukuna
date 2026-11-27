@@ -462,7 +462,7 @@ interface AgentPort {
   fork(sessionId: string, opts: { dir: string }): Promise<Result<{ sessionId: string }, AgentError>>;
   complete(params: CompleteParams): Promise<Result<{ text: string; inputTokens: number; outputTokens: number }, AgentError>>; // ツールを持たない 1 回きりの呼び出し
 }
-type CompleteParams = { model: "haiku"; system: string; prompt: string; title: string; purpose: string };
+type CompleteParams = { model: "haiku"; system: string; prompt: string; title: string; purpose: string; signal?: AbortSignal };
 type OpenParams = {
   sessionId: string; // 新しい会話はランナーが作った UUID、再開は保存した session_id
   resume: boolean;
@@ -470,6 +470,7 @@ type OpenParams = {
   model: "opus" | "sonnet" | "haiku" | null; // projects.model。null は Claude Code の既定
   permissionMode: "bypassPermissions" | "default" | "acceptEdits" | "plan";
   appendSystemPrompt: string; // 追加の指示 (features/conversation.md「AI の実行の設定」)
+  additionalDirectories?: string[];
   appTools: AppTool[];
   context: { conversationId: string; projectId: string; issueId: string | null };
   onQuestion(req: QuestionRequest): Promise<Record<string, string>>; // 回答がそろうまで保留する
@@ -502,6 +503,7 @@ type TokenUsage = { inputTokens: number; outputTokens: number; cacheCreationInpu
 | 会話の開始 | `query({ prompt: <非同期の入力の流れ>, options })` で開く。`options.sessionId` に UUID を渡す。`conversations.session_id` は `init` を受けるまで空にし、受け取った識別子を保存する。`init` より前に失敗した実行は、新しい会話として開き直す |
 | 再開 | `options.resume` に保存した `session_id`、`cwd` に `conversations.cwd` を渡す。許可の設定・アプリのツールは毎回同じものを渡す |
 | 共通の `options` | `cwd`、`model` (`null` なら渡さない)、`permissionMode` (既定は `bypassPermissions` と `allowDangerouslySkipPermissions: true`)、`includePartialMessages: true`、`canUseTool`、`mcpServers`。`settingSources` は渡さない (端末と同じ設定を読む) |
+| 追加のディレクトリ | `OpenParams.additionalDirectories` があれば `options.additionalDirectories` に渡す。渡す条件は `features/recap.md`「会話の AI が一覧を読む」に従う |
 | 追加の指示 | `systemPrompt: { type: "preset", preset: "claude_code", append: <appendSystemPrompt> }` で、Claude Code のシステムプロンプトの末尾に足す。再開のたびに同じ文を渡す |
 | 指示の送信 | `{ type: "user", message: { role: "user", content }, parent_tool_use_id: null, origin: { kind: "human" } }` を入力の流れへ足す。画像は base64 の `image` ブロックにする |
 | 停止 | `Query.interrupt()` を呼ぶ。続けて、動いているバックグラウンドのタスクごとに `stopTask(taskId)` を呼ぶ |
@@ -510,6 +512,7 @@ type TokenUsage = { inputTokens: number; outputTokens: number; cacheCreationInpu
 | 許可の確認 | `AskUserQuestion` 以外の `canUseTool` は、許可の扱いに関係なく `onPermission` に回し、開発者に確かめる |
 | 候補の一覧 | 実行中なら `supportedCommands()`。実行が無ければ、同じプロジェクトで最後に受けた `init` の一覧を返す |
 | 1 回きりの呼び出し | `query` を `tools: []`、`settingSources: []`、`persistSession: false`、`maxTurns: 1`、`effort: "low"` と `title` を付けて呼び、最後の発言の文字を返す (FEASIBILITY.md「PoC 結果 > summary-ai-cost」)。目次などの更新 (`features/recap.md`) が使う |
+| 1 回きりの呼び出しの中断 | `CompleteParams.signal` があれば SDK の `options.abortController` と結び付ける。要約の期限は `features/recap.md`「番ごとの更新」に従う |
 
 1 つの会話の実行 (`AgentSession`) は、最初の指示を送るときに開き、番が終わっても閉じない。会話を手放すときか、作業場所が変わったときに閉じる。作業場所が変わったときは、古い出力の消費を終えてから、保存した会話の識別子で現在の作業場所に開き直す。ランナーは会話ごとに操作を 1 列に並べて処理し、同じ会話の実行を 2 つ開かない。
 
