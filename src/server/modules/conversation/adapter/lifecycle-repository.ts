@@ -12,9 +12,10 @@ import {
 } from "../../../../shared/db/schema";
 import { releaseReservationKey, retiredUsageTimerKey } from "../../../../shared/ipc";
 import type { SearchResult } from "../../../../shared/lifecycle";
+import { closeWithdrawalKeyPrefix } from "../../inbox/domain/notification";
 import type { ConversationRecord, LifecycleRepository } from "../domain/lifecycle";
 
-const pendingWithdrawalKey = (id: string) => `conversation-close-withdraw:${id}`;
+const pendingWithdrawalKey = (id: string) => closeWithdrawalKeyPrefix + id;
 const withdrawalSchema = z.object({ closedAt: z.number(), notificationIds: z.array(z.string()) });
 const conversationFields = {
   id: conversations.id,

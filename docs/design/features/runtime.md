@@ -120,6 +120,7 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 | `settings` のキー `last_restore` と、復元のときの `flow_paused` | 復元の処理と、起動時の後始末 (`db.lock` の中) | 復元時の一時停止はデータベースの置き換えと同時に反映する。復元結果にはサービスの起動状態を含める (`features/operations.md`) |
 | `settings` のキー `restore_generation` | 復元の処理 (`db.lock` の中) | データベースの置き換えを識別する (`features/operations.md`「復元」) |
 | `settings` の `inbox_notification_markers:` で始まるキー | 画面のサーバー | 待機中の通知の契機を再起動後も照合する (`features/inbox.md`「通知を出す条件」) |
+| `settings` のキー `inbox_notification_sequence` | 画面のサーバー | 表示通知の最後の発行番号 (`features/inbox.md`「通知の文面」) |
 | `settings` のほかのキー、`projects` | 画面のサーバー | 開発者の操作 |
 | `worktrees` の行の作成 (`origin = user`) | 画面のサーバー | 開発者が作った worktree と、一覧でアプリの外で作ったと分かった worktree (`features/worktree-terminal.md`「書くプロセス」) |
 | `worktrees` の行の作成 (`origin = flow`) | ランナー (自動フロー) | 自動フローが段階の worktree を作る (`features/worktree-terminal.md`「書くプロセス」) |

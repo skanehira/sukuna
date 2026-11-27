@@ -7,17 +7,19 @@ import {
   startsNotification,
   type NotificationRecord,
   type NotificationRepository,
+  type NotificationWithdrawal,
 } from "../domain/notification";
+import type { NotificationPush, ShowNotification } from "../domain/push-port";
 import { refreshRow } from "./refresh-row";
 
 type Section = InboxRow["section"];
-type InboxNotice = { message: string; tag: string; url: string };
 
 export function createNotifications(deps: {
   inbox: InboxDependencies;
   repository: NotificationRepository;
   shown(): ReadonlySet<string>;
-  publish(notice: InboxNotice): void;
+  publish(notice: ShowNotification): void;
+  notificationPush?: NotificationPush;
   now(): number;
   id(): string;
 }) {
@@ -58,8 +60,12 @@ export function createNotifications(deps: {
     const { projects, flowPaused } = snapshot.value;
     const seen = deps.shown();
     const now = deps.now();
-    const candidates: { record: NotificationRecord; since: number | null; notice: InboxNotice }[] =
-      [];
+    const candidates: {
+      record: NotificationRecord;
+      since: number | null;
+      tag: string;
+      url: string;
+    }[] = [];
     const updated = new Map<string, Map<string, Section>>();
     const waiting = new Set<string>();
     const markers = new Map<string, Record<string, string>>();
@@ -102,7 +108,8 @@ export function createNotifications(deps: {
             dismissedAt: viewed ? now : null,
           },
           since: last === undefined && lastMarker === undefined ? basis.at : null,
-          notice: { message: title + ": " + row.notice, tag: row.key, url },
+          tag: row.key,
+          url,
         });
       }
       if (
@@ -115,13 +122,23 @@ export function createNotifications(deps: {
       .undismissed(projectId)
       .filter(({ kind, id }) => !waiting.has(kind + ":" + id));
 
-    const notices: InboxNotice[] = [];
+    const notices: ShowNotification[] = [];
     if (dismissals.length || candidates.length || markers.size)
       deps.repository.transaction(() => {
         for (const target of dismissals) deps.repository.dismiss(target, now);
-        for (const { record, since, notice } of candidates)
-          if (deps.repository.insertOnce(record, since) && record.dismissedAt === null)
-            notices.push(notice);
+        for (const { record, since, tag, url } of candidates) {
+          const sequence = deps.repository.insertOnce(record, since);
+          if (sequence !== null && record.dismissedAt === null)
+            notices.push({
+              type: "show",
+              id: record.id,
+              tag,
+              sequence,
+              title: record.title,
+              body: record.body,
+              url,
+            });
+        }
         for (const [id, entries] of markers) deps.repository.saveMarkers(id, entries);
       });
 
@@ -135,6 +152,12 @@ export function createNotifications(deps: {
     deps.repository.dismissConversationFamily(id, at);
   return {
     refresh,
+    async withdraw(target: NotificationWithdrawal) {
+      for (const [targetId, ids] of deps.repository.withdrawalGroups(target)) {
+        await deps.notificationPush?.({ type: "dismiss", tag: "conversation:" + targetId, ids });
+        deps.repository.dismissIds(ids, deps.now());
+      }
+    },
     restoreProject(id: string) {
       const snapshot = deps.inbox.repository.load(id);
       if (snapshot.isErr() || !snapshot.value.projects[0])

@@ -1,5 +1,14 @@
 import type Database from "better-sqlite3";
-import type { NotificationRepository, NotificationTarget } from "../domain/notification";
+import {
+  closeWithdrawalKeyPrefix,
+  type NotificationRepository,
+  type NotificationTarget,
+} from "../domain/notification";
+
+const withoutPendingClose = `AND id NOT IN (
+  SELECT pending.value FROM settings, json_each(settings.value, '$.notificationIds') AS pending
+  WHERE settings.key GLOB '${closeWithdrawalKeyPrefix}*' AND pending.type = 'text'
+)`;
 
 export function createNotificationRepository(sqlite: Database.Database): NotificationRepository {
   const insert = sqlite.prepare(
@@ -8,12 +17,17 @@ export function createNotificationRepository(sqlite: Database.Database): Notific
       "WHERE @since IS NULL OR NOT EXISTS (" +
       "SELECT 1 FROM notifications WHERE target_kind = @targetKind AND target_id = @targetId AND created_at >= @since)",
   );
+  const nextSequence = sqlite.prepare(`
+    INSERT INTO settings (key, value) VALUES ('inbox_notification_sequence', '1')
+    ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1
+    RETURNING CAST(value AS INTEGER) AS sequence
+  `);
   const dismiss = sqlite.prepare(
-    "UPDATE notifications SET dismissed_at = ? WHERE dismissed_at IS NULL AND target_kind = ? AND target_id = ?",
+    `UPDATE notifications SET dismissed_at = ? WHERE dismissed_at IS NULL AND target_kind = ? AND target_id = ? ${withoutPendingClose}`,
   );
   const family = sqlite.prepare(
     "UPDATE notifications SET dismissed_at = @at WHERE dismissed_at IS NULL AND target_kind = 'conversation' AND " +
-      "(target_id = @id OR target_id IN (SELECT id FROM conversations WHERE parent_conversation_id = @id AND kind = 'thread'))",
+      `(target_id = @id OR target_id IN (SELECT id FROM conversations WHERE parent_conversation_id = @id AND kind = 'thread')) ${withoutPendingClose}`,
   );
   const project = sqlite.prepare(
     "UPDATE notifications SET dismissed_at = @at WHERE dismissed_at IS NULL AND (" +
@@ -26,6 +40,19 @@ export function createNotificationRepository(sqlite: Database.Database): Notific
       "(target_kind = 'conversation' AND target_id IN (SELECT id FROM conversations WHERE project_id = @projectId)) OR " +
       "(target_kind = 'issue' AND target_id IN (SELECT id FROM issues WHERE project_id = @projectId)))",
   );
+  const withdrawal = sqlite.prepare(`
+    SELECT id, target_id AS targetId FROM notifications
+    WHERE dismissed_at IS NULL AND target_kind = 'conversation'
+      AND CASE @kind
+        WHEN 'notifications' THEN id IN (SELECT value FROM json_each(@ids))
+        ELSE target_id IN (SELECT value FROM json_each(@ids))
+      END
+    ORDER BY target_id, id
+  `);
+  const dismissIds = sqlite.prepare(`
+    UPDATE notifications SET dismissed_at = ?
+    WHERE dismissed_at IS NULL AND id IN (SELECT value FROM json_each(?))
+  `);
   const readMarkers = sqlite.prepare("SELECT value FROM settings WHERE key = ?");
   const writeMarkers = sqlite.prepare(
     "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -34,7 +61,10 @@ export function createNotificationRepository(sqlite: Database.Database): Notific
   const key = (projectId: string) => "inbox_notification_markers:" + projectId;
   return {
     transaction: (work) => sqlite.transaction(work).immediate(),
-    insertOnce: (record, since) => insert.run({ ...record, since }).changes === 1,
+    insertOnce(record, since) {
+      if (insert.run({ ...record, since }).changes === 0) return null;
+      return (nextSequence.get() as { sequence: number }).sequence;
+    },
     undismissed: (projectId) =>
       undismissed.all({ projectId: projectId ?? null }) as NotificationTarget[],
     markers(projectId) {
@@ -53,6 +83,22 @@ export function createNotificationRepository(sqlite: Database.Database): Notific
     },
     dismissProject: (id, at) => {
       project.run({ id, at });
+    },
+    withdrawalGroups({ kind, ids }) {
+      const rows = withdrawal.all({ kind, ids: JSON.stringify(ids) }) as {
+        id: string;
+        targetId: string;
+      }[];
+      const groups = new Map<string, string[]>();
+      for (const { id, targetId } of rows) {
+        const group = groups.get(targetId);
+        if (group) group.push(id);
+        else groups.set(targetId, [id]);
+      }
+      return groups;
+    },
+    dismissIds: (ids, at) => {
+      dismissIds.run(at, JSON.stringify(ids));
     },
   };
 }

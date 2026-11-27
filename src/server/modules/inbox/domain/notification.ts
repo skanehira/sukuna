@@ -2,6 +2,11 @@ import type { InboxRow } from "../../../../shared/inbox/schema";
 
 type Section = InboxRow["section"];
 export type NotificationTarget = Pick<InboxRow, "kind" | "id">;
+export const closeWithdrawalKeyPrefix = "conversation-close-withdraw:";
+export type NotificationWithdrawal = {
+  kind: "notifications" | "conversations";
+  ids: string[];
+};
 
 export function isWaiting(section: Section | undefined): boolean {
   return section === "decision" || section === "instruction";
@@ -35,11 +40,13 @@ export type NotificationRecord = {
 
 export interface NotificationRepository {
   transaction<T>(work: () => T): T;
-  insertOnce(record: NotificationRecord, since: number | null): boolean;
+  insertOnce(record: NotificationRecord, since: number | null): number | null;
   undismissed(projectId?: string): NotificationTarget[];
   markers(projectId: string): Record<string, string>;
   saveMarkers(projectId: string, markers: Record<string, string>): void;
   dismiss(target: NotificationTarget, at: number): void;
   dismissConversationFamily(id: string, at: number): void;
   dismissProject(id: string, at: number): void;
+  withdrawalGroups(target: NotificationWithdrawal): ReadonlyMap<string, string[]>;
+  dismissIds(ids: string[], at: number): void;
 }
