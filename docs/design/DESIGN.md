@@ -432,6 +432,7 @@ issue の状態の移り変わりは `features/issue-flow.md` の表が正本で
 - React の StrictMode は、開発時に Effect の生成と破棄を追加で繰り返す。入力欄を閉じて本文を返す処理は、終了操作・画面移動・欄の差し替えで行う。エディターの破棄は、入力欄の終了として扱わない ([React 公式ドキュメント](https://react.dev/reference/react/StrictMode#fixing-bugs-found-by-re-running-effects-in-development))
 - SWR は同じキーへの短時間の再訪で取得を省くことがある。開いた時点の状態で会話の位置を決める画面は、開くたびに再取得し、その初回取得の成功後に一度だけ位置を決める ([SWR 公式ドキュメント](https://swr.vercel.app/docs/api#options))
 - CodeMirror のエディターの状態は、開くときに 1 度だけ作る。追記と行の書き換えは transaction の dispatch で行い、状態を作り直さない。読み取り専用は、追記用の印が付いた transaction だけを通す形で作る (PoC `codemirror-vim-buffer`)
+- CodeMirror は文書に取り付けたテーマの CSS を保持する。静的なテーマは、種類ごとに同じ拡張を再利用する
 - CodeMirror Vim は、途中まで合う追加キーより、最後まで合う組み込みキーを先に使う。`Space` と `Ctrl+w` は先頭で受け止め、キー列が完成してから Vim に渡す。`f` / `t` などが次の文字を待つ間は、その文字を Vim に直接渡す
 - 同じ worktree で `vp build` と `vp dev` を並行すると、最適化した依存の URL が古くなり、画面の読み込みが 504 になることがある。順に実行し、発生時は `vp dev --force` で再起動する
 - `vp dev` では、Hono の WebSocket の部品が使えない。WebSocket は `ws` の受け口を 1 つ作り、開発と本番の両方から同じものを呼ぶ (PoC `vite-plus-node-stack`)
