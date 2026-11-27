@@ -92,7 +92,15 @@ export async function stopTerminalJobs(
   if (!leader) throw new Error("端末のプロセスを確認できませんでした。");
   const { group, started } = leader;
   const alreadyStopped = leader.state.startsWith("T");
-  if (!alreadyStopped && !signalOwned(-group, "SIGSTOP")) return;
+  if (!alreadyStopped) {
+    try {
+      if (!signalOwned(-group, "SIGSTOP")) return;
+    } catch (error) {
+      // 端末の自己終了と競合した場合は、呼び出し元で同じ PTY の終了を待つ。
+      if (error instanceof Error && "code" in error && error.code === "EPERM") return;
+      throw error;
+    }
+  }
 
   let stopped = false;
   const isSameLeader = (entry: Entry) => ownsLeader(entry) && entry.started === started;
