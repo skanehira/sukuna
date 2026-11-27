@@ -131,8 +131,9 @@ PR の画面から送った指示も、会話から送った発言も、実装�
 
 ### 取得と最後に取得した内容
 
-- PR の情報は `gh pr view <URL> --json number,title,url,state,isDraft,headRefName,headRefOid,baseRefName,mergeable,mergedAt,body,statusCheckRollup,files` で、差分は `gh pr diff <URL>` で取る
+- PR の情報は `gh pr view <URL> --json number,title,url,state,isDraft,headRefName,headRefOid,baseRefName,mergeable,mergedAt,body,statusCheckRollup,files` で、差分は `gh pr diff <URL>` で取る。ファイル一覧のページ分割と CI の日時への対応は DESIGN.md「既知の制約」に従う
 - 取得に成功するたびに、issue ごとの最後に取得した内容 (下の「API」の応答の中身) を `pr_snapshots` に保存する。失敗したときは、保存した内容と失敗の文を返す
+- 公開情報で同名の CI の新旧を確定できない場合も、取得失敗として扱う。案内文は「最新の CI を判定できませんでした。GitHubで検査結果を確認してください。」とする。保存済みの内容があれば、その `fetchedAt` を保ち、案内文を `fetchError` に入れて 200 で返す。保存済みの内容がなければ 502 `github_unavailable` を返す
 - 画面は、表示を開いたとき、`/ws` の issue の配信を受けたとき、「GitHub から読み直す」を選んだときに取得する。CI の検査に実行中か待ちがあるあいだは、表示を開いている間だけ 30 秒ごとに取得する
 - 取得した PR の状態が `MERGED` で、issue が実装中か、停止前の状態が実装中の停止中なら、画面のサーバーは `/flow/notify` を `issue_id` 付きで送る。開発者が GitHub で直接 merge したときに、`flow` が merge を確かめて完了にする (`features/implementation-flow.md`「GitHub で merge されたとき」)
 - 証跡は、PR の本文のうち見出し「動作確認」(レベルは問わない) から次の同じレベルの見出しまでとする。画像は Markdown の画像の記法から取り出す。画像はブラウザが URL から直接読み込む
@@ -268,7 +269,7 @@ PR の画面から送った指示も、会話から送った発言も、実装�
 8. **状態の移り変わり**: 停止中 (merge 前の確認) → 指示を送る → 実装中 → 直し終える → 停止中 (merge 前の確認)。停止中 (merge 前の確認) → 許可 → 実装中 → merge → 完了。完了 → 指示を送る → 実装中 → 新しい PR → (merge 前の確認 →) 完了。表は `features/issue-flow.md` に写す
 9. **自動で進むこと**: 許可した後の merge と、指示を届けた後の直しは、開発者の操作なしに進める (方針 P2)。CI の実行中のあいだの取得は、表示を開いているあいだだけ行う。GitHub への投稿は、開発者が選んで y で答えたときだけ行い、自動ではしない
 10. **端末と画面をまたぐこと**: ストック、投稿の記録、最後に取得した内容はサーバーに置き、どの端末でも同じにする。カーソルの位置と、開いている表示はブラウザのタブごとに持つ (方針 P3)
-11. **並びと数え方**: 差分のファイルは GitHub が返した順に並べる。CI の検査は API の節の順に並べる。CI の見出しの件数は検査の数で数え、同じ名前の検査が再実行されたときは最新の 1 件だけを数える。CI のかかった時間は、検査の開始から終了 (実行中なら取得の時刻) までとする
+11. **並びと数え方**: 差分のファイルは GitHub が返した順に並べる。CI の検査は API の節の順に並べる。CI の見出しの件数は検査の数で数え、同じ名前の検査が複数あるときは、種類を問わず作成順が最新の 1 件だけを数える。CI のかかった時間は、検査の開始から終了 (実行中なら取得の時刻) までとする
 
 ## テスト方針
 

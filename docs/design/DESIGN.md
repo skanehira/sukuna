@@ -187,6 +187,7 @@ SQLite のファイルを 1 つ使う。識別子は ULID の文字列、時刻�
 | 回答をまとめて送る | `pending_answers` の削除、`questions` の `answered` の更新、送った回答の `conversation_events` への追加 |
 | ストックの質問を送る (質問 1 件ごと) | スレッドの `conversations` の追加、その `stock_items` の `state` の更新。1 件の失敗でほかの件を止めない |
 | 届く前の指示を届ける | `queued_instructions` の削除、開発者の発言の `conversation_events` への追加、ストックから来た指示の `stock_items.sent_seq` の更新 |
+| 指摘の投稿記録を保存する | 対象の `stock_items` 全件の `github_comment_url` の更新。GitHub との通信はトランザクションの外で行う |
 | issue の状態を移す | `issues` の `state` の更新、`issue_events` への追加 |
 | issue を確定する | `issues` の追加または更新、`issue_dependencies` の入れ替え、`issue_events` への追加 |
 | worktree を消す | `worktrees.removed_at` の更新、その worktree を作業ディレクトリにしていた `conversations` の `cwd` と `worktree_id` の更新 |
@@ -399,6 +400,12 @@ issue の状態の移り変わりは `features/issue-flow.md` の表が正本で
 - Git の短い参照名は、同名のタグがあると曖昧になる。新規 worktree の開始点には `refs/heads/` か `refs/remotes/origin/` で始まる完全な参照名を使う
 - `git worktree list` の出力順は作成順ではない。worktree の一覧 API は、main を先頭にした git の出力順を保つ ([Git の実装](https://github.com/git/git/blob/master/builtin/worktree.c#L1040-L1083))
 - Node.js の `existsSync` は、ファイルまでのディレクトリの探索権限がない場合も false を返す。読取りでは `readFileSync` を直接呼び、`ENOENT` だけを不存在とし、アクセス拒否はエラーにする
+- `gh pr view --json files` のファイル一覧は 100 件までである。100 件返ったら、GraphQL の `files` を最後のページまで取得する ([GitHub CLI のクエリ](https://github.com/cli/cli/blob/trunk/api/query_builder.go))
+
+- gh は未開始の CheckRun の日時をゼロ時刻として出す。ゼロ時刻は日時なしとして扱う。StatusContext の作成日時は `startedAt` に入る ([gh の出力](https://github.com/cli/cli/blob/v2.103.3/api/export_pr.go#L127-L155))
+- Check runs API の `filter=latest` でも、同名の検査が複数返る。同じ表示名の検査が複数あり、CheckRun を含む場合は、開始・完了日時の有無によらず全ページを取り直す。CheckRun が 1 件でも、同名の StatusContext と比べるなら job の作成情報を取得する。開始・完了日時は所要時間の表示に使う。最新の判定には Actions の対応する job の `created_at` を使い、同じ workflow run の同時刻の候補は `run_attempt` で比べる。run・suite の ID の大小や配列順を新旧の根拠にしない。一般の App で日時が欠ける場合や、補足後も同時刻の候補が残る場合は、取得失敗として扱う ([Check runs API](https://docs.github.com/en/rest/checks/runs#list-check-runs-for-a-git-reference)、[Workflow jobs API](https://docs.github.com/en/rest/actions/workflow-jobs#get-a-job-for-a-workflow-run)、[job の定義](https://github.com/github/rest-api-description/blob/main/descriptions/api.github.com/api.github.com.json))
+- Git の引用されたパスには、C 形式のエスケープと UTF-8 の八進表記が入る。制御文字・引用符・バックスラッシュ・八進表記をすべて復号する ([Git の規定](https://git-scm.com/docs/git-config#Documentation/git-config.txt-corequotePath))
+
 - rg は `RIPGREP_CONFIG_PATH` の設定でリンクの追跡や無視の対象を変えられる。一覧と中身の検索では、子プロセスの環境からこの変数だけを除く ([公式ガイド](https://github.com/BurntSushi/ripgrep/blob/master/GUIDE.md#configuration-file))
 - ファイル名には改行も含まれる。rg の一覧は `--null`、Git の一覧は `-z` で NUL 区切りにし、改行で分けない
 - macOS では `/var` と `/private/var` のように同じディレクトリに別の絶対表記がある。記録の差分を相対パスへ直すときは、作業ディレクトリの表記と実体の表記をともに照合する
