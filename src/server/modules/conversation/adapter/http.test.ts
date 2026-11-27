@@ -349,8 +349,15 @@ it.each([
         cwd: f.home,
         model: "sonnet",
         permissionMode: "acceptEdits",
-        instructions: issueInstructions(),
-        tools: ["issue_get", "issue_list", "issue_create", "issue_update", "issue_comment"],
+        instructions: `${issueInstructions()}\n\nこの会話で決まったことの一覧は ${join(f.home, "docs/decisions", `${id}.md`)} にある。前に決めたことを尋ねられたら、このファイルを読んで答える。目次はツール recap_read で読める。`,
+        tools: [
+          "issue_get",
+          "issue_list",
+          "issue_create",
+          "issue_update",
+          "issue_comment",
+          "recap_read",
+        ],
       },
     });
     await f.restart();
