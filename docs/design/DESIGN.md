@@ -389,6 +389,13 @@ issue の状態の移り変わりは `features/issue-flow.md` の表が正本で
 
 ## 既知の制約
 
+- rg は `RIPGREP_CONFIG_PATH` の設定でリンクの追跡や無視の対象を変えられる。一覧と中身の検索では、子プロセスの環境からこの変数だけを除く ([公式ガイド](https://github.com/BurntSushi/ripgrep/blob/master/GUIDE.md#configuration-file))
+- ファイル名には改行も含まれる。rg の一覧は `--null`、Git の一覧は `-z` で NUL 区切りにし、改行で分けない
+- macOS では `/var` と `/private/var` のように同じディレクトリに別の絶対表記がある。記録の差分を相対パスへ直すときは、作業ディレクトリの表記と実体の表記をともに照合する
+- `realpath` の不存在エラーは、参照先が消えたシンボリックリンクにも返る。削除済みの差分の検査では、残るリンクを `lstat` で見分け、`readlink` の参照先と未解決の末尾も含めて作業ディレクトリ内かを判定する
+- `rg --files` は、既定ではシンボリックリンクの名前も返さない。`git ls-files --cached --others --exclude-standard -z` の一覧から、実体をたどらず `lstat` でリンクを選ぶ。`git check-ignore --no-index -z --stdin` で無視の対象を除き、ファイルツリーと名前の検索の一覧に補う
+- rg の JSON 出力では `--max-columns` が効かない。中身の検索の本文は、サーバーで先頭の 500 文字に切る。列番号は元の行の最初の一致を指す
+- CodeMirror の文字の位置は UTF-16 コード単位で数え、サロゲートペアは 2 単位になる。中身の検索の列も同じ単位で返す ([公式ガイド](https://codemirror.net/docs/guide/#data-structures))
 - `http://macstudio:<port>` は安全なオリジンではない。Service Worker、通知の許可、Web Push の購読は使えない。使えるかは実行時に判定し、使えないときは通知の購読を試みない (PoC `web-push-tailscale`)
 - 通知の取り下げは Web Push の仕組みに無い。取り下げ用の push を送り、Service Worker が同じ `tag` の通知を探して閉じる。push を受けて通知を 1 件も出さないと、Chrome が代わりの通知を出すことがある
 - Agent SDK の停止は、入力を流れとして渡した実行でだけ使える。バックグラウンドへ移ったコマンドは停止では止まらず、終わると AI の番が自動で始まる。停止の操作では、動いているバックグラウンドのタスクも止める (PoC `agent-sdk-interrupt`)

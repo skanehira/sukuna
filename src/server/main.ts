@@ -6,7 +6,8 @@ import { readEnvironment } from "../shared/env";
 import { createLogger } from "../shared/log";
 import { createApp } from "./app";
 import { buildId } from "./build-id";
-import { attachUpgradeHandler, initializeRuntime } from "./runtime";
+import { attachUpgradeHandler, getDatabase, initializeRuntime } from "./runtime";
+import { createWorkspaceDependencies } from "./modules/workspace/adapter/dependencies";
 
 const environment = readEnvironment("server", process.env, homedir(), (path) => {
   try {
@@ -33,7 +34,15 @@ if (initialized.isErr()) {
   process.exit(1);
 }
 const server = serve(
-  { fetch: createApp({ clientDir, build: buildId }).fetch, port: env.port, hostname: "0.0.0.0" },
+  {
+    fetch: createApp({
+      clientDir,
+      build: buildId,
+      workspace: createWorkspaceDependencies(() => getDatabase().db),
+    }).fetch,
+    port: env.port,
+    hostname: "0.0.0.0",
+  },
   (info) =>
     log({
       level: "info",
