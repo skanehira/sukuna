@@ -248,3 +248,65 @@ describe("タスクの相談コメント", () => {
     ).toEqual([{ at: 10, taskId: "t1", text }]);
   });
 });
+
+it("旧イベントの型が違う値は飛ばし、有効な構造化相談と旧本文を残す", () => {
+  const text = "タイムラインのタスク a「題名」について: 本文";
+  expect(
+    buildTimelineComments(
+      [{ id: "a", title: "題名" }],
+      [],
+      [
+        { type: "assistant_text", createdAt: 1, payload: { origin: "developer", text } },
+        {
+          type: "user_message",
+          createdAt: 2,
+          payload: {
+            origin: "developer",
+            text: null,
+            timeline_comments: [{ task_id: "a", text: "不正な発言の相談" }],
+          },
+        },
+        {
+          type: "user_message",
+          createdAt: 3,
+          payload: {
+            origin: "developer",
+            text: "表示",
+            timeline_comments: [null, { task_id: "a", text: "保存した相談" }],
+            timeline_legacy_texts: [null, 123, text],
+          },
+        },
+      ],
+    ),
+  ).toEqual({
+    comments: [
+      { at: 3, taskId: "a", text: "保存した相談" },
+      { at: 3, taskId: "a", text: "本文" },
+    ],
+    unresolvedComments: [],
+  });
+});
+it("一行の区切りで送った旧相談は区切りだけを取り除く", () => {
+  expect(
+    buildTimelineComments(
+      [{ id: "a", title: "題名" }],
+      [],
+      [
+        {
+          type: "user_message",
+          createdAt: 1,
+          payload: {
+            origin: "developer",
+            text: "タイムラインのタスク a「題名」について: 一件目\nタイムラインのタスク a「題名」について: 二件目\n",
+          },
+        },
+      ],
+    ),
+  ).toEqual({
+    comments: [
+      { at: 1, taskId: "a", text: "一件目" },
+      { at: 1, taskId: "a", text: "二件目\n" },
+    ],
+    unresolvedComments: [],
+  });
+});

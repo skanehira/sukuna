@@ -1,4 +1,5 @@
 import { afterEach, expect, it } from "vite-plus/test";
+import { ok } from "neverthrow";
 import { join } from "node:path";
 import { mkdirSync, writeFileSync } from "node:fs";
 import {
@@ -422,3 +423,65 @@ it.each(
     });
   },
 );
+
+it("本文が空でも画像IDのある入力は配達する", async () => {
+  const f = await fixture();
+  expect(await f.request({ ...input, text: "", images: ["existing-image"] })).toEqual({
+    status: 202,
+    body: { result: "delivered", queueItem: null },
+  });
+});
+it("IPCが成功状態で壊れた受付結果を返したら500にする", async () => {
+  const f = await fixture();
+  const server = createApp({
+    build: "test",
+    identity: {
+      login: "test@example.com",
+      devIdentity: "1",
+      tailscale: createTailscaleFake().api,
+      clock: createClockFake(),
+    },
+    messages: {
+      runner: { call: async () => ok({ status: 200, body: { result: "queued" } }) },
+      repository: createMessageRepository(f.database.db),
+    },
+  });
+  const response = await server.request(
+    `/api/conversations/${f.id}/messages`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    },
+    incomingWith("127.0.0.1", 1234),
+  );
+  expect({ status: response.status, body: await response.json() }).toEqual({
+    status: 500,
+    body: {
+      error: {
+        code: "internal",
+        message: "指示の受付結果を取得できませんでした。もう一度操作してください。",
+      },
+    },
+  });
+});
+it("構造化情報のない既存キューは情報省略のまま公開する", async () => {
+  const f = await fixture();
+  await f.request({ ...input, clientMessageId: "start" });
+  const { timeline_comments: _comments, ...legacy } = { ...input, clientMessageId: "legacy" };
+  const result = await f.request(legacy);
+  expect(result.status).toBe(202);
+  const queue = f.runner.runtime.store.queue(f.id)[0]!;
+  expect(result.body).toEqual({
+    result: "queued",
+    queueItem: {
+      id: queue.id,
+      text: input.text,
+      images: [],
+      position: 1,
+      stockItemId: null,
+      clientId: "legacy",
+      createdAt: f.clock.time,
+    },
+  });
+});

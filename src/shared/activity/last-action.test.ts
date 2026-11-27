@@ -57,3 +57,30 @@ describe("最後にしたこと", () => {
     ).toEqual({ lastAction: "応答を作成中", lastActionAt: null, turnStartedAt: 4 });
   });
 });
+
+it.each([
+  ["mcp__server__nested__tool", {}, "/work", "nested__tool"],
+  ["Read", { file_path: "src/a.ts" }, "/work", "Read(src/a.ts)"],
+  ["Read", { file_path: "/work" }, "/work", "Read(.)"],
+  ["Read", { file_path: "/a" }, "/", "Read(a)"],
+  ["Bash", { command: 123 }, "/work", "Bash"],
+  ["Bash", null, "/work", "Bash"],
+  ["Unknown", { description: "対象ではない" }, "/work", "Unknown"],
+] as const)("%s の省略・型の違う入力・相対パスを表示する", (name, input, cwd, expected) => {
+  expect(formatLastAction(name, input, cwd)).toBe(expected);
+});
+it("発言前から記録されたツールも開始時刻ゼロで表示する", () => {
+  expect(
+    lastActionInTurn(
+      [
+        {
+          seq: 1,
+          type: "tool_use",
+          payload: { name: "Bash", input: { command: "pwd" } },
+          createdAt: 20,
+        },
+      ],
+      "/work",
+    ),
+  ).toEqual({ lastAction: "Bash(pwd)", lastActionAt: 20, turnStartedAt: 0 });
+});

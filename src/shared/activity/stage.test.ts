@@ -74,3 +74,28 @@ describe("作業の工程", () => {
     expect(formatStageElapsed(0, { now: () => now })).toBe(expected);
   });
 });
+
+it("状態変更と段階変更は対応する種類と状態の記録だけを採用する", () => {
+  expect(
+    resolveStage({
+      issueState: "design",
+      turnStartedAt: 1,
+      events: [
+        { type: "state_changed", payload: { to: "design" }, createdAt: 10 },
+        { type: "assistant_text", payload: { to: "design" }, createdAt: 20 },
+        { type: "state_changed", payload: { to: "ready" }, createdAt: 30 },
+      ],
+    }),
+  ).toEqual({ stage: "design", stageLabel: "設計", stageStartedAt: 10 });
+  expect(
+    resolveStage({
+      issueState: "implementing",
+      turnStartedAt: 1,
+      events: [
+        { type: "stage_changed", payload: { stage: "review" }, createdAt: 10 },
+        { type: "assistant_text", payload: { stage: "merge" }, createdAt: 20 },
+        { type: "stage_changed", payload: null, createdAt: 30 },
+      ],
+    }),
+  ).toEqual({ stage: "review", stageLabel: "レビュー", stageStartedAt: 10 });
+});

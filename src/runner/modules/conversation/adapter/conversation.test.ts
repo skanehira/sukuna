@@ -7,7 +7,7 @@ import {
 import { SqliteConversationStore } from "../adapter/sqlite-conversation-store";
 import { AsyncQueue } from "../../../../shared/async-queue";
 import type { AgentOutput, AgentSession, OpenParams } from "../domain/agent-port";
-import { ok } from "neverthrow";
+import { err, ok } from "neverthrow";
 import { turnEnd, ScriptedAgent } from "../adapter/scripted-agent";
 import { ConversationRuntime, type RuntimeSignal } from "../usecase/runtime";
 import type { AgentScript } from "../../../../shared/agent-script";
@@ -1143,5 +1143,36 @@ it("同じ SDK の出力をもう一度受けても記録と番号を増やさ�
   expect({ lastSeq: f.store.get(id)?.lastSeq, state: f.store.get(id)?.runState }).toEqual({
     lastSeq: 1,
     state: "idle",
+  });
+});
+
+it("IPCの未登録会話は404、保存先の失敗は500に分ける", async () => {
+  const f = fixture(holdScript);
+  const app = createIpcRoutes(f.runtime, () => {}, undefined, {
+    workspace: async () => err({ code: "internal", message: "保存できませんでした。" }),
+  });
+  const missing = await app.request("/conversations/missing/messages", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      text: "依頼",
+      images: [],
+      interrupt: false,
+      client_id: "new",
+      origin: "developer",
+    }),
+  });
+  expect({ status: missing.status, body: await missing.json() }).toEqual({
+    status: 404,
+    body: { error: { code: "not_found", message: "会話が見つかりません。" } },
+  });
+  const failed = await app.request("/conversations/missing/workspace", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ cwd: "/tmp" }),
+  });
+  expect({ status: failed.status, body: await failed.json() }).toEqual({
+    status: 500,
+    body: { error: { code: "internal", message: "保存できませんでした。" } },
   });
 });

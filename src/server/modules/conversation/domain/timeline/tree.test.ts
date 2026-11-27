@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyOps, measureTask, formatProgress, type Task, type TaskOp } from "./tree";
+import { applyOps, measureTask, formatProgress, TaskTree, type Task, type TaskOp } from "./tree";
 
 const root: Task = { id: "root", parent: null, title: "計画", status: "pending", weight: 1 };
 const leaf: Task = { id: "leaf", parent: "root", title: "作業", status: "pending", weight: 1 };
@@ -146,4 +146,123 @@ describe("進捗の按分", () => {
       ]);
     },
   );
+});
+
+it.each(["blocked", "in_progress"] as const)(
+  "%s の未完了の残りを上限後も状態ごとの割合に残す",
+  (status) => {
+    const tasks: Task[] = [{ ...root }, { ...leaf, status, done: [1, 1] }];
+    for (const measured of [measureTask(tasks, "root"), new TaskTree(tasks).measure("root")]) {
+      expect(measured.parts).toEqual({
+        pending: 0,
+        in_progress: status === "in_progress" ? 0.0001 : 0,
+        completed: 0.9999,
+        blocked: status === "blocked" ? 0.0001 : 0,
+      });
+    }
+  },
+);
+it("上限の残りを未着手・実行中・詰まりの比に分ける", () => {
+  const tree = new TaskTree();
+  for (const op of [
+    { op: "add", id: "r" },
+    { op: "add", id: "done", parent: "r", weight: 100000, status: "completed" },
+    ...(["pending", "in_progress", "blocked"] as const).map((status) => ({
+      op: "add",
+      id: status,
+      parent: "r",
+      status,
+    })),
+  ] as TaskOp[])
+    tree.apply(op);
+  expect(tree.measure("r").status).toBe("in_progress");
+  for (const status of ["pending", "in_progress", "blocked"] as const)
+    expect(tree.measure("r").parts[status]).toBeCloseTo(0.0001 / 3, 12);
+  expect(tree.measure("r").parts.completed).toBe(0.9999);
+});
+it("有限の重みの合計が無限大になると各割合をゼロで返す", () => {
+  const tree = new TaskTree();
+  tree.apply({ op: "add", id: "r" });
+  for (const id of ["a", "b"])
+    tree.apply({ op: "add", id, parent: "r", weight: Number.MAX_VALUE, status: "completed" });
+  expect(tree.measure("r")).toEqual({
+    status: "completed",
+    parts: { pending: 0, in_progress: 0, completed: 0, blocked: 0 },
+    leaves: { total: 2, pending: 0, in_progress: 0, completed: 2, blocked: 0 },
+  });
+});
+it.each([
+  { op: "update", id: "leaf", done: [0, 1, 2] },
+  { op: "update", id: "root", status: "blocked" },
+  { op: "update", id: "root", done: [0, 2] },
+] as TaskOp[])("受け付けない操作 %j は変更履歴も返さない", (op) => {
+  const tree = new TaskTree([root, leaf]);
+  expect(tree.apply(op)).toEqual([]);
+  expect(tree.tasks()).toEqual([root, leaf]);
+});
+it("親の題名とメモは更新し、指定された状態と単位は子から求める", () => {
+  const tree = new TaskTree([root, { ...leaf, status: "completed" }]);
+  tree.apply({
+    op: "update",
+    id: "root",
+    title: "変更",
+    note: "相談",
+    status: "blocked",
+    done: [0, 2],
+  });
+  expect(tree.tasks()[0]).toEqual({ ...root, title: "変更", note: "相談", status: "completed" });
+});
+it("深い子孫を持つ丸め境界でも末端の値から計算する", () => {
+  const tree = new TaskTree();
+  for (const op of [
+    { op: "add", id: "r" },
+    { op: "add", id: "g", parent: "r", weight: 22 },
+    { op: "add", id: "c", parent: "g", done: [1, 2] },
+    { op: "add", id: "p", parent: "r", weight: 19978 },
+  ] as TaskOp[])
+    tree.apply(op);
+  expect(tree.measure("r").parts.completed).toBe(measureTask(tree.tasks(), "r").parts.completed);
+  expect(formatProgress(tree.measure("r").parts.completed)).toBe("0.06%");
+});
+
+it("重みの合計が無限大でも末端の状態の個数を全祖先へ更新する", () => {
+  const tree = new TaskTree();
+  for (const op of [
+    { op: "add", id: "r" },
+    { op: "add", id: "g", parent: "r" },
+    { op: "add", id: "a", parent: "g", weight: Number.MAX_VALUE },
+    { op: "add", id: "b", parent: "g", weight: Number.MAX_VALUE, status: "in_progress" },
+    { op: "update", id: "a", status: "blocked" },
+  ] as TaskOp[])
+    tree.apply(op);
+  for (const id of ["r", "g"])
+    expect(tree.measure(id)).toEqual({
+      status: "in_progress",
+      parts: { pending: 0, in_progress: 0, completed: 0, blocked: 0 },
+      leaves: { total: 2, pending: 0, in_progress: 1, completed: 0, blocked: 1 },
+    });
+});
+
+it("四つの状態の割合が同時に変わる重み更新を全祖先へ伝える", () => {
+  const tree = new TaskTree();
+  for (const op of [
+    { op: "add", id: "r" },
+    { op: "add", id: "g", parent: "r" },
+    ...(["pending", "in_progress", "completed", "blocked"] as const).map((status) => ({
+      op: "add",
+      id: status,
+      parent: "g",
+      status,
+      ...(status === "in_progress" ? { done: [1, 2] } : {}),
+    })),
+    { op: "update", id: "completed", weight: 2 },
+  ] as TaskOp[])
+    tree.apply(op);
+  for (const id of ["r", "g"])
+    expect(tree.measure(id).parts).toEqual({
+      pending: 0.2,
+      in_progress: 0.1,
+      completed: 0.5,
+      blocked: 0.2,
+    });
 });

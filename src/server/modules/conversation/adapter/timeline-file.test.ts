@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { createTempHome, removeTempHome } from "../../../../shared/db/test-helpers";
 import { createTimelineFilePort } from "./timeline-file";
@@ -91,4 +91,55 @@ describe("タイムラインのファイル", () => {
       readError: "タイムラインの session id が正しくありません。",
     });
   });
+});
+
+it("正常・未作成・容量超過では読み直しを待たない", async () => {
+  const waits: number[] = [];
+  const reader = createTimelineFilePort({
+    configDir,
+    sleep: async (ms) => {
+      waits.push(ms);
+    },
+  });
+  expect(await reader.read("missing")).toEqual({ file: null, readError: null });
+  writeFileSync(file, JSON.stringify(empty));
+  expect(await reader.read("session")).toEqual({ file: empty, readError: null });
+  writeFileSync(file, " ".repeat(4 * 1024 * 1024 + 1));
+  expect(await reader.read("session")).toEqual({
+    file: empty,
+    readError: "タイムラインのファイルが 4 MiB を超えています。",
+  });
+  expect(waits).toEqual([]);
+});
+it("削除されたファイルのキャッシュを消し、その後の破損で古い木を返さない", async () => {
+  const reader = createTimelineFilePort({ configDir, sleep: async () => {} });
+  writeFileSync(file, JSON.stringify(empty));
+  expect(await reader.read("session")).toEqual({ file: empty, readError: null });
+  unlinkSync(file);
+  expect(await reader.read("session")).toEqual({ file: null, readError: null });
+  writeFileSync(file, "{");
+  expect(await reader.read("session")).toEqual({
+    file: null,
+    readError: "タイムラインのファイルの形式が正しくありません。",
+  });
+});
+it("ディレクトリは未作成と区別し、再試行せず読取り失敗を返す", async () => {
+  const waits: number[] = [];
+  const reader = createTimelineFilePort({
+    configDir,
+    sleep: async (ms) => {
+      waits.push(ms);
+    },
+  });
+  mkdirSync(file);
+  expect(await reader.read("session")).toEqual({
+    file: null,
+    readError: "タイムラインのファイルを読めませんでした。",
+  });
+  expect(waits).toEqual([]);
+});
+it("有効なIDの後ろに不正な文字があれば拒否する", async () => {
+  expect(
+    await createTimelineFilePort({ configDir, sleep: async () => {} }).read("session/../session"),
+  ).toEqual({ file: null, readError: "タイムラインの session id が正しくありません。" });
 });

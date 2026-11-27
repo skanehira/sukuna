@@ -474,3 +474,97 @@ describe("タイムラインの復元", () => {
     expect(timeline.defaultTreeId).toBe("active");
   });
 });
+
+it("完了の単位がない葉の単位を状態から補い、詰まりの変更も親の履歴に残す", () => {
+  const result = replayTimeline({
+    version: 1,
+    reports: [],
+    journal: [
+      {
+        at: 1,
+        toolUseId: "plan",
+        ops: [
+          { op: "add", id: "r" },
+          { op: "add", id: "a", parent: "r" },
+          { op: "add", id: "done", status: "completed" },
+        ],
+      },
+      { at: 2, toolUseId: "blocked", ops: [{ op: "update", id: "a", status: "blocked" }] },
+    ],
+  });
+  expect(result.tasks.map(({ id, units }) => ({ id, units }))).toEqual([
+    { id: "r", units: "0 / 1" },
+    { id: "a", units: "0 / 1" },
+    { id: "done", units: "1 / 1" },
+  ]);
+  expect(
+    result.history.filter(({ at }) => at === 2).map(({ taskId, to }) => ({ taskId, to })),
+  ).toEqual([
+    { taskId: "r", to: "blocked" },
+    { taskId: "a", to: "blocked" },
+  ]);
+  expect(result.unresolvedComments).toEqual([]);
+});
+
+it("無効な操作を履歴へ入れず後続の有効な更新を適用する", () => {
+  const result = replayTimeline({
+    version: 1,
+    reports: [],
+    journal: [
+      {
+        at: 1,
+        toolUseId: "ops",
+        ops: [
+          { op: "add", id: "r" },
+          { op: "add", id: "leaf", parent: "r" },
+          { op: "add", id: "r" },
+          { op: "update", id: "missing" },
+          { op: "update", id: "leaf", weight: 0 },
+          { op: "update", id: "leaf", done: [0, 1, 2] },
+          { op: "update", id: "r", status: "blocked" },
+          { op: "update", id: "leaf", title: "有効" },
+        ],
+      },
+    ],
+  });
+  expect(result.tasks.map(({ id, title }) => ({ id, title }))).toEqual([
+    { id: "r", title: "r" },
+    { id: "leaf", title: "有効" },
+  ]);
+  expect(result.history.map(({ taskId, title }) => ({ taskId, title }))).toEqual([
+    { taskId: "leaf", title: "有効" },
+    { taskId: "leaf", title: "leaf" },
+    { taskId: "r", title: "r" },
+  ]);
+});
+
+it("項目の省略ではメモを残し、親の題名だけの更新も履歴へ反映する", () => {
+  const result = replayTimeline({
+    version: 1,
+    reports: [],
+    journal: [
+      {
+        at: 1,
+        toolUseId: "plan",
+        ops: [
+          { op: "add", id: "r", note: "既存メモ" },
+          { op: "add", id: "leaf", parent: "r" },
+        ],
+      },
+      {
+        at: 2,
+        toolUseId: "title",
+        ops: [{ op: "update", id: "r", title: "新題名", status: "blocked" }],
+      },
+      { at: 3, toolUseId: "noop", ops: [{ op: "update", id: "r" }] },
+    ],
+  });
+  expect(result.tasks[0]).toMatchObject({ title: "新題名", note: "既存メモ" });
+  expect(result.comments).toEqual([]);
+  expect(result.history.filter(({ at }) => at > 1).map(({ at, title }) => ({ at, title }))).toEqual(
+    [
+      { at: 3, title: "新題名" },
+      { at: 2, title: "新題名" },
+    ],
+  );
+});

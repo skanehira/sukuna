@@ -812,3 +812,117 @@ describe("進捗の API と SQLite・タイムラインファイル", () => {
     });
   });
 });
+
+it.each([
+  ["/api/conversations/chat/progress", "conversations"],
+  ["/api/conversations/chat/progress", "conversation_events"],
+  ["/api/issues/issue/progress", "issues"],
+  ["/api/issues/issue/progress", "issue_events"],
+  ["/api/issues/issue/progress", "conversations"],
+  ["/api/issues/issue/progress", "conversation_events"],
+])("%s の %s 読取り失敗は500と理由を返す", async (path, table) => {
+  database.db
+    .insert(issues)
+    .values({
+      id: "issue",
+      projectId: "project",
+      number: 1,
+      title: "作業",
+      state: "implementing",
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    .run();
+  seedConversation("chat", "impl", "issue");
+  database.sqlite.pragma("foreign_keys=OFF");
+  database.sqlite.exec(`DROP TABLE ${table}`);
+  const response = await app().request(path, {}, incomingWith("127.0.0.1", 1234));
+  expect({ status: response.status, body: await response.json() }).toEqual({
+    status: 500,
+    body: {
+      error: {
+        code: "internal",
+        message: "作業の状況を取得できませんでした。もう一度開いてください。",
+      },
+    },
+  });
+});
+it.each([
+  ["design_review", "design", [{ to: "design" }, { to: "design_review" }], "design", "設計", 50],
+  ["stopped", "impl", [{ to: "implementing" }, { to: "stopped" }], "implement", "実装", 50],
+  ["implementing", "impl", [], "implement", "実装", 100],
+] as const)(
+  "動作中の %s は対応する工程と直前の開始時刻を返す",
+  async (state, kind, changes, stage, stageLabel, stageStartedAt) => {
+    database.db
+      .insert(issues)
+      .values({
+        id: "issue",
+        projectId: "project",
+        number: 1,
+        title: "作業",
+        state,
+        createdAt: 1,
+        updatedAt: 1,
+      })
+      .run();
+    seedConversation("chat", kind, "issue");
+    for (const [index, payload] of changes.entries())
+      database.db
+        .insert(issueEvents)
+        .values({
+          issueId: "issue",
+          seq: index + 1,
+          type: "state_changed",
+          payload,
+          createdAt: 50 + index,
+        })
+        .run();
+    const response = await app().request(
+      "/api/issues/issue/progress",
+      {},
+      incomingWith("127.0.0.1", 1234),
+    );
+    expect({ status: response.status, body: await response.json() }).toEqual({
+      status: 200,
+      body: { ...absent, activity: { ...absent.activity, stage, stageLabel, stageStartedAt } },
+    });
+  },
+);
+it("停止前の記録がないissueは会話なしの進捗を返す", async () => {
+  database.db
+    .insert(issues)
+    .values({
+      id: "issue",
+      projectId: "project",
+      number: 1,
+      title: "作業",
+      state: "stopped",
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    .run();
+  const response = await app().request(
+    "/api/issues/issue/progress",
+    {},
+    incomingWith("127.0.0.1", 1234),
+  );
+  expect({ status: response.status, body: await response.json() }).toEqual({
+    status: 200,
+    body: { conversationId: null, activity: null, timeline: null, readError: null },
+  });
+});
+it("セッションがまだない会話はファイルを探さず状況だけ返す", async () => {
+  seedConversation();
+  database.db.update(conversations).set({ sessionId: null }).run();
+  writeFileSync(join(home, "timeline/sessions/null.json"), JSON.stringify(file));
+  const response = await app().request(
+    "/api/conversations/chat/progress",
+    {},
+    incomingWith("127.0.0.1", 1234),
+  );
+  expect({ status: response.status, body: await response.json() }).toEqual({
+    status: 200,
+    body: absent,
+  });
+});
