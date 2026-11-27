@@ -2,6 +2,7 @@ import { createGithubImportDependencies } from "./modules/issue/adapter/github-i
 import { createUsageDependencies } from "./modules/conversation/adapter/usage-routes";
 import { createGhRunner } from "../shared/gh/gh-runner";
 import { dirname } from "node:path";
+import { readRestoreGeneration } from "../shared/db/restore-state";
 import { createSettingsDependencies } from "./modules/settings/adapter/dependencies";
 import { createDesignDependencies } from "./modules/flow/adapter/design-dependencies";
 import { createInboxRepository, formatResetTime } from "./modules/inbox/adapter/inbox-repository";
@@ -31,6 +32,7 @@ const workspace = createWorkspaceDependencies(() => getDatabase().db);
 
 export default createApp({
   build: buildId,
+  restoreGeneration: readRestoreGeneration(getDatabase().sqlite),
   resolveIdentity: getRuntimeIdentity(),
   settings: createSettingsDependencies(
     () => getDatabase().db,

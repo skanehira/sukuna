@@ -27,6 +27,13 @@ export function rememberOpening(
 export function forgetOpening(storage: TabStorage, id: string): void {
   storage.removeItem(key(id));
 }
+
+export function forgetStoredOpenings(storage: Storage): void {
+  for (let index = storage.length - 1; index >= 0; index--) {
+    const entry = storage.key(index);
+    if (entry?.startsWith(key(""))) storage.removeItem(entry);
+  }
+}
 export type ReadBody = { readSeq?: number; position?: number };
 export class ReadTracking {
   private latest = 0;

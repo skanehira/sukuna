@@ -117,7 +117,8 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 | `settings` のキー `conversation-usage-retired:<会話の id>` | 画面のサーバー | 閉鎖で取り消した利用枠タイマーの記録番号 (「再開と利用枠の戻り」) |
 | `settings` のキー `conversation-close-withdraw:<会話の id>` | 画面のサーバー | 閉鎖時刻と未取り下げの通知 ID (`features/conversation-lifecycle.md`「閉じる」) |
 | `settings` のキー `backup_status` | ランナー | バックアップはランナーがとる (`features/operations.md`) |
-| `settings` のキー `last_restore` と、復元のときの `flow_paused` | 復元の処理と、起動時の後始末 (`db.lock` の中) | 2 つのプロセスを止めてから書く (`features/operations.md`) |
+| `settings` のキー `last_restore` と、復元のときの `flow_paused` | 復元の処理と、起動時の後始末 (`db.lock` の中) | 復元時の一時停止はデータベースの置き換えと同時に反映する。復元結果にはサービスの起動状態を含める (`features/operations.md`) |
+| `settings` のキー `restore_generation` | 復元の処理 (`db.lock` の中) | データベースの置き換えを識別する (`features/operations.md`「復元」) |
 | `settings` の `inbox_notification_markers:` で始まるキー | 画面のサーバー | 待機中の通知の契機を再起動後も照合する (`features/inbox.md`「通知を出す条件」) |
 | `settings` のほかのキー、`projects` | 画面のサーバー | 開発者の操作 |
 | `worktrees` の行の作成 (`origin = user`) | 画面のサーバー | 開発者が作った worktree と、一覧でアプリの外で作ったと分かった worktree (`features/worktree-terminal.md`「書くプロセス」) |
@@ -456,6 +457,8 @@ type AppNotice = {
 - 切れてから 3 秒つながらないとき、画面はつながらないことを表示する (表示は DESIGN.md「アプリシェル」)
 
 ランナーとのつながりが切れていたあいだの分は、つなぎ直したときに、画面のサーバーが購読中の `conversation:<id>` と `issue:<id>` を SQLite から読み、最後に配信した `seq` の続きを配信する。`inbox` には `changed` を、`app` には `runner` を送る。
+
+画面は購読を送る前に、つなぎ先のデータベースを `GET /api/me` で確かめる。復元で置き換わったときの扱いは `features/operations.md`「復元」に従う。
 
 #### いま見ているもの
 

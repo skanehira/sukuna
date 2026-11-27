@@ -8,6 +8,10 @@ import { createRecapDependencies } from "./modules/recap/adapter/dependencies";
 import { serve } from "@hono/node-server";
 import { accessSync, constants } from "node:fs";
 import { homedir } from "node:os";
+import { join } from "node:path";
+import { rotateLog } from "../shared/log/rotate";
+import { readRestoreGeneration } from "../shared/db/restore-state";
+import { launchdEnvironment } from "./modules/settings/adapter/launchd-environment";
 import { fileURLToPath } from "node:url";
 import { readEnvironment } from "../shared/env";
 import { createLogger } from "../shared/log";
@@ -52,8 +56,23 @@ if (environment.isErr()) {
   process.exit(1);
 }
 const env = environment.value;
+try {
+  rotateLog(join(env.home, "logs", "server.log"));
+} catch (error) {
+  log({ level: "warn", component: "server", message: "ログを整理できませんでした。", error });
+}
 const clientDir = fileURLToPath(new URL("../client", import.meta.url));
-const initialized = await initializeRuntime({ homeDir: env.home }, { socket: env.socket, log });
+const restoreReceiptWarning = (error: unknown) =>
+  log({
+    level: "warn",
+    component: "server.restore",
+    message: "補助の復元結果ファイルを処理できませんでした。",
+    error,
+  });
+const initialized = await initializeRuntime(
+  { homeDir: env.home, restoreReceiptWarning },
+  { socket: env.socket, log },
+);
 if (initialized.isErr()) {
   log({ level: "error", component: "db.migrate", message: initialized.error.message });
   process.exit(1);
@@ -64,11 +83,19 @@ const server = serve(
     fetch: createApp({
       clientDir,
       build: buildId,
+      restoreGeneration: readRestoreGeneration(getDatabase().sqlite),
       resolveIdentity: getRuntimeIdentity(),
       settings: createSettingsDependencies(
         () => getDatabase().db,
         env.home,
         () => getWsHub().settingsChanged(),
+        process.platform === "darwin" && process.env.NODE_ENV === "production"
+          ? {
+              launchd: launchdEnvironment(env.home).launchd,
+              now: Date.now,
+              receiptWarning: restoreReceiptWarning,
+            }
+          : undefined,
       ),
       workspace,
       inbox: {

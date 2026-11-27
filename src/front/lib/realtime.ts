@@ -10,6 +10,7 @@ export type RealtimeSocket = {
 };
 type Options = {
   connect: () => RealtimeSocket;
+  verifyConnection?: (signal: AbortSignal) => Promise<boolean>;
   setTimeout: (callback: () => void, ms: number) => () => void;
   unavailable: (value: boolean) => void;
   reload: (topic: string) => void;
@@ -27,6 +28,7 @@ export class Realtime {
   private retry: (() => void) | undefined;
   private offline: (() => void) | undefined;
   private watchdog: (() => void) | undefined;
+  private verifying: AbortController | undefined;
   private options: Options;
   constructor(options: Options) {
     this.options = options;
@@ -68,6 +70,8 @@ export class Realtime {
     this.offline?.();
     this.offline = undefined;
     this.watchdog?.();
+    this.verifying?.abort();
+    this.verifying = undefined;
     this.socket?.close();
     this.socket = undefined;
     this.opened = false;
@@ -86,7 +90,7 @@ export class Realtime {
     if (this.stopped) return;
     const socket = this.options.connect();
     this.socket = socket;
-    socket.onopen = () => {
+    const activate = () => {
       if (this.socket !== socket || this.stopped) return;
       this.opened = true;
       this.delay = 500;
@@ -105,8 +109,26 @@ export class Realtime {
       this.send({ op: "visibility", visible: this.visible });
       this.send({ op: "shown", topics: this.shownTopics });
     };
-    socket.onmessage = (event) => {
+    socket.onopen = () => {
       if (this.socket !== socket || this.stopped) return;
+      const verify = this.options.verifyConnection;
+      if (!verify) {
+        activate();
+        return;
+      }
+      const verification = new AbortController();
+      this.verifying = verification;
+      const finish = (verified: boolean) => {
+        if (this.verifying !== verification) return;
+        this.verifying = undefined;
+        if (verified) activate();
+        else socket.close();
+      };
+      this.touch();
+      void verify(verification.signal).then(finish, () => finish(false));
+    };
+    socket.onmessage = (event) => {
+      if (this.socket !== socket || this.stopped || !this.opened) return;
       this.touch();
       let value: unknown;
       try {
@@ -137,6 +159,8 @@ export class Realtime {
       this.socket = undefined;
       this.opened = false;
       this.watchdog?.();
+      this.verifying?.abort();
+      this.verifying = undefined;
       if (!this.offline)
         this.offline = this.options.setTimeout(() => this.options.unavailable(true), 3000);
       this.retry = this.options.setTimeout(() => this.connect(), this.delay);

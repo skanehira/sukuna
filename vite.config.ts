@@ -90,6 +90,11 @@ export default defineConfig({
       input: "src/server/main.ts",
       build: { outDir: "dist/server" },
     },
+    installer: {
+      consumer: "server",
+      input: "src/server/install.ts",
+      build: { outDir: "dist/server", emptyOutDir: false },
+    },
     runner: {
       consumer: "server",
       input: "src/runner/main.ts",

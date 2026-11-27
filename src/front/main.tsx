@@ -25,8 +25,25 @@ import { ProjectPage } from "./pages/project";
 import { Tree, registerInboxNavigation } from "./components/tree";
 import type { ScreenLoader } from "./App";
 import { createBrowserNotifications } from "./lib/notifications";
+import {
+  createRestoreWorkspace,
+  getRestoreResult,
+  postRestore,
+  restorePendingNotice,
+} from "./lib/settings-restore";
+import { createRestoreConnection } from "./lib/restore-connection";
 
 const reload = () => window.location.reload();
+const restoreConnection = createRestoreConnection({
+  fetcher: window.fetch.bind(window),
+  origin: window.location.origin,
+  storage: window.sessionStorage,
+  reload: (requestId) => {
+    restore.prepareReload(requestId);
+    reload();
+  },
+});
+const request = restoreConnection.request;
 const navigation = createNavigation(
   parseRoute(`${window.location.pathname}${window.location.search}`),
   reload,
@@ -50,14 +67,11 @@ const notifications = createBrowserNotifications({
 const reportSettingsError = (error: unknown) => {
   notices.notify(error instanceof Error ? error.message : "設定を読み込めませんでした。", "error");
 };
-const settings = createSettingsStore(
-  createSettingsApi(window.fetch.bind(window)),
-  reportSettingsError,
-);
+const settings = createSettingsStore(createSettingsApi(request), reportSettingsError);
 controller.options.keymap = settings.keymap;
 const stopSettingsCommands = registerSettingsCommands(controller);
 const stopUsageCommand = registerUsageCommand(controller);
-const projectUsage = createProjectUsageApi(window.fetch.bind(window));
+const projectUsage = createProjectUsageApi(request);
 const timeFormat = new Intl.DateTimeFormat("ja-JP", {
   month: "2-digit",
   day: "2-digit",
@@ -66,15 +80,26 @@ const timeFormat = new Intl.DateTimeFormat("ja-JP", {
   hourCycle: "h23",
 });
 const formatTime = (at: number) => timeFormat.format(at);
-const inboxApi = createInboxApi(window.fetch.bind(window));
+const inboxApi = createInboxApi(request);
 const inbox = new InboxStore(
   inboxApi,
   { ...timer, now: () => Date.now(), storage: window.sessionStorage },
   notifications.updateTitle,
 );
 const stopInboxNavigation = registerInboxNavigation(controller, inbox);
+const restore = createRestoreWorkspace({
+  controller,
+  store: settings,
+  formatTime,
+  post: (id) => postRestore(request, id),
+  getResult: (id) => getRestoreResult(request, id),
+  schedule: timer.schedule,
+  finish: (message, kind) => notices.replaceInfoWithResult(restorePendingNotice, message, kind),
+  storage: window.sessionStorage,
+});
+const stopRestore = restore.start();
 const conversations = createConversationWorkspace(
-  createConversationApi(window.fetch.bind(window)),
+  createConversationApi(request),
   controller,
   {
     clientId: ulid(),
@@ -91,10 +116,11 @@ const conversations = createConversationWorkspace(
     ) as unknown as RealtimeSocket,
   {
     inbox,
-    files: createFilesApi(window.fetch.bind(window)),
-    recap: { api: createRecapApi(window.fetch.bind(window)), storage: window.sessionStorage },
+    files: createFilesApi(request),
+    verifyConnection: restoreConnection.verify,
+    recap: { api: createRecapApi(request), storage: window.sessionStorage },
     lifecycle: {
-      api: createLifecycleApi(window.fetch.bind(window)),
+      api: createLifecycleApi(request),
       openExternal: (url) => {
         window.open(url, "_blank", "noopener,noreferrer");
       },
@@ -135,7 +161,9 @@ const loadScreen: ScreenLoader = async (route) => {
   );
 };
 const stopConversations = conversations.start();
-const pagehide = () => conversations.pagehide();
+const pagehide = () => {
+  if (!restoreConnection.reloading()) conversations.pagehide();
+};
 window.addEventListener("pagehide", pagehide);
 const visibility = () => conversations.visibility(document.visibilityState === "visible");
 document.addEventListener("visibilitychange", visibility);
@@ -150,13 +178,24 @@ import.meta.hot?.dispose(() => {
   window.removeEventListener("pagehide", pagehide);
   stopSettingsCommands();
   stopUsageCommand();
+  stopRestore();
   stopConversations();
   stopInboxNavigation();
   inbox.dispose();
   document.removeEventListener("visibilitychange", visibility);
   dispose();
 });
-const loadIdentity = createIdentityLoader((url) => window.fetch(url));
+const connection = {
+  snapshot: () => conversations.connection.snapshot() && !restore.restarting.snapshot(),
+  subscribe(callback: () => void) {
+    const dispose = [
+      conversations.connection.subscribe(callback),
+      restore.restarting.subscribe(callback),
+    ];
+    return () => dispose.forEach((unregister) => unregister());
+  },
+};
+const loadIdentity = createIdentityLoader(restoreConnection.readIdentity);
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -170,8 +209,8 @@ createRoot(document.getElementById("root")!).render(
             identityRecovery={identityRecovery}
             loadScreen={loadScreen}
             renderTree={(route) => <Tree store={inbox} route={route} />}
-            renderRight={conversations.renderRight}
-            connection={conversations.connection}
+            renderRight={(view) => restore.right(view) ?? conversations.renderRight(view)}
+            connection={connection}
           />
         )}
       </AuthenticationGuard>

@@ -1,5 +1,8 @@
 import { z } from "zod";
 import { keymapSchema } from "./keymap-schema";
+import { restoreStatusSchema } from "./restore-schema";
+
+export { restoreStatusSchema } from "./restore-schema";
 
 export const backupStatusSchema = z.object({
   lastAt: z.number().nullable(),
@@ -10,12 +13,6 @@ const backupItemSchema = z.object({
   kind: z.enum(["daily", "before_restore"]),
   createdAt: z.number(),
   sizeBytes: z.number().int().nonnegative(),
-});
-export const restoreStatusSchema = z.object({
-  backupId: z.string(),
-  at: z.number(),
-  status: z.enum(["done", "failed"]),
-  message: z.string().nullable(),
 });
 export const settingsSchema = z.object({
   keymap: keymapSchema,

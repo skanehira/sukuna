@@ -39,6 +39,7 @@ export function createConversationWorkspace(
     settingsChanged,
     inbox,
     notifications,
+    verifyConnection,
   }: {
     recap?: { api: RecapApi; storage: TabStorage };
     lifecycle?: LifecycleOptions;
@@ -46,6 +47,7 @@ export function createConversationWorkspace(
     inbox?: Pick<InboxStore, "reload" | "receive">;
     notifications?: { receive(message: ServerMessage): void };
     files?: FilesApi;
+    verifyConnection?: (signal: AbortSignal) => Promise<boolean>;
   } = {},
 ) {
   const sessions = new Map<string, ConversationSession>();
@@ -75,6 +77,7 @@ export function createConversationWorkspace(
   };
   const realtime = new Realtime({
     connect: socket,
+    verifyConnection,
     setTimeout: (callback, ms) => env.schedule(callback, ms),
     unavailable: (value) => {
       connected = !value;
