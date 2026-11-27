@@ -19,7 +19,9 @@ export async function unregisterProject(
     if (stopped.isErr()) return err(stopped.error);
     const removed = deps.transaction(() => {
       if (deps.repository.find(id)?.removedAt !== null) return false;
-      deps.repository.update(id, { removedAt: deps.now() });
+      const removedAt = deps.now();
+      deps.repository.update(id, { removedAt });
+      deps.notifications?.dismissProject(id, removedAt);
       return true;
     });
     if (!removed) return err(projectNotFound);

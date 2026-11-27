@@ -11,6 +11,8 @@ import {
   removeTempHome,
 } from "../../../../shared/db/test-helpers";
 import { openDatabase } from "../../../../shared/db/open";
+import { notifications } from "../../../../shared/db/schema";
+import { createInboxRepository } from "../../inbox/adapter/inbox-repository";
 import { readEnvironment } from "../../../../shared/env";
 import { ScriptedGh } from "../../../../shared/gh/scripted-gh";
 import { createApp } from "../../../app";
@@ -131,7 +133,11 @@ async function fixture(options: { ghExit?: number; ghStderr?: string } = {}) {
       },
     ],
   });
-  const hub = new WsHub(database.sqlite);
+  const hub = new WsHub(database.sqlite, {
+    inbox: { repository: createInboxRepository(() => database.db), resetTime: () => "" },
+    now: clock.now,
+    id: () => "new-notice",
+  });
   const messages: unknown[] = [];
   const client = {
     bufferedAmount: 0,
@@ -146,6 +152,10 @@ async function fixture(options: { ghExit?: number; ghStderr?: string } = {}) {
     projects: createProjectDependencies(() => database, {
       runner: () => ({ forward }),
       changed: (id) => hub.notice({ kind: "project", project_id: id }),
+      notifications: {
+        dismissProject: (id, at) => hub.projectRemoved(id, at),
+        restoreProject: (id) => hub.projectRestored(id),
+      },
       gh,
       home,
       now: clock.now,
@@ -912,4 +922,241 @@ it.each([
   ]);
   expect(f.runner.runtime.store.get(limited)?.runState).toBe(locked ? "working" : "stopped");
   expect(f.runner.runtime.store.get(other)?.runState).toBe("working");
+});
+
+it("HTTPで解除したプロジェクトの通知だけを取り下げ、再登録時には同じ通知を残す", async () => {
+  const f = await fixture();
+  const registered = await f.register();
+  expect(registered.status).toBe(201);
+  const id = await f.start("作業中", "working");
+  const notice = {
+    id: "existing",
+    targetKind: "conversation",
+    targetId: id,
+    title: "作業中",
+    body: "以前の判断待ち",
+    reason: "question",
+    createdAt: 20,
+    dismissedAt: null,
+  };
+  const other = { ...notice, id: "other", targetId: "other-c" };
+  f.database.db.insert(notifications).values([notice, other]).run();
+
+  const removed = await f.request("/api/projects/p1", "DELETE");
+  const restored = await f.register();
+  expect([removed, restored.status, f.database.db.select().from(notifications).all()]).toEqual([
+    { status: 200, body: { stoppedConversationIds: [id] } },
+    200,
+    [{ ...notice, dismissedAt: f.clock.now() }, other],
+  ]);
+});
+
+it.each([
+  { kind: "issue", notified: false },
+  { kind: "conversation", notified: false },
+  { kind: "issue", notified: true },
+] as const)(
+  "独立対照: 解除復帰した $kind の再起動後お知らせ (旧記録=$notified)",
+  async ({ kind, notified }) => {
+    const f = await fixture();
+    expect((await f.register()).status).toBe(201);
+    if (kind === "issue") {
+      f.database.sqlite
+        .prepare(
+          "INSERT INTO issues(id,project_id,number,title,state,created_at,updated_at) VALUES ('legacy-i','p1',13,'既存の設計','design_review',100,100)",
+        )
+        .run();
+      f.database.sqlite
+        .prepare(
+          "INSERT INTO issue_events(issue_id,seq,type,payload,created_at) VALUES ('legacy-i',1,'state_changed','{}',100)",
+        )
+        .run();
+    } else {
+      f.database.sqlite
+        .prepare(
+          "INSERT INTO conversations(id,project_id,kind,title,cwd,run_state,last_seq,recap_seq,last_activity_at) VALUES ('legacy-c','p1','chat','既存の会話',?,'idle',1,1,100)",
+        )
+        .run(f.repository);
+      f.database.sqlite
+        .prepare(
+          "INSERT INTO conversation_events(conversation_id,seq,type,payload,created_at) VALUES ('legacy-c',1,'assistant_text',?,100)",
+        )
+        .run(JSON.stringify({ text: "以前に済んだ応答" }));
+    }
+    const prior = {
+      id: "before-remove",
+      targetKind: "issue",
+      targetId: "legacy-i",
+      reason: "design_review",
+      title: "以前の設計",
+      body: "以前の承認待ち",
+      createdAt: 110,
+      dismissedAt: null,
+    };
+    if (notified) f.database.db.insert(notifications).values(prior).run();
+    expect(await f.request("/api/projects/p1", "DELETE")).toEqual({
+      status: 200,
+      body: { stoppedConversationIds: [] },
+    });
+    expect((await f.register()).status).toBe(200);
+    expect(f.database.db.select().from(notifications).all()).toEqual(
+      notified ? [{ ...prior, dismissedAt: f.clock.now() }] : [],
+    );
+    expect(f.messages.filter((m) => (m as { type?: string }).type === "notice")).toEqual([]);
+
+    const reopened = openDatabase(f.home);
+    try {
+      const next = new WsHub(reopened.sqlite, {
+        inbox: { repository: createInboxRepository(() => reopened.db), resetTime: () => "" },
+        now: () => 2000,
+        id: () => "after-restart",
+      });
+      const messages: { type: string }[] = [];
+      const client = {
+        bufferedAmount: 0,
+        send: (raw: string) => messages.push(JSON.parse(raw)),
+        close() {},
+      };
+      next.add(client);
+      next.receive(client, { op: "subscribe", topic: "app" });
+      next.receive(client, { op: "shown", topics: [] });
+      expect(messages.filter(({ type }) => type === "notice")).toEqual([]);
+    } finally {
+      reopened.close();
+    }
+  },
+);
+
+it("独立対照: 取り下げ失敗なら解除まで巻き戻し、再試行で会話とissueの通知を取り下げる", async () => {
+  const f = await fixture();
+  expect((await f.register()).status).toBe(201);
+  const id = await f.start("作業中", "working");
+  f.database.sqlite
+    .prepare(
+      "INSERT INTO issues(id,project_id,number,title,state,created_at,updated_at) VALUES ('issue-p','p1',13,'設計','design_review',100,100)",
+    )
+    .run();
+  const notice = {
+    reason: "question",
+    title: "待機",
+    body: "以前からの待機",
+    createdAt: 20,
+    dismissedAt: null,
+  };
+  const records = [
+    { ...notice, id: "c", targetKind: "conversation", targetId: id },
+    { ...notice, id: "i", targetKind: "issue", targetId: "issue-p" },
+    { ...notice, id: "other", targetKind: "conversation", targetId: "unrelated" },
+  ];
+  f.database.db.insert(notifications).values(records).run();
+  f.database.sqlite.exec(
+    "CREATE TRIGGER fixture_reject_dismiss BEFORE UPDATE OF dismissed_at ON notifications WHEN new.id = 'i' BEGIN SELECT raise(ABORT, 'fixture rejected notification write'); END",
+  );
+  expect(await f.request("/api/projects/p1", "DELETE")).toEqual({
+    status: 500,
+    body: {
+      error: {
+        code: "internal",
+        message: "プロジェクトの操作に失敗しました。もう一度操作してください。",
+      },
+    },
+  });
+  expect((await f.request("/api/projects/p1")).status).toBe(200);
+  expect(f.database.db.select().from(notifications).all()).toEqual(records);
+  f.database.sqlite.exec("DROP TRIGGER fixture_reject_dismiss");
+  expect(await f.request("/api/projects/p1", "DELETE")).toEqual({
+    status: 200,
+    body: { stoppedConversationIds: [] },
+  });
+  expect((await f.request("/api/projects/p1")).status).toBe(404);
+  expect(f.database.db.select().from(notifications).all()).toEqual(
+    records.map((r) => ({ ...r, dismissedAt: r.id === "other" ? null : f.clock.now() })),
+  );
+});
+
+it("独立対照: 再登録後に新しく判断待ちへ進んだissueは画面サーバー起動時に通知される", async () => {
+  const f = await fixture();
+  expect((await f.register()).status).toBe(201);
+  expect((await f.request("/api/projects/p1", "DELETE")).status).toBe(200);
+  expect((await f.register()).status).toBe(200);
+  f.database.sqlite
+    .prepare(
+      "INSERT INTO issues(id,project_id,number,title,state,created_at,updated_at) VALUES ('new-i','p1',14,'新着の設計','design_review',1500,1500)",
+    )
+    .run();
+  f.database.sqlite
+    .prepare(
+      "INSERT INTO issue_events(issue_id,seq,type,payload,created_at) VALUES ('new-i',1,'state_changed','{}',1500)",
+    )
+    .run();
+  const reopened = openDatabase(f.home);
+  try {
+    const hub = new WsHub(reopened.sqlite, {
+      inbox: { repository: createInboxRepository(() => reopened.db), resetTime: () => "" },
+      now: () => 2000,
+      id: () => "after-restart",
+    });
+    const messages: { type: string; payload: unknown }[] = [];
+    const client = {
+      bufferedAmount: 0,
+      send: (raw: string) => messages.push(JSON.parse(raw)),
+      close() {},
+    };
+    hub.add(client);
+    hub.receive(client, { op: "subscribe", topic: "app" });
+    hub.receive(client, { op: "shown", topics: [] });
+    expect(messages.filter(({ type }) => type === "notice").map(({ payload }) => payload)).toEqual([
+      {
+        level: "info",
+        message: "#14 新着の設計 (shop-api): 設計の承認を待っています",
+        notification: { tag: "issue:new-i", url: "/issues/new-i" },
+      },
+    ]);
+  } finally {
+    reopened.close();
+  }
+});
+
+it("同じissueの再登録時の待機を記録しても、次に承認待ちへ入った記録は通知する", async () => {
+  const f = await fixture();
+  expect((await f.register()).status).toBe(201);
+  f.database.sqlite
+    .prepare(
+      "INSERT INTO issues(id,project_id,number,title,state,created_at,updated_at) VALUES ('existing-i','p1',13,'設計','design_review',100,100)",
+    )
+    .run();
+  const event = f.database.sqlite.prepare(
+    "INSERT INTO issue_events(issue_id,seq,type,payload,created_at) VALUES ('existing-i',?,'state_changed',?,100)",
+  );
+  event.run(1, JSON.stringify({ from: "design", to: "design_review" }));
+  expect((await f.request("/api/projects/p1", "DELETE")).status).toBe(200);
+  expect((await f.register()).status).toBe(200);
+  expect(f.database.db.select().from(notifications).all()).toEqual([]);
+  event.run(2, JSON.stringify({ from: "design_review", to: "design" }));
+  event.run(3, JSON.stringify({ from: "design", to: "design_review" }));
+  const reopened = openDatabase(f.home);
+  try {
+    const hub = new WsHub(reopened.sqlite, {
+      inbox: { repository: createInboxRepository(() => reopened.db), resetTime: () => "" },
+      now: () => 2000,
+      id: () => "new-wait",
+    });
+    const messages: { type: string; payload: unknown }[] = [];
+    const client = {
+      bufferedAmount: 0,
+      send: (raw: string) => messages.push(JSON.parse(raw)),
+      close() {},
+    };
+    hub.add(client);
+    hub.receive(client, { op: "shown", topics: [] });
+    expect(messages.filter(({ type }) => type === "notice").map(({ payload }) => payload)).toEqual([
+      {
+        level: "info",
+        message: "#13 設計 (shop-api): 設計の承認を待っています",
+        notification: { tag: "issue:existing-i", url: "/issues/existing-i" },
+      },
+    ]);
+  } finally {
+    reopened.close();
+  }
 });

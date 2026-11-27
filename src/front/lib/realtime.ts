@@ -102,8 +102,8 @@ export class Realtime {
         });
         this.options.reload(topic);
       }
-      this.send({ op: "shown", topics: this.shownTopics });
       this.send({ op: "visibility", visible: this.visible });
+      this.send({ op: "shown", topics: this.shownTopics });
     };
     socket.onmessage = (event) => {
       if (this.socket !== socket || this.stopped) return;

@@ -47,6 +47,6 @@ export type InboxProject = {
 export type InboxSnapshot = { projects: InboxProject[]; flowPaused: boolean };
 export type InboxError = { code: "not_found" | "internal"; message: string };
 export interface InboxRepositoryPort {
-  load(): Result<InboxSnapshot, InboxError>;
+  load(projectId?: string): Result<InboxSnapshot, InboxError>;
 }
 export type InboxDependencies = { repository: InboxRepositoryPort; resetTime(at: number): string };

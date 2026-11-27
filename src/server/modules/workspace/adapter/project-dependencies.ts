@@ -16,6 +16,7 @@ import { createProjectRepository } from "./project-repository";
 type Options = {
   runner(): { forward(method: string, path: string, input?: unknown): Promise<Response> };
   changed(projectId: string): void;
+  notifications?: ProjectDependencies["notifications"];
   git?: GitRunner;
   gh?: GhRunner;
   home?: string;
@@ -67,6 +68,7 @@ export function createProjectDependencies(
             message: "プロジェクトの会話を停止できませんでした。もう一度操作してください。",
           });
     },
+    notifications: options.notifications,
     async changed(id) {
       options.changed(id);
       await options

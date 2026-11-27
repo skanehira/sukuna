@@ -2,6 +2,9 @@ import type Database from "better-sqlite3";
 import type { RunnerNotice } from "../shared/ipc";
 import { clientMessageSchema, type ServerMessage } from "../shared/ws";
 import type { RunState, StopReason } from "../shared/events";
+import { createNotificationRepository } from "./modules/inbox/adapter/notification-repository";
+import type { InboxDependencies } from "./modules/inbox/domain/ports";
+import { createNotifications } from "./modules/inbox/usecase/notify";
 
 export type HubClient = { bufferedAmount: number; send(data: string): unknown; close(): unknown };
 type Subscription = { after: number };
@@ -26,8 +29,54 @@ export class WsHub {
   private seq = 0;
   private runnerConnected = false;
   private database: Database.Database;
-  constructor(database: Database.Database) {
+  private notifications?: ReturnType<typeof createNotifications>;
+  private snapshotPending = true;
+  private notificationError?: (error: unknown) => void;
+  constructor(
+    database: Database.Database,
+    options?: {
+      inbox: InboxDependencies;
+      now(): number;
+      id(): string;
+      onError?(error: unknown): void;
+    },
+  ) {
     this.database = database;
+    this.notificationError = (error) => options?.onError?.(error);
+    if (options)
+      this.notifications = createNotifications({
+        ...options,
+        inbox: {
+          ...options.inbox,
+          repository: {
+            load: database.transaction((id?: string) => options.inbox.repository.load(id)),
+          },
+        },
+        repository: createNotificationRepository(database),
+        shown: () => this.shownTopics(),
+        publish: ({ message: text, tag, url }) => {
+          const message: ServerMessage = {
+            topic: "app",
+            seq: ++this.seq,
+            type: "notice",
+            payload: { level: "info", message: text, notification: { tag, url } },
+          };
+          for (const client of this.clients.keys()) this.send(client, message);
+        },
+      });
+  }
+  projectRemoved(id: string, at: number): void {
+    this.notifications?.dismissProject(id, at);
+  }
+  projectRestored(id: string): void {
+    this.notifications?.restoreProject(id);
+  }
+  private updateNotifications(update: () => void): void {
+    try {
+      update();
+    } catch (error) {
+      this.notificationError?.(error);
+    }
   }
   add(client: HubClient): void {
     this.clients.set(client, { topics: new Map(), shown: new Set(), visible: true });
@@ -52,13 +101,26 @@ export class WsHub {
           payload: { connected: this.runnerConnected },
         });
     } else if (message.op === "unsubscribe") connection.topics.delete(message.topic);
-    else if (message.op === "shown")
+    else if (message.op === "shown") {
       connection.shown = new Set(
         message.topics.filter(
           (topic) => topic.startsWith("conversation:") || topic.startsWith("issue:"),
         ),
       );
-    else connection.visible = message.visible;
+      this.updateNotifications(() => {
+        if (this.snapshotPending) {
+          this.notifications?.refresh();
+          this.snapshotPending = false;
+        }
+        this.notifications?.seen();
+      });
+    } else {
+      connection.visible = message.visible;
+      if (message.visible)
+        this.updateNotifications(() => {
+          this.notifications?.seen();
+        });
+    }
   }
   shownTopics(): Set<string> {
     return new Set([...this.clients.values()].flatMap((c) => (c.visible ? [...c.shown] : [])));
@@ -129,6 +191,16 @@ export class WsHub {
       seq: ++this.seq,
       type: "changed",
       payload: { conversation_ids: conversationIds, issue_ids: issueIds, project_ids: projectIds },
+    });
+    this.updateNotifications(() => {
+      if (projectIds.length === 0) {
+        if (this.clients.size > 0) {
+          this.notifications?.refresh();
+          this.snapshotPending = false;
+        }
+      } else {
+        for (const id of projectIds) this.notifications?.refresh(id);
+      }
     });
   }
   settingsChanged(): void {

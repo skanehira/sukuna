@@ -67,4 +67,8 @@ export type ProjectDependencies = {
   stop(projectId: string): Promise<Result<string[], ProjectError>>;
   reserve(projectId: string): Result<{ release(): void }, ProjectError>;
   changed(projectId: string): Promise<void>;
+  notifications?: {
+    dismissProject(id: string, at: number): void;
+    restoreProject(id: string): void;
+  };
 };
