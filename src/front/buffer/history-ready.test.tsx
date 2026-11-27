@@ -170,7 +170,9 @@ it.each([
       });
       expect(requested).toBe(true);
       expect(
-        within(region()).getByText(side === "tree" ? "設定" : "読み込み中", { exact: true }),
+        await within(region()).findByText(side === "tree" ? "設定" : "読み込み中", {
+          exact: true,
+        }),
       ).toBeVisible();
       const reopened = editor(region());
       expect(reopened.state.doc.toString()).toBe(
