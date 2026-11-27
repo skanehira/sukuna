@@ -97,7 +97,16 @@ describe("設計の反映とプロジェクトの解除", () => {
         expect(await during.json()).toMatchObject({ error: { code: "conflict" } });
         expect(f.state()).toBe("design_review");
         expect(git(mainPath, "rev-parse", "main")).toBe(before);
-        expect(f.ghCalls()).toEqual([]);
+        expect(f.ghCalls()).toEqual(
+          mode === "PR"
+            ? [
+                {
+                  args: ["repo", "view", "--json", "nameWithOwner,url", "--", f.remote],
+                  cwd: f.repository,
+                },
+              ]
+            : [],
+        );
 
         reflect.resolve();
         await f.runner.design.drain();
@@ -106,7 +115,12 @@ describe("設計の反映とプロジェクトの解除", () => {
         if (mode === "PR") {
           expectedStatus = "merging_pr";
           outcome = "design_pr_created";
-          expect(f.ghCalls().map(({ args }) => args.slice(0, 2))).toEqual([["pr", "create"]]);
+          expect(f.ghCalls().map(({ args }) => args.slice(0, 2))).toEqual([
+            ["repo", "view"],
+            ["repo", "view"],
+            ["pr", "create"],
+            ["pr", "view"],
+          ]);
           expect(f.runner.runtime.store.events("design")).toContainEqual(
             expect.objectContaining({
               type: "user_message",

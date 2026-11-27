@@ -1,3 +1,5 @@
+import type { GhRunner } from "../../../shared/gh/gh-runner";
+import { designSubmittedSchema } from "../../../shared/api/design";
 import { ScriptedGh } from "../../../shared/gh/scripted-gh";
 import { createGitCli } from "../../../runner/modules/workspace/adapter/git-cli";
 import { createIssueDependencies } from "../issue/adapter/dependencies";
@@ -40,6 +42,46 @@ export const git = (cwd: string, ...args: string[]) =>
     { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
   ).trim();
 
+export function supplyDesignPrFields(
+  gh: GhRunner,
+  nameWithOwner: string,
+  submitted: () => unknown,
+) {
+  const run = gh.run.bind(gh);
+  const justCreated = new Set<string>();
+  gh.run = async (args, options) => {
+    const result = await run(args, options);
+    if (result.exitCode === 0 && args[0] === "pr" && args[1] === "create")
+      justCreated.add(result.stdout.trim());
+    if (
+      result.exitCode !== 0 ||
+      args[0] !== "pr" ||
+      args[1] !== "view" ||
+      !args.at(-1)?.includes("headRefOid")
+    )
+      return result;
+    const design = designSubmittedSchema.parse(submitted());
+    const response = JSON.parse(result.stdout) as Record<string, unknown>;
+    const firstView = justCreated.delete(args[2] ?? "");
+    const state =
+      firstView && response.state === "MERGED" ? { state: "OPEN", mergeCommit: null } : {};
+
+    return {
+      ...result,
+      stdout: JSON.stringify({
+        url: args[2],
+        baseRefName: "main",
+        headRefName: design.branch,
+        headRefOid: design.headCommit,
+        isCrossRepository: false,
+        headRepository: { nameWithOwner },
+        ...response,
+        ...state,
+      }),
+    };
+  };
+}
+
 export function designFixture() {
   let home: string;
   let repository: string;
@@ -78,6 +120,14 @@ export function designFixture() {
     const ghScript: GhScript = {
       responses: [
         {
+          match: "^repo view ",
+          stdout: JSON.stringify({
+            nameWithOwner: "example/design",
+            url: "https://github.com/example/design",
+          }),
+          exit_code: 0,
+        },
+        {
           match: "^pr create .*未merge",
           stdout: "https://github.com/example/design/pull/2\n",
           exit_code: 0,
@@ -88,12 +138,12 @@ export function designFixture() {
           exit_code: 0,
         },
         {
-          match: "^pr view .*/1 --json state,mergeCommit$",
+          match: "^pr view .*/1 --json ",
           stdout: JSON.stringify({ state: "MERGED", mergeCommit: { oid: "a".repeat(40) } }),
           exit_code: 0,
         },
         {
-          match: "^pr view .*/2 --json state,mergeCommit$",
+          match: "^pr view .*/2 --json ",
           stdout: JSON.stringify({ state: "OPEN", mergeCommit: null }),
           exit_code: 0,
         },
@@ -159,6 +209,18 @@ export function designFixture() {
         if (entry.level === "error") errorLogs.push(entry.message);
       },
     });
+    supplyDesignPrFields(
+      runner.gh,
+      "example/design",
+      () =>
+        serverDb.db
+          .select()
+          .from(issueEvents)
+          .where(eq(issueEvents.issueId, "issue"))
+          .orderBy(issueEvents.seq)
+          .all()
+          .findLast(({ type }) => type === "design_submitted")?.payload,
+    );
     await new Promise<void>((resolve) => {
       link = new RunnerLink({
         socket: join(home, "runner.sock"),

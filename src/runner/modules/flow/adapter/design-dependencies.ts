@@ -20,7 +20,10 @@ export function createDesignFlow(
   database: OpenedDatabase,
   runtime: ConversationRuntime,
   gh: GhRunner,
-  options: Pick<DesignFlowDependencies, "clock" | "notices" | "alert" | "log">,
+  options: Pick<
+    DesignFlowDependencies,
+    "clock" | "notices" | "alert" | "log" | "allowPrInstruction"
+  >,
   gitRunner: GitRunner = createGitCli(),
 ) {
   const activity = createWorktreeActivity(database.sqlite.name);
@@ -40,15 +43,17 @@ export function createDesignFlow(
       return reservation ? run(reservation) : activity.run(run);
     },
   };
-  const { workspace, cleanup } = createDesignWorkspace(deps, runtime);
+  const { workspace, attachWorkspace, cleanup } = createDesignWorkspace(deps, runtime);
   const reflect = createReflectDesign(deps, runtime, cleanup);
   const withdrawnCleanup = new Set<Promise<void>>();
   return {
     workspace,
+    attachWorkspace,
     submit: createSubmitDesign(deps),
     reject: createRejectDesign(deps, runtime, reflect.reflecting),
     approve: reflect.approve,
     completePr: reflect.completePr,
+    recoverApproval: reflect.recoverApproval,
     sendPrInstruction: reflect.sendPrInstruction,
     drain: () =>
       Promise.all([reflect.drain(), runtime.drainAcceptedDeliveries(), ...withdrawnCleanup]),

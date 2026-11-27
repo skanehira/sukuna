@@ -1,3 +1,4 @@
+import { prepareAcceptance } from "../../conversation/usecase/run-options";
 import type { StockSendIpcInput } from "../../../../shared/ipc";
 import type { StockSendReceipt } from "../../../../shared/stock-send-receipts";
 import { err, ok, type Result } from "neverthrow";
@@ -114,6 +115,7 @@ async function sendInstructions(
   const markSent = (item: OutgoingStock, now: number, seq?: number) => {
     if (!repository.markSent(item, { at: now, seq })) throw new StockSendRefused(stockChanged);
   };
+  let release: (() => void) | undefined;
   try {
     let messages = await withStaleQuotes();
     const input = { text: formatStockInstructions(messages), origin: "stock" as const, images: [] };
@@ -161,13 +163,27 @@ async function sendInstructions(
       runtime.partsChanged(id, ["queue", "stock"]);
       return ok("queued");
     }
+    const prepared = await runtime.runOptions.prepareDelivery(current, input, "message", cancelled);
+    if (prepared.isErr()) return err(prepared.error);
+    const { input: instruction, committed, rejected, prefix } = prepared.value;
+    release = prepared.value.release;
+    current = runtime.store.get(id) ?? current;
     const result = await runtime.deliver(
       id,
-      input,
-      {
+      instruction,
+      prepareAcceptance(prepared.value, {
         events: [],
         check,
-        checkBeforeCommit: check,
+        checkBeforeCommit: () => {
+          if (cancelled() || runtime.closing) return cancelledStockSend;
+          const workspace = prepared.value.workspace;
+          const latest = runtime.store.get(id);
+          return workspace
+            ? latest?.cwd === workspace.path && latest.worktreeId === workspace.id
+              ? null
+              : stockChanged
+            : check();
+        },
         before: () => {
           const now = runtime.options.clock.now();
           const next = (runtime.store.get(id)?.lastSeq ?? 0) + 1;
@@ -177,14 +193,20 @@ async function sendInstructions(
             runtime.store.get(id)?.closedAt ?? null,
           );
         },
-      },
-      { reopensAfterAcceptance: true },
+      }),
+      { reopensAfterAcceptance: "stock", prefix, checkStage: "owner" },
     );
-    if (result.isErr()) return err(result.error);
+    if (result.isErr()) {
+      rejected?.();
+      return err(result.error);
+    }
+    committed?.();
     runtime.partsChanged(id, ["stock"]);
     return ok(result.value.result);
   } catch (error) {
     if (error instanceof StockSendRefused) return err(error.error);
     throw error;
+  } finally {
+    release?.();
   }
 }

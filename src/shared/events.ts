@@ -160,6 +160,7 @@ export const eventSchema = z.discriminatedUnion("type", [
     z.object({
       reason: stopReasonSchema,
       detail: z.string().optional(),
+      flow_trigger: z.literal("dependency_withdrawn").optional(),
       resets_at: z.number().optional(),
       previous_run_state: runStateSchema.optional(),
     }),

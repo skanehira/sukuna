@@ -83,12 +83,14 @@
 
 | 種類 | 足すとき | payload |
 | --- | --- | --- |
-| `design_approved` | 承認を受け付けたとき | `{ "headCommit": "...", "mode": "direct" \| "pr" \| "none" }` |
+| `design_approved` | 承認を受け付けたとき | `headCommit`、`mode`、PR で入れる場合は `prTarget` (`repository` と `base`) |
+| `design_reflection_prepared` | 直接反映で既定ブランチを更新する前 | `targetRef`、`remoteKey`、`commit` |
 | `design_reflected` | 反映が終わったとき | `{ "mode": "direct" \| "pr" \| "none", "commit": "<既定ブランチに入った先頭>" \| null, "prUrl": "..." \| null }` |
 | `design_reflect_failed` | 反映に失敗したとき | `{ "message": "<開発者に見せる文>" }` |
-| `design_pr_created` | 設計書の PR を作ったとき | `{ "prUrl": "..." }` |
+| `design_pr_created` | 設計書の PR を作ったとき | `{ "prUrl": "...", "conversationSeq": <設計の会話の最後の seq> }` |
 | `design_rejected` | 差し戻したとき | `{ "via": "reject" \| "message" \| "stock" }` |
 
+- `design_reflection_prepared` の `remoteKey` は `origin` の push 先の SHA-256 ダイジェストである。手元へ直接入れるときは `null` とする
 - `design_reflected` の `commit` は、直接入れたときは既定ブランチに入った先頭、PR で入れたときは PR の merge のコミットとし、設計書の変更が無いときは `null` とする。`prUrl` は PR で入れたときだけ入れる
 
 ### 画面
@@ -151,8 +153,8 @@ issue の中の「設計」の表示である (UI_SKETCH.html の `pc-issue-desi
 
 **PR で入れる** (`projects.design_merge_mode = pr`。GitHub を使うプロジェクトだけで選べる):
 
-1. 設計のブランチを `origin` へ push し、`gh pr create` で既定ブランチ向けの PR を作る。題名は「設計: #<issue 番号> <issue の題名>」、本文は修正方針と AI が確かめたい点とする
-2. `design_pr_created` を記録し、issue を設計待ちにする。設計待ちのあいだは、AI が作業中として一覧に出る
+1. 承認時に `origin` の push 先のリポジトリと既定ブランチを保存する。その `origin` に設計のブランチを push し、保存したリポジトリと既定ブランチを指定して `gh pr create` を呼ぶ。題名は「設計: #<issue 番号> <issue の題名>」、本文は修正方針と AI が確かめたい点とする
+2. PR のリポジトリ、base、head、SHA を承認内容と照合する。OPEN なら会話の最後の `seq` とともに `design_pr_created` を記録し、設計待ちにする。ランナーはこの `seq` より後の発言を PR の指示として扱う。merge 済みで merge コミットも確認できたら、PR と反映の記録を保存して実装待ちにする。
 3. 設計の会話の続きに次の指示を、`origin` を `flow` として送り、`ai_started` (`reason` は `design_pr_merge`) を足す。会話には、開発者の発言ではなく「自動フローが指示を送りました」の区切りの行で出す。「設計書の PR <URL> は承認済みです。CI が通るのを待ち、リポジトリで許された方法で merge してください。設計書の中身は変えないでください。merge できないときは理由を書いて終えてください」
 4. AI の番が正常に終わったら (`turn_end` の `subtype` が `success` で、止まった記録が続かない)、`flow` が `gh pr view` で PR の状態と merge のコミットを確かめる。merge 済みなら `design_reflected` を記録して実装待ちにし、設計の worktree を片付ける
 5. merge されていなければ、issue を停止中 (`failed`) にする。`cause` は `design_pr_not_merged`、`detail` は AI の最後の発言の 1 行目とする。開発者が指示を送ると、AI が merge の続きを行い、番の終わりに手順 4 から確かめる
@@ -310,7 +312,11 @@ issue の中の「設計」の表示である (UI_SKETCH.html の `pc-issue-desi
 6. **表示の寿命**: 反映中の行は、反映が終わるか失敗するまで出す。失敗の行は、次の承認か差し戻しまで残す。承認済みの行は、その後も表示に残す
 7. **送る前のデータ**: 差し戻しの入力欄の文は、設計の会話の書きかけの入力 (`drafts`) に置く (方針 P1)。送るまで残り、ほかの端末でも続きを書ける。承認してもストックの指示は消さず、送るか自分で消すまで残す
 8. **状態の移り変わり**: 設計レビュー → 承認 (変更なし・直接入れる) → 実装待ち。設計レビュー → 承認 (PR で入れる) → 設計待ち → merge できた → 実装待ち。merge できなかったら停止中 (`failed`)。設計レビュー → 差し戻し → 設計待ち → 設計の完了 → 設計レビュー。反映に失敗したら設計レビューのまま。移り変わりの表は `features/issue-flow.md` にある
-9. **自動で進むこと**: 承認の後の反映は、開発者の操作なしに最後まで進める (方針 P2)。反映の途中でランナーが再起動したら、起動時に最後の `design_approved` の後に結果の記録 (`design_reflected`・`design_reflect_failed`・`design_pr_created`) が無い issue を探して反映をやり直す (`features/issue-flow.md`「ランナーの再起動のあと」)。すでに既定ブランチへ入っていれば、成功として記録する。失敗した反映は自動ではやり直さず、開発者の承認を待つ。PR の merge を待つ AI の再開は、利用枠切れのときだけ自動で行う (BR-091)
+9. **自動で進むこと**: 承認の後の反映は開発者の操作なしに進める (方針 P2)。再起動で反映結果が無い承認を見つけたら、記録と Git の参照から反映済みかを確かめる。
+   - 直接反映では、承認 SHA か反映前に記録した合成コミットが、反映先の先端の祖先なら成功を記録する
+   - PR の復旧でも「承認と反映」の照合を行う。merge 済みの記録は一時停止中も保存する
+   - PR を記録していない旧承認で承認先が分からなければ、同じ版の再承認を待つ。PR の URL を記録済みなら、その URL のリポジトリで既定ブランチと承認 SHA を照合する。
+   - 失敗を記録した反映は、開発者の承認を待つ。PR の merge を待つ AI が自動で再開するのは利用枠切れから戻るときである (BR-091)
 10. **端末と画面をまたぐこと**: ストック、書きかけの入力、承認と差し戻しの結果はサーバーに置き、どの端末でも同じにする (方針 P1・P3)。どの表示 (会話・設計・差分) を開いているか、カーソルの位置は、ブラウザのタブごとに持つ。最初に開く表示は issue の状態で決め、前に見ていた表示は覚えない
 11. **並びと数え方**: 差分のファイルは `git diff` の出力の順 (パスの順) に並べる。確かめたい点は AI が報告した順に並べる。「送っていない指示 n 件」は、設計の会話のストックのうち状態が `stocked` で種類が指示のものを数える
 

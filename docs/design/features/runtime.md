@@ -255,7 +255,7 @@ type RunnerNotice =
 | `permission_request` | AI がツールの実行の許可を求めたとき | `request_id`、`tool_name`、`input`、`title?`、`reason?`、`blocked_path?` |
 | `permission_decision` | 開発者が許可か拒否をしたとき | `request_id`、`behavior`、`message?` |
 | `turn_end` | AI の番が終わったとき | `subtype`、`usage`、`cost_usd`、`duration_ms`、`permission_denials`、`terminal_reason?` |
-| `stopped` | 作業が止まったとき | `reason`、`detail?`、`resets_at?` |
+| `stopped` | 作業が止まったとき | `reason`、`detail?`、`resets_at?`、`flow_trigger?` |
 | `resumed` | 止まった作業を再開したとき | `by` (`developer` / `usage_limit` / `flow`) |
 
 ```ts
@@ -342,6 +342,7 @@ SDK のメッセージは、まず Port の出力 (「Agent SDK を包む Port�
 | 条件 | `stopped.reason` | `run_state` |
 | --- | --- | --- |
 | 開発者の停止の操作のあとの `result` | `user` | `stopped` |
+| 依存先の取り下げでランナーが停止したあとの `result` | `user` (`flow_trigger` は `dependency_withdrawn`) | `stopped` |
 | 割り込みで番が終わり、続く指示を受理した | 書かない | 続けて書く `user_message` で `working` |
 | 割り込みで番が終わり、続く指示を受理できず、会話に作業中の状態が残る | `error` | `failed` |
 | 最後の `rate_limit` が `status: "rejected"` で、`overageStatus` が `allowed` / `allowed_warning` でなく、`errorCode` が `credits_required` | `credits_required` | `failed` |

@@ -1,10 +1,10 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { startRefUpdate, updateLocalDesign } from "./local-design-update";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { err, ok } from "neverthrow";
-import { designStale } from "../../../../shared/api/design";
+import { designStale, type DesignReflectionPlan } from "../../../../shared/api/design";
 import type { DesignProject } from "../../../../shared/design/records";
 import type { DesignGit, DesignWorkspaceGit, DesignWorktree } from "../../flow/domain/design-ports";
 import { runCommand, type CommandOptions, type CommandResult } from "../../../../shared/command";
@@ -31,8 +31,49 @@ export function createRunnerDesignGit(
   const branchRef = (branch: string) => `refs/heads/${branch}`;
   const localRef = (project: DesignProject) => branchRef(project.defaultBranch);
   const remoteRef = (project: DesignProject) => `refs/remotes/origin/${project.defaultBranch}`;
+  const pushRemote = async (cwd: string) => {
+    const remotes = await checked(cwd, ["remote", "get-url", "--push", "--all", "origin"]);
+    if (remotes.isErr()) return err(remotes.error);
+    return remotes.value && !remotes.value.includes("\n")
+      ? ok(remotes.value)
+      : err({ message: "origin の push 先を1件にしてください" });
+  };
   const branchAt = (path: string) => checked(path, ["symbolic-ref", "--quiet", "HEAD"]);
   const canonical = async (path: string) => realpath(path).catch(() => path);
+
+  const changedTarget = {
+    message: "既定ブランチか origin が変わりました。反映先を確認してから、もう一度承認してください",
+  };
+  const differs = (
+    scope: Pick<DesignReflectionPlan, "targetRef" | "remoteKey">,
+    plan: DesignReflectionPlan,
+  ) => scope.targetRef !== plan.targetRef || scope.remoteKey !== plan.remoteKey;
+  const ancestor = async (cwd: string, commit: string, tip: string) => {
+    const result = await run(cwd, ["merge-base", "--is-ancestor", commit, tip]);
+    return result.exitCode === 0
+      ? ok(true)
+      : result.exitCode === 1
+        ? ok(false)
+        : err({ message: gitMessage(result) });
+  };
+
+  async function applied(
+    cwd: string,
+    tip: string,
+    approved: string,
+    scope: Pick<DesignReflectionPlan, "targetRef" | "remoteKey">,
+    plan?: DesignReflectionPlan,
+  ) {
+    if (plan && differs(scope, plan)) return err(changedTarget);
+    if (plan) {
+      const known = await head(cwd, plan.commit);
+      if (known.isOk()) {
+        const verified = await ancestor(cwd, known.value, tip);
+        if (verified.isErr() || verified.value) return verified;
+      }
+    }
+    return ancestor(cwd, approved, tip);
+  }
 
   async function prepareTree(cwd: string, oldHead: string, base: string, approved: string) {
     if (oldHead === base) return ok(approved);
@@ -89,6 +130,18 @@ export function createRunnerDesignGit(
       });
     if (merge.exitCode !== 0 || !tree)
       return err({ message: `設計書を既定ブランチへ取り込めませんでした: ${gitMessage(merge)}` });
+    const currentTree = await checked(cwd, [
+      "rev-parse",
+      "--verify",
+      "--end-of-options",
+      `${oldHead}^{tree}`,
+    ]);
+    if (currentTree.isErr()) return err(currentTree.error);
+    if (currentTree.value === tree)
+      return err({
+        message:
+          "既定ブランチに同じ内容があります。承認した版の反映を確認できないため、状態を確認してください",
+      });
     return checked(cwd, [
       "-c",
       "user.name=Sukuna",
@@ -110,9 +163,16 @@ export function createRunnerDesignGit(
     worktree: DesignWorktree,
     base: string,
     approved: string,
+    recovery: Parameters<DesignGit["reflect"]>[3],
   ) {
+    const remote = await pushRemote(worktree.path);
+    if (remote.isErr()) return err(remote.error);
     const scratchRef = `refs/sukuna/design-reflect/${randomUUID()}`;
     const target = localRef(project);
+    const scope = {
+      targetRef: target,
+      remoteKey: createHash("sha256").update(remote.value).digest("hex"),
+    };
     const fetched = await checked(worktree.path, [
       "fetch",
       "--no-tags",
@@ -120,7 +180,8 @@ export function createRunnerDesignGit(
       "--no-recurse-submodules",
       "--no-write-fetch-head",
       "--refmap=",
-      "origin",
+      "--",
+      remote.value,
       `${target}:${scratchRef}`,
     ]);
     if (fetched.isErr())
@@ -130,11 +191,33 @@ export function createRunnerDesignGit(
     const current = await head(worktree.path, scratchRef);
     try {
       if (current.isErr()) return err(current.error);
+      const present = await applied(worktree.path, current.value, approved, scope, recovery.plan);
+      if (present.isErr()) return err(present.error);
+      if (present.value) {
+        const latest = await checked(worktree.path, [
+          "ls-remote",
+          "--exit-code",
+          "--refs",
+          "--",
+          remote.value,
+          target,
+        ]);
+        const currentRemote = await pushRemote(worktree.path);
+        return latest.isOk() &&
+          latest.value === `${current.value}\t${target}` &&
+          currentRemote.isOk() &&
+          currentRemote.value === remote.value
+          ? ok(current.value)
+          : err(changedTarget);
+      }
+      if (!(await stillApproved(worktree, approved))) return err({ message: designStale.message });
       const result = await prepareTree(worktree.path, current.value, base, approved);
       if (result.isErr()) return err(result.error);
-      const remote = await checked(worktree.path, ["remote", "get-url", "--push", "origin"]);
-      if (remote.isErr()) return err(remote.error);
       if (!(await stillApproved(worktree, approved))) return err({ message: designStale.message });
+      if (!recovery.savePlan({ ...scope, commit: result.value }))
+        return err({ message: designStale.message });
+      const destination = await pushRemote(worktree.path);
+      if (destination.isErr() || destination.value !== remote.value) return err(changedTarget);
       const pushed = await checked(worktree.path, [
         "push",
         "--no-follow-tags",
@@ -165,6 +248,7 @@ export function createRunnerDesignGit(
   return {
     head,
     canonical,
+    pushRemote,
     async range(project, branch) {
       const tip = await head(project.path, branchRef(branch));
       if (tip.isErr()) return err(tip.error);
@@ -199,13 +283,22 @@ export function createRunnerDesignGit(
           })
         : err({ message: designStale.message });
     },
-    async reflect(project, tree, approved) {
+    async reflect(project, tree, approved, recovery) {
       const { baseCommit, headCommit } = approved;
-      if (!(await stillApproved(tree, headCommit))) return err({ message: designStale.message });
-      if (project.usesGithub) return pushDesign(project, tree, baseCommit, headCommit);
+      if (project.usesGithub) return pushDesign(project, tree, baseCommit, headCommit, recovery);
       const target = localRef(project);
       const current = await head(project.path, target);
       if (current.isErr()) return err(current.error);
+      const scope = { targetRef: target, remoteKey: null };
+      const present = await applied(project.path, current.value, headCommit, scope, recovery.plan);
+      if (present.isErr()) return err(present.error);
+      if (present.value) {
+        const verified = await startRefUpdate(project.path, target, current.value);
+        return verified && (await verified.finish(true)) ? ok(current.value) : err(changedTarget);
+      }
+      if (!(await stillApproved(tree, headCommit))) return err({ message: designStale.message });
+      const prepared = await prepareTree(tree.path, current.value, baseCommit, headCommit);
+      if (prepared.isErr()) return err(prepared.error);
       const listed = await worktrees.list(project.path);
       if (listed.isErr()) return err(listed.error);
       const checkout = listed.value.find((entry) => entry.branch === project.defaultBranch);
@@ -214,9 +307,9 @@ export function createRunnerDesignGit(
           message:
             "既定ブランチを開いている作業場所がありません。既定ブランチを開き直して、もう一度承認してください",
         });
-      const prepared = await prepareTree(tree.path, current.value, baseCommit, headCommit);
-      if (prepared.isErr()) return err(prepared.error);
       if (!(await stillApproved(tree, headCommit))) return err({ message: designStale.message });
+      if (!recovery.savePlan({ ...scope, commit: prepared.value }))
+        return err({ message: designStale.message });
       return updateLocalDesign(git, (cwd) => worktrees.list(cwd), {
         root: project.path,
         fromWorktree: tree.path,
@@ -227,12 +320,13 @@ export function createRunnerDesignGit(
         commit: prepared.value,
       });
     },
-    async pushBranch(tree, commit) {
+    async pushBranch(tree, commit, remote) {
       const current = await head(tree.path, branchRef(tree.branch));
       if (current.isErr() || current.value !== commit) return err({ message: designStale.message });
       const pushed = await checked(tree.path, [
         "push",
-        "origin",
+        "--",
+        remote,
         `${commit}:${branchRef(tree.branch)}`,
       ]);
       return pushed.map(() => undefined);

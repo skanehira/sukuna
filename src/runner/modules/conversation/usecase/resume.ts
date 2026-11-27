@@ -2,6 +2,7 @@ import { err, ok, type Result } from "neverthrow";
 import { unavailableRunnerError } from "../../../../shared/ipc";
 import { ProjectRunBusy, type Conversation } from "../domain/conversation-store";
 import type { ConversationRuntime, DeliveryError, OperationError, SendInput } from "./runtime";
+import { prepareAcceptance, type PreparedDelivery } from "./run-options";
 import { conflict } from "./runtime";
 
 type ResumeSource = "developer" | "usage_limit" | "flow";
@@ -47,7 +48,11 @@ export function resume(
       if (started) return err(started);
       const c = this.store.get(id);
       if (!c) return err(conflict());
-      if (["triage", "design", "impl"].includes(c.kind) && this.options.canResume) {
+      if (
+        by !== "developer" &&
+        ["triage", "design", "impl"].includes(c.kind) &&
+        this.options.canResume
+      ) {
         const allowed = await this.options.canResume(c);
         const afterGate = preflight();
         if (afterGate) return err(afterGate);
@@ -64,19 +69,29 @@ export function resume(
         if (afterGate) return err(afterGate);
         if (allowed.isErr()) return err(allowed.error);
       }
+      const prepared =
+        by === "developer"
+          ? await this.runOptions.prepareDelivery(c, input, "resume", checks.callerCancelled)
+          : ok<PreparedDelivery>({ input });
+      if (prepared.isErr()) return err(prepared.error);
+      const { input: instruction, committed, rejected, release } = prepared.value;
       const sent = await this.deliver(
         id,
-        input,
-        {
+        instruction,
+        prepareAcceptance(prepared.value, {
           events: [{ type: "resumed", payload: { by } }],
           check: preflight,
           checkBeforeCommit: () => (checks.callerCancelled?.() ? unavailableRunnerError : null),
-        },
-        { includeQueued: false, reopensAfterAcceptance: by === "developer" },
-      ).catch((error: unknown) => {
-        if (error instanceof ProjectRunBusy) checks.onProjectBusy?.();
-        throw error;
-      });
+        }),
+        { includeQueued: false, checkStage: "owner", reopensAfterAcceptance: by === "developer" },
+      )
+        .catch((error: unknown) => {
+          if (error instanceof ProjectRunBusy) checks.onProjectBusy?.();
+          throw error;
+        })
+        .finally(() => release?.());
+      if (sent.isOk()) committed?.();
+      else rejected?.();
       if (sent.isErr()) return err(sent.error);
       if (by === "usage_limit")
         this.options.notice(id, "利用枠が戻ったため、作業を再開しました。", "info");

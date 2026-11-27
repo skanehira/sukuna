@@ -10,16 +10,43 @@ export const designSubmittedSchema = z.object({
   baseCommit: designCommitSchema,
   headCommit: designCommitSchema,
 });
+export const designPrTargetSchema = z.object({
+  repository: z.string().regex(/^[A-Za-z0-9.-]+\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
+  base: z.string().min(1),
+});
+export type DesignPrTarget = z.infer<typeof designPrTargetSchema>;
+export function designPrTargetFromRecordedUrl(
+  prUrl: string,
+  base: string,
+): DesignPrTarget | undefined {
+  const url = URL.parse(prUrl);
+  if (!url || url.protocol !== "https:" || url.username || url.password || url.search || url.hash)
+    return;
+  const path = /^(\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/pull\/\d+$/.exec(url.pathname)?.[1];
+  if (!path) return;
+  const target = designPrTargetSchema.safeParse({ repository: `${url.host}${path}`, base });
+  return target.success ? target.data : undefined;
+}
+export const designReflectionPlanSchema = z.object({
+  targetRef: z.string(),
+  remoteKey: z.string().nullable(),
+  commit: designCommitSchema,
+});
+export type DesignReflectionPlan = z.infer<typeof designReflectionPlanSchema>;
 export const designApprovalEventSchema = z.object({
   headCommit: designCommitSchema,
   mode: designModeSchema,
+  prTarget: designPrTargetSchema.optional(),
 });
 export const designReflectedEventSchema = z.object({
   mode: designModeSchema,
   commit: designCommitSchema.nullable(),
   prUrl: z.string().nullable(),
 });
-export const designPrCreatedSchema = z.object({ prUrl: z.string() });
+export const designPrCreatedSchema = z.object({
+  prUrl: z.string(),
+  conversationSeq: z.number().int().nonnegative().optional(),
+});
 export const designFailureSchema = z.object({ message: z.string() });
 export const designStatusSchema = z.enum([
   "none",
@@ -93,6 +120,7 @@ export function designEvents(events: DesignEvent[]) {
   const failure = latest("design_reflect_failed");
   const pr = latest("design_pr_created");
   const rejection = latest("design_rejected");
+  const plan = latest("design_reflection_prepared");
   const version = Math.max(submission?.seq ?? 0, rejection?.seq ?? 0);
   const currentApproval = (approval?.seq ?? 0) > version ? approval : undefined;
   const currentReflection =
@@ -106,6 +134,7 @@ export function designEvents(events: DesignEvent[]) {
     reflected: currentReflection,
     failure: currentFailure,
     pr: currentPr,
+    plan: currentApproval && plan && plan.seq > currentApproval.seq ? plan : undefined,
     reflecting:
       currentApproval !== undefined && !currentReflection && !currentFailure && !currentPr,
   };

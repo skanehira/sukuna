@@ -8,12 +8,13 @@ export function stop(
   stillCurrent = () => true,
   onFailure?: () => void,
   callerCancelled?: () => boolean,
+  intent: "user" | "dependency_withdrawn" = "user",
 ): Promise<Result<{ runState: RunState }, OperationError>> {
   const interruptCurrent = async () => {
     const c = this.store.get(id);
     if (!stillCurrent() || !c || !activeStates.includes(c.runState)) return err(conflict());
     try {
-      await this.interrupt(id, "user");
+      await this.interrupt(id, intent);
     } catch (error) {
       onFailure?.();
       throw error;

@@ -1,3 +1,4 @@
+import { prepareAcceptance } from "./run-options";
 import { err, ok, type Result } from "neverthrow";
 import type { ConversationRuntime, DeliveryError, InputAcceptance } from "./runtime";
 import type { ProjectRunReservation, SendResult } from "../domain/conversation-store";
@@ -99,15 +100,30 @@ export async function sendUnlocked(
     accepted?.(true);
     return ok({ result: "queued", queuedId });
   }
-  const delivered = await this.deliver(
-    id,
-    {
-      ...input,
-      origin: input.interrupt && activeStates.includes(c.runState) ? "interrupt" : input.origin,
-    },
-    acceptance,
-    { interrupt: activeStates.includes(c.runState), projectRun },
+  const prepared = await this.runOptions.prepareDelivery(c, input, "message", () =>
+    Boolean(acceptance?.check?.()),
   );
-  if (delivered.isOk()) accepted?.(true);
-  return delivered;
+  if (prepared.isErr()) return err(prepared.error);
+  const { input: instruction, committed, rejected, release, prefix } = prepared.value;
+  try {
+    const delivered = await this.deliver(
+      id,
+      {
+        ...instruction,
+        origin:
+          instruction.interrupt && activeStates.includes(c.runState)
+            ? "interrupt"
+            : instruction.origin,
+      },
+      prepareAcceptance(prepared.value, acceptance),
+      { interrupt: activeStates.includes(c.runState), projectRun, prefix, checkStage: "owner" },
+    );
+    if (delivered.isOk()) {
+      committed?.();
+      accepted?.(true);
+    } else rejected?.();
+    return delivered;
+  } finally {
+    release?.();
+  }
 }

@@ -1,5 +1,10 @@
 import type { Result } from "neverthrow";
-import type { DesignError, DesignSubmission } from "../../../../shared/api/design";
+import type {
+  DesignError,
+  DesignPrTarget,
+  DesignReflectionPlan,
+  DesignSubmission,
+} from "../../../../shared/api/design";
 import type { DesignRejectionDraft } from "../../../../shared/ipc";
 import type { DesignProject, DesignRecord } from "../../../../shared/design/records";
 import type {
@@ -9,6 +14,12 @@ import type {
 import type { IssueNotice, IssueNoticePort } from "./ports";
 import type { TransitionTrigger } from "./transition";
 
+export type DesignWorkspaceRequest = {
+  issueId: string;
+  conversationId: string;
+  prepareOnly?: boolean;
+  cancelled?: () => boolean;
+};
 export type DesignWorktree = { id: string; path: string; branch: string };
 export type DesignGitEntry = {
   path: string;
@@ -52,17 +63,40 @@ export interface DesignGit {
     project: DesignProject,
     tree: DesignWorktree,
     approved: Pick<DesignSubmission, "baseCommit" | "headCommit">,
+    recovery: { plan?: DesignReflectionPlan; savePlan(plan: DesignReflectionPlan): boolean },
   ): GitResult<string>;
-  pushBranch(tree: DesignWorktree, head: string): GitResult<void>;
+  pushBranch(tree: DesignWorktree, head: string, remote: string): GitResult<void>;
   canonical(path: string): Promise<string>;
+  pushRemote(cwd: string): GitResult<string>;
 }
 
+export type DesignPr = {
+  url: string;
+  state: "OPEN" | "MERGED" | "CLOSED";
+  mergeCommit: string | null;
+};
 export interface DesignGithub {
-  create(project: DesignProject, branch: string, title: string, body: string): GitResult<string>;
-  view(
+  target(project: DesignProject, remote: string): GitResult<DesignPrTarget>;
+  create(
     project: DesignProject,
+    target: DesignPrTarget,
+    branch: string,
+    title: string,
+    body: string,
+  ): GitResult<string>;
+  find(
+    project: DesignProject,
+    target: DesignPrTarget,
+    branch: string,
+    approved: string,
+  ): GitResult<DesignPr | null>;
+  verify(
+    project: DesignProject,
+    target: DesignPrTarget,
     url: string,
-  ): GitResult<{ state: string; mergeCommit: string | null }>;
+    branch: string,
+    approved: string,
+  ): GitResult<DesignPr>;
 }
 
 export interface DesignRepository {
@@ -89,6 +123,7 @@ export interface DesignRepository {
 }
 
 export type DesignFlowDependencies = {
+  allowPrInstruction?: (projectId: string) => boolean;
   repo: DesignRepository;
   transaction<T>(
     action: (repo: DesignRepository) => T,
