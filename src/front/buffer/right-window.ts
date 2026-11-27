@@ -1,5 +1,6 @@
 export type RightView = { view: string; target: string };
 export type RightState = { current: RightView | null; stack: RightView[] };
+const transient = (view: RightView) => view.view === "closing" || view.view === "thread";
 export class RightWindow {
   current: RightView | null;
   private revision = 0;
@@ -32,8 +33,10 @@ export class RightWindow {
   }
   navigate(kind: string, target: string): void {
     this.revision++;
+    this.stack = this.stack.filter((view) => !transient(view));
     if (!this.current) return;
     if (
+      transient(this.current) ||
       !["conversation", "issue", "file"].includes(kind) ||
       (this.current.view === "recent" && this.current.target !== target)
     )
@@ -44,6 +47,9 @@ export class RightWindow {
     }
   }
   state(): RightState {
-    return { current: this.current, stack: [...this.stack] };
+    return {
+      current: this.current && !transient(this.current) ? this.current : null,
+      stack: this.stack.filter((view) => !transient(view)),
+    };
   }
 }

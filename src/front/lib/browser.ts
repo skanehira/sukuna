@@ -47,9 +47,11 @@ export function createBrowserController(
     const route = parseRoute(url);
     controller.changeScreen(url);
     if (!initial) {
+      const previous = controller.right.current;
       controller.right.navigate(route.view === "file" ? "file" : route.kind, route.id ?? "");
       controller.positions.setRight(controller.right.state());
       controller.update({});
+      if (previous && !controller.right.current && !route.thread) controller.focus("main");
     }
     if (route.thread) controller.openRight({ view: "thread", target: route.thread });
     openRoute(url, open);

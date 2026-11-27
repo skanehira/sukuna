@@ -45,6 +45,7 @@ export type WindowHandle = {
   view: string;
   name: string;
   posKey: string;
+  temporary?: boolean;
   url: string;
   scrollCursor(): void;
 };
@@ -67,7 +68,7 @@ export type BufferSnapshot = {
   commandPrefix?: ":" | "/";
   prompt: PromptSpec | null;
   promptId: number;
-  confirmation: { text: string; action: string; context: ActionContext } | null;
+  confirmation: { text: string; run: () => void | Promise<void>; context: ActionContext } | null;
   notice: { message: string; kind: "error" | "info" } | null;
 };
 export type ControllerOptions = {
@@ -110,9 +111,10 @@ export class BufferController {
     this.positions = options.positions ?? new PositionStore();
     this.right = new RightWindow(this.positions.right());
     this.jumps = new JumpHistory(this.positions);
+    const active = this.positions.active();
     this.state = {
       version: 0,
-      active: this.positions.active(),
+      active: active === "right" && !this.right.current ? "main" : active,
       mode: "NORMAL",
       prefix: "",
       number: "",
@@ -214,17 +216,21 @@ export class BufferController {
   };
   registerWindow(side: string, handle: WindowHandle): () => void {
     this.windows.set(side, handle);
-    const stored = this.positions.position(handle.posKey);
-    if (stored) handle.place(stored);
-    if (this.restoreJump?.window === side && this.restoreJump.url === handle.url) {
-      this.placeJump(this.restoreJump);
-      this.restoreJump = null;
+    if (!handle.temporary) {
+      const stored = this.positions.position(handle.posKey);
+      if (stored) handle.place(stored);
+      if (this.restoreJump?.window === side && this.restoreJump.url === handle.url) {
+        this.placeJump(this.restoreJump);
+        this.restoreJump = null;
+      }
     }
     if (this.state.active === side) this.focus(side);
     this.update({});
     return () => {
-      this.positions.setPosition(handle.posKey, handle.position());
-      this.positions.flush();
+      if (!handle.temporary) {
+        this.positions.setPosition(handle.posKey, handle.position());
+        this.positions.flush();
+      }
       if (this.windows.get(side) === handle) this.windows.delete(side);
     };
   }
@@ -273,15 +279,17 @@ export class BufferController {
     if (action.views && !action.views.includes(context.view)) return;
     if (this.state.active === "prompt" && !action.fromPrompt && name !== "cmdline") return;
     if (action.confirm) {
-      this.origin = context.window;
-      this.update({ confirmation: { text: action.confirm, action: name, context } });
+      this.confirm(action.confirm, context, () => action.run(context));
       return;
     }
-    await this.perform(name, context);
+    await this.perform(() => action.run(context));
   }
-  private async perform(name: string, context: ActionContext): Promise<void> {
+  confirm(text: string, context: ActionContext, run: () => void | Promise<void>): void {
+    this.update({ confirmation: { text, context, run } });
+  }
+  private async perform(run: () => void | Promise<void>): Promise<void> {
     try {
-      await this.actions.get(name)?.run(context);
+      await run();
     } catch (error) {
       this.notify(error instanceof Error ? error.message : "操作に失敗しました", "error");
     }
@@ -293,7 +301,7 @@ export class BufferController {
     if (!confirmation) return false;
     if (["Shift", "Control", "Alt", "Meta"].includes(event.key)) return true;
     this.update({ confirmation: null });
-    this.focus(this.origin);
+    this.focus(confirmation.context.window);
     if (
       event.key === "y" &&
       !event.isComposing &&
@@ -303,7 +311,7 @@ export class BufferController {
     ) {
       this.pending.add(confirmation.context.window);
       this.update({});
-      void this.perform(confirmation.action, confirmation.context).finally(() => {
+      void this.perform(confirmation.run).finally(() => {
         this.pending.delete(confirmation.context.window);
         this.update({});
       });
@@ -607,6 +615,7 @@ export class BufferController {
       this.commandRevision++;
       this.commandRetry = null;
       this.closePrompt();
+      if (this.state.confirmation) this.update({ confirmation: null });
     }
     this.options.url = url;
   }
@@ -626,7 +635,7 @@ export class BufferController {
   }
   private placeJump(jump: Jump): void {
     const handle = this.windows.get(jump.window);
-    if (!handle || handle.url !== jump.url) {
+    if (!handle || handle.temporary || handle.url !== jump.url) {
       this.restoreJump = jump;
       return;
     }

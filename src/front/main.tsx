@@ -10,6 +10,7 @@ import { createNotices } from "./shell/notices";
 import { ShellBoundary } from "./shell/ShellBoundary";
 import { createRecapApi } from "./lib/recap/api";
 import { createConversationApi } from "./lib/conversation/api";
+import { createLifecycleApi } from "./lib/lifecycle/api";
 import { createConversationWorkspace } from "./lib/conversation/workspace";
 import type { RealtimeSocket } from "./lib/realtime";
 import { ulid } from "ulid";
@@ -44,7 +45,15 @@ const conversations = createConversationWorkspace(
     new WebSocket(
       `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws`,
     ) as unknown as RealtimeSocket,
-  { api: createRecapApi(window.fetch.bind(window)), storage: window.sessionStorage },
+  {
+    recap: { api: createRecapApi(window.fetch.bind(window)), storage: window.sessionStorage },
+    lifecycle: {
+      api: createLifecycleApi(window.fetch.bind(window)),
+      openExternal: (url) => {
+        window.open(url, "_blank", "noopener,noreferrer");
+      },
+    },
+  },
 );
 const stopConversations = conversations.start();
 const pagehide = () => conversations.pagehide();

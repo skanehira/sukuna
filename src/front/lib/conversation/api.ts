@@ -9,8 +9,8 @@ export class ConversationApiError extends Error {
     this.code = code;
   }
 }
-export function createConversationApi(fetcher: typeof fetch): ConversationApi {
-  async function request<T>(path: string, method = "GET", body?: unknown): Promise<T> {
+export function createConversationRequest(fetcher: typeof fetch) {
+  return async function request<T>(path: string, method = "GET", body?: unknown): Promise<T> {
     const response = await fetcher(`/api${path}`, {
       method,
       ...(body === undefined
@@ -32,7 +32,11 @@ export function createConversationApi(fetcher: typeof fetch): ConversationApi {
       throw new ConversationApiError(response.status, value.error.code, value.error.message);
     }
     return response.status === 204 ? (undefined as T) : (response.json() as Promise<T>);
-  }
+  };
+}
+
+export function createConversationApi(fetcher: typeof fetch): ConversationApi {
+  const request = createConversationRequest(fetcher);
   const path = (id: string) => `/conversations/${encodeURIComponent(id)}`;
   return {
     get: (id) => request(path(id)),

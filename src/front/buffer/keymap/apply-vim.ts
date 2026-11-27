@@ -12,6 +12,11 @@ export function vimMode(view: EditorView): Mode {
     return state.visualBlock ? "VISUAL BLOCK" : state.visualLine ? "VISUAL LINE" : "VISUAL";
   return "NORMAL";
 }
+export function vimCount(view: EditorView): string {
+  const count = getCM(view)?.state.vim?.inputState.keyBuffer.join("") ?? "";
+  return /^[1-9]\d*$/.test(count) ? count : "";
+}
+
 export function applyVim(
   view: EditorView,
   controller: BufferController,
@@ -22,12 +27,14 @@ export function applyVim(
   const cm = getCM(view);
   if (!cm) return () => {};
   let prefix = "";
-  const mode = () => {
-    controller.update({ mode: vimMode(view) });
+  const syncMode = () => {
+    if (controller.snapshot().active === side && view.hasFocus) {
+      controller.update({ mode: vimMode(view) });
+    }
   };
-  cm.on("vim-mode-change", mode);
+  cm.on("vim-mode-change", syncMode);
   const copied = (key: string) => {
-    controller.update({ mode: vimMode(view) });
+    syncMode();
     if (key === "y" && controller.options.clipboard) {
       const register = Vim.getVimGlobalState_().registerController.getRegister('"');
       void copyText(register.toString(), controller.options.clipboard);
@@ -101,9 +108,9 @@ export function applyVim(
     }
     if (exact) {
       consume();
-      const count = cm.state.vim?.inputState.keyBuffer.join("") ?? "";
-      if (/^\d+$/.test(count) && exact.to && "action" in exact.to && exact.to.action === "open") {
-        Vim.handleKey(cm, "<Esc>", "user");
+      if (exact.to && "action" in exact.to && exact.to.action === "open") {
+        const count = vimCount(view);
+        if (count) Vim.handleKey(cm, "<Esc>", "mapping");
         controller.update({ number: count });
       }
       prefix = "";
@@ -133,7 +140,7 @@ export function applyVim(
   view.dom.addEventListener("keydown", receive, true);
   return () => {
     view.dom.removeEventListener("keydown", receive, true);
-    cm.off("vim-mode-change", mode);
+    cm.off("vim-mode-change", syncMode);
     cm.off("vim-keypress", copied);
   };
 }
