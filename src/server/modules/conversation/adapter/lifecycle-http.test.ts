@@ -1,10 +1,13 @@
+import { createStockDependencies } from "../../stock/adapter/dependencies";
+import { ulid } from "ulid";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ok } from "neverthrow";
 import { z } from "zod";
 import { eventSchema } from "../../../../shared/events";
-import { afterEach, expect, it } from "vite-plus/test";
+import type { StockSendInput } from "../../../../shared/stock";
+import { afterEach, expect, it, vi } from "vite-plus/test";
 import { startRunnerApp } from "../../../../runner/app";
 import { openDatabase, type OpenedDatabase } from "../../../../shared/db/open";
 import {
@@ -152,6 +155,14 @@ async function fixture(
       now: () => closedAt,
       changed: () => {},
       reopened: (ids) => inboxChanges.push(ids),
+    }),
+    stock: createStockDependencies({
+      database: () => database,
+      workspace: createWorkspaceDependencies(() => database.db),
+      runner: () => link,
+      changed: () => {},
+      id: ulid,
+      now: () => closedAt,
     }),
     lifecycle: createLifecycleDependencies({
       database: () => database,
@@ -1813,3 +1824,253 @@ it("書き込みトランザクションで使えないと確認した予約は�
   expect(events.status).toBe(200);
   expect(hasUsageResume(events.body)).toBe(true);
 });
+
+type StockSendKind = StockSendInput["kinds"];
+
+async function seedStockParent(f: Awaited<ReturnType<typeof fixture>>) {
+  f.addConversation("parent");
+  expect(await f.send("parent", "元の会話の履歴を作る")).toMatchObject({ status: 202 });
+  await expect.poll(() => f.runtime.store.get("parent")?.runState).toBe("idle");
+  for (const [kind, text] of [
+    ["question", "このログについて尋ねる"],
+    ["instruction", "このログを確認する"],
+  ]) {
+    expect(
+      await f.request("POST", "/conversations/parent/stock", {
+        kind,
+        text,
+        quote: { kind: "terminal", mode: "line", text: "作業ログ" },
+      }),
+    ).toMatchObject({ status: 201 });
+  }
+}
+
+function pendingStock(f: Awaited<ReturnType<typeof fixture>>) {
+  return f.sqlite
+    .prepare("SELECT kind,state FROM stock_items WHERE conversation_id='parent' ORDER BY kind")
+    .all();
+}
+
+const sendStockInTest = (f: Awaited<ReturnType<typeof fixture>>, kinds: StockSendKind) =>
+  f.request("POST", "/conversations/parent/stock/send", { kinds });
+
+it("親に先に届いたストックは後から並んだ閉鎖より先に受け付ける", async () => {
+  const f = await fixture();
+  await seedStockParent(f);
+  let unblock = () => {};
+  const held = new Promise<void>((resolve) => {
+    unblock = resolve;
+  });
+  const pending = f.runtime.serial("parent", async () => ok(await held));
+  const serial = vi.spyOn(f.runtime, "serial");
+  let sending: ReturnType<typeof f.request> | undefined;
+  let closing: ReturnType<typeof f.request> | undefined;
+  try {
+    sending = sendStockInTest(f, "questions");
+    await expect.poll(() => serial.mock.calls.map(([id]) => id)).toEqual(["parent"]);
+    expect(f.runtime.releases.has("parent")).toBe(false);
+    expect(f.runtime.store.get("parent")?.closedAt).toBeNull();
+
+    closing = f.request("POST", "/conversations/parent/close", { stopIfWorking: false });
+    await expect.poll(() => serial.mock.calls.map(([id]) => id)).toEqual(["parent", "parent"]);
+    expect(f.runtime.releases.has("parent")).toBe(true);
+    expect(f.runtime.store.get("parent")?.closedAt).toBeNull();
+    unblock();
+
+    expect(await sending).toMatchObject({ status: 200, body: { questions: [{ ok: true }] } });
+    expect(await closing).toEqual({ status: 200, body: { closedAt } });
+    expect(pendingStock(f)).toEqual([
+      { kind: "instruction", state: "stocked" },
+      { kind: "question", state: "sent" },
+    ]);
+    const children = f.sqlite
+      .prepare("SELECT id FROM conversations WHERE parent_conversation_id='parent'")
+      .all();
+    expect(children).toHaveLength(1);
+    expect(
+      f.sqlite
+        .prepare(
+          "SELECT thread_conversation_id AS id FROM stock_items WHERE conversation_id='parent' AND kind='question'",
+        )
+        .all(),
+    ).toEqual(children);
+    expect(
+      f.sqlite
+        .prepare("SELECT key FROM settings WHERE key GLOB 'runner-stock-send:*:outcome:question:*'")
+        .all(),
+    ).toHaveLength(1);
+  } finally {
+    unblock();
+    await Promise.allSettled([pending, sending, closing]);
+    serial.mockRestore();
+  }
+}, 15_000);
+
+const endingCases = [
+  { operation: "close", kinds: "questions" },
+  { operation: "close", kinds: "instructions" },
+  { operation: "close", kinds: "all" },
+  { operation: "delete", kinds: "all" },
+  { operation: "conflict", kinds: "all" },
+  { operation: "deadline", kinds: "all" },
+] as const;
+
+it.each(endingCases)(
+  "終了予約を待つ間に届いたストックを受け付けない $operation $kinds",
+  async ({ operation, kinds }) => {
+    const clock = operation === "deadline" ? new WorkspaceClock() : undefined;
+    const f = await fixture({ clock });
+    await seedStockParent(f);
+    f.addConversation("existing", { parentId: "parent" });
+    const lastSeq = f.runtime.store.get("parent")?.lastSeq;
+
+    let unblock = () => {};
+    let entered = () => {};
+    const held = new Promise<void>((resolve) => {
+      unblock = resolve;
+    });
+    const waiting = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let busyChild: Response | undefined;
+    let childPending: Promise<unknown> | undefined;
+    if (operation === "delete") {
+      f.beforeWithdraw(async () => {
+        entered();
+        await held;
+      });
+    } else if (operation === "conflict") {
+      busyChild = await f.link.forward("POST", "/conversations/existing/release/reserve");
+      expect(busyChild.status).toBe(200);
+      f.beforeComplete(async (path) => {
+        if (path !== "/conversations/parent/release/complete") return;
+        entered();
+        await held;
+      });
+    } else {
+      childPending = f.runtime.serial("existing", async () => ok(await held));
+    }
+    const ending =
+      operation === "delete"
+        ? f.request("DELETE", "/conversations/parent")
+        : f.request("POST", "/conversations/parent/close", { stopIfWorking: true });
+    try {
+      if (childPending) {
+        await expect.poll(() => f.runtime.releases.has("existing")).toBe(true);
+      } else {
+        await waiting;
+      }
+      expect(f.runtime.releases.has("parent")).toBe(true);
+      expect(f.runtime.store.get("parent")?.closedAt).toBeNull();
+      const sending = sendStockInTest(f, kinds);
+      await expect
+        .poll(() => f.runnerRequests.includes("POST /conversations/parent/stock/send"))
+        .toBe(true);
+      if (clock) await clock.advance(10_001);
+      unblock();
+      await childPending;
+      const end = await ending;
+      const sent = await sending;
+      if (operation === "delete") {
+        expect(end).toEqual({ status: 200, body: { deleted: ["parent", "existing"] } });
+        expect(sent).toMatchObject({ status: 404, body: { error: { code: "not_found" } } });
+        expect(f.sqlite.prepare("SELECT id FROM conversations ORDER BY id").all()).toEqual([]);
+      } else {
+        expect(end.status).toBe(operation === "close" ? 200 : operation === "deadline" ? 503 : 409);
+        expect(sent).toMatchObject({
+          status: operation === "deadline" ? 503 : 409,
+          body: { error: { code: operation === "deadline" ? "runner_unavailable" : "conflict" } },
+        });
+        expect(f.runtime.store.get("parent")).toMatchObject({
+          closedAt: operation === "close" ? closedAt : null,
+          lastSeq,
+        });
+        expect(
+          f.sqlite
+            .prepare(
+              "SELECT id FROM conversations WHERE parent_conversation_id='parent' ORDER BY id",
+            )
+            .all(),
+        ).toEqual([{ id: "existing" }]);
+        expect(pendingStock(f)).toEqual([
+          { kind: "instruction", state: "stocked" },
+          { kind: "question", state: "stocked" },
+        ]);
+      }
+      if (clock) {
+        expect(
+          f.sqlite
+            .prepare("SELECT key FROM settings WHERE key GLOB 'runner-stock-send:*:outcome:*'")
+            .all(),
+        ).toEqual([]);
+      } else {
+        expect(
+          f.sqlite.prepare("SELECT key FROM settings WHERE key GLOB 'runner-stock-send:*'").all(),
+        ).toEqual([]);
+      }
+      if (busyChild) {
+        const token: unknown = await busyChild.json();
+        expect(
+          (await f.link.forward("POST", "/conversations/existing/release/complete", token)).status,
+        ).toBe(200);
+        busyChild = undefined;
+        expect(await sendStockInTest(f, kinds)).toMatchObject({ status: 200 });
+      }
+    } finally {
+      unblock();
+      if (busyChild)
+        await f.link.forward(
+          "POST",
+          "/conversations/existing/release/complete",
+          await busyChild.json(),
+        );
+    }
+  },
+  15_000,
+);
+
+const ordinaryCases = [
+  { closed: false, kinds: "all" },
+  { closed: true, kinds: "questions" },
+  { closed: true, kinds: "instructions" },
+  { closed: true, kinds: "all" },
+] as const;
+
+it.each(ordinaryCases)(
+  "終了予約との競合がないストックを送る 閉鎖済み=$closed $kinds",
+  async ({ closed, kinds }) => {
+    const f = await fixture();
+    await seedStockParent(f);
+    if (closed) {
+      expect(
+        await f.request("POST", "/conversations/parent/close", { stopIfWorking: true }),
+      ).toEqual({ status: 200, body: { closedAt } });
+    }
+    const sendQuestions = kinds !== "instructions";
+    const sendInstructions = kinds !== "questions";
+    expect(await sendStockInTest(f, kinds)).toMatchObject({
+      status: 200,
+      body: {
+        questions: sendQuestions ? [{ ok: true }] : [],
+        instructions: {
+          count: Number(sendInstructions),
+          delivery: sendInstructions ? "delivered" : null,
+        },
+      },
+    });
+    expect(f.runtime.store.get("parent")?.closedAt).toBe(
+      closed && !sendInstructions ? closedAt : null,
+    );
+    expect(
+      f.sqlite
+        .prepare(
+          "SELECT count(*) AS children FROM conversations WHERE parent_conversation_id='parent'",
+        )
+        .get(),
+    ).toEqual({ children: Number(sendQuestions) });
+    expect(pendingStock(f)).toEqual([
+      { kind: "instruction", state: sendInstructions ? "sent" : "stocked" },
+      { kind: "question", state: sendQuestions ? "sent" : "stocked" },
+    ]);
+  },
+);

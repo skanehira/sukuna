@@ -1,6 +1,6 @@
 import { err, type Result } from "neverthrow";
 import { conflict, type ConversationRuntime, type DeliveryError } from "./runtime";
-import { withThreadParent } from "./start";
+import { withConversationAdmission } from "./start";
 
 export function fork(
   this: ConversationRuntime,
@@ -8,7 +8,7 @@ export function fork(
   input: { title: string; kind: "thread" },
   callerCancelled = () => false,
 ): Promise<Result<{ conversationId: string }, DeliveryError>> {
-  return withThreadParent(this, id, callerCancelled, async (parent) => {
+  return withConversationAdmission(this, id, "thread", callerCancelled, async (parent) => {
     if (parent.sessionId === null) return err(conflict());
     const forked = await this.options.agent.fork(parent.sessionId, { dir: parent.cwd });
     if (forked.isErr()) return err({ code: "internal", message: forked.error.message });

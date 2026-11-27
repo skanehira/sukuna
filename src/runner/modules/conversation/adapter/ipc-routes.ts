@@ -1,4 +1,4 @@
-import { withThreadParent } from "../usecase/start";
+import { withConversationAdmission } from "../usecase/start";
 import { Hono } from "hono";
 import type { Result } from "neverthrow";
 import { z } from "zod";
@@ -143,8 +143,12 @@ export function createIpcRoutes(
       parentConversationId: p.parent_conversation_id,
     };
     return input.kind === "thread" && input.parentConversationId
-      ? withThreadParent(runtime, input.parentConversationId, callerCancelled, () =>
-          runtime.start({ ...input, callerCancelled }),
+      ? withConversationAdmission(
+          runtime,
+          input.parentConversationId,
+          "thread",
+          callerCancelled,
+          () => runtime.start({ ...input, callerCancelled }),
         )
       : runtime.start(input);
   });

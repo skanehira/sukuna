@@ -20,20 +20,26 @@ const expired = {
 };
 class StartCancelled extends Error {}
 
-export function withThreadParent<T>(
+export function withConversationAdmission<T>(
   runtime: ConversationRuntime,
   id: string,
+  kind: "thread" | "stock",
   callerCancelled: () => boolean,
   run: (parent: Conversation) => Promise<Result<T, DeliveryError>>,
 ): Promise<Result<T, DeliveryError>> {
   const closedAt = runtime.store.get(id)?.closedAt;
   const reserving = runtime.releases.has(id);
   return runtime.serial(id, async () => {
-    if (callerCancelled()) return err(expired);
     const parent = runtime.store.get(id);
-    if (!parent) return err(missingParent);
+    if (callerCancelled() && (kind === "thread" || parent !== null)) return err(expired);
+    if (!parent)
+      return err(
+        kind === "stock" ? { code: "not_found", message: "会話が見つかりません。" } : missingParent,
+      );
     if (parent.closedAt !== null && (reserving || parent.closedAt !== closedAt))
       return err(conflict("元の会話が閉じました。読み直してから操作してください。"));
+    if (kind === "stock" && reserving)
+      return err(conflict("会話の終了処理中です。読み直してから操作してください。"));
     return run(parent);
   });
 }
