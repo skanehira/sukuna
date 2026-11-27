@@ -2,6 +2,8 @@ import { createInboxRoutes } from "./modules/inbox/adapter/routes";
 import type { InboxDependencies } from "./modules/inbox/domain/ports";
 import { createConversationRoutes } from "./modules/conversation/adapter/http";
 import type { ConversationDependencies } from "./modules/conversation/domain/ports";
+import { createPrRoutes } from "./modules/flow/adapter/pr-routes";
+import type { PrDependencies } from "./modules/flow/domain/pr-ports";
 import { createConversationProgressHandler } from "./modules/conversation/adapter/progress-routes";
 import { createIssueProgressHandler } from "./modules/flow/adapter/progress-routes";
 import type { ProgressDependencies } from "./modules/conversation/domain/progress-port";
@@ -36,6 +38,7 @@ export type IdentityOptions = {
 };
 
 export type AppOptions = {
+  pr?: PrDependencies;
   clientDir?: string;
   build: string;
   identity?: IdentityOptions;
@@ -75,6 +78,7 @@ export function createApp(options: AppOptions): Hono<IdentityEnv> {
 
   if (options.inbox) app.route("/api", createInboxRoutes(options.inbox));
 
+  if (options.pr) app.route("/api", createPrRoutes(options.pr));
   if (options.issues) app.route("/api", createIssueRoutes(options.issues));
   if (options.recap) app.route("/api/conversations", createRecapRoutes(options.recap));
 

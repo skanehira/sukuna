@@ -10,6 +10,7 @@ import { createApp } from "./app";
 import { buildId } from "./build-id";
 import {
   attachUpgradeHandler,
+  getPrDependencies,
   getDatabase,
   getProgressDependencies,
   getConversationDependencies,
@@ -59,6 +60,7 @@ const server = serve(
         repository: createInboxRepository(() => getDatabase().db),
         resetTime: formatResetTime,
       },
+      pr: getPrDependencies(),
       progress: getProgressDependencies(),
       conversations: getConversationDependencies(),
       stock: createStockDependencies({

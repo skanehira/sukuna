@@ -1,3 +1,4 @@
+import type { WorktreeActivityReservation } from "../../../../shared/workspace/worktree-activity";
 import type { Result } from "neverthrow";
 import type {
   ConversationEvent,
@@ -40,6 +41,7 @@ export type SendResult =
   | { result: "queued"; queuedId: string };
 export interface ConversationStore {
   transaction<T>(operation: () => T): T;
+  withWorktreeReservation<T>(operation: (reservation: WorktreeActivityReservation) => T): T;
   withWorkspace<T>(id: string, operation: (worktreeId: string | null) => T): T;
   get(id: string): Conversation | null;
   projectOptions(id: string): {

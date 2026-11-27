@@ -1,0 +1,27 @@
+import type { Result } from "neverthrow";
+type OperationError = {
+  code: "conflict" | "not_found" | "internal" | "invalid_input";
+  message: string;
+};
+export type MergeIssue = {
+  id: string;
+  projectId: string;
+  conversationId: string | null;
+  usesGithub: boolean;
+  state: string;
+  stopReason: string | null;
+};
+export interface MergeRepository {
+  get(id: string): MergeIssue | undefined;
+  accept(id: string, headSha: string, now: number): void;
+}
+export type AllowMergeDependencies = {
+  repository: MergeRepository;
+  deliver(
+    conversationId: string,
+    text: string,
+    accept: () => void,
+  ): Promise<Result<void, OperationError>>;
+  now(): number;
+  changed(issue: MergeIssue): void;
+};

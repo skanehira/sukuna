@@ -80,3 +80,7 @@ export const issuePatchIpcSchema = z.strictObject({
   confirm_before_merge: z.boolean().optional(),
 });
 export const rebuildRecapResponseSchema = z.strictObject({ state: recapStateSchema });
+
+export const allowMergeIpcSchema = z.strictObject({
+  head_sha: z.string().regex(/^[a-f0-9]{40}$/i),
+});

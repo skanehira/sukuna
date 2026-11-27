@@ -1,6 +1,9 @@
 import { ulid } from "ulid";
 import { createConversationDependencies } from "./modules/conversation/adapter/dependencies";
 import type { ConversationDependencies } from "./modules/conversation/domain/ports";
+import { createPrDependencies } from "./modules/flow/adapter/pr-dependencies";
+import type { PrDependencies } from "./modules/flow/domain/pr-ports";
+import { createGhRunner } from "../shared/gh/gh-runner";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -164,4 +167,17 @@ export function getConversationDependencies(): ConversationDependencies {
         getWsHub().notice({ kind: "conversation_parts", conversation_id: id, parts: [] }),
       ),
   });
+}
+
+let prDependencies: PrDependencies | undefined;
+export function getPrDependencies(): PrDependencies {
+  prDependencies ??= createPrDependencies({
+    database: () => getDatabase().db,
+    gh: createGhRunner(process.env.SUKUNA_GH ?? null),
+    runner: getRunnerLink,
+    now: Date.now,
+    changed: (id) =>
+      getWsHub().notice({ kind: "conversation_parts", conversation_id: id, parts: ["stock"] }),
+  });
+  return prDependencies;
 }

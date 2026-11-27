@@ -1,5 +1,6 @@
 import { CommandCache } from "./modules/conversation/adapter/command-cache";
 import { issueInstructions } from "./modules/issue/domain/issue-instructions";
+import { createRunnerAllowMerge } from "./modules/flow/adapter/allow-merge-dependencies";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { ulid } from "ulid";
@@ -146,7 +147,13 @@ export async function startRunnerApp(options: {
       runtime,
       log,
       { pid: process.pid, started_at: clock.now(), version: "0.0.0" },
-      { ...options.ipc, flow: createIssueOpsHandler(issueOps) },
+      {
+        ...options.ipc,
+        flow: createIssueOpsHandler(issueOps),
+        allowMerge: createRunnerAllowMerge(database.db, runtime, {
+          publish: (notice) => changes.publish(notice),
+        }),
+      },
     );
     socket.activate(routes, changes);
     return {

@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { Result } from "neverthrow";
 import { z } from "zod";
 import {
+  allowMergeIpcSchema,
   answerSchema,
   completeReleaseSchema,
   forkConversationSchema,
@@ -24,6 +25,10 @@ function wireResult(value: unknown): unknown {
 }
 export type IpcExtensions = {
   flow?: Hono;
+  allowMerge?: (
+    id: string,
+    headSha: string,
+  ) => Promise<Result<{ state: "implementing" }, OperationError>>;
   workspace?: (
     id: string,
     input: z.infer<typeof workspaceSchema>,
@@ -158,6 +163,12 @@ export function createIpcRoutes(
   const workspace = extensions.workspace;
   if (workspace)
     route("/conversations/:id/workspace", workspaceSchema, (id, p) => workspace(id, p));
+  if (extensions.allowMerge) {
+    const allowMerge = extensions.allowMerge;
+    route("/flow/issues/:id/pr/allow-merge", allowMergeIpcSchema, (id, p) =>
+      allowMerge(id, p.head_sha),
+    );
+  }
   if (extensions.flow) app.route("/flow", extensions.flow);
   app.get("/health", (c) => c.json(health));
   return app;
