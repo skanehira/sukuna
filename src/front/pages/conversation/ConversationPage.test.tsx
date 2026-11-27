@@ -207,7 +207,7 @@ it.each([
     );
     const stop = workspace.start();
     socket.onopen?.();
-    render(
+    const mounted = render(
       <StrictMode>
         <SWRConfig value={{ provider: () => new Map(), revalidateOnFocus: false }}>
           <App
@@ -220,20 +220,22 @@ it.each([
       </StrictMode>,
     );
     const open = async (url: string) => {
-      await act(() => controller.navigate(url));
+      await act(async () => controller.navigate(url));
       await screen.findByText("最後の行", { exact: true });
       await flush();
     };
     const home = async () => {
-      await act(() => controller.navigate("/"));
+      await act(async () => controller.navigate("/"));
       await flush();
     };
     try {
       if (revisit === "fresh" && response === "取得失敗") {
-        await act(() => controller.navigate("/conversations/c1?tail=1"));
+        await act(async () => controller.navigate("/conversations/c1?tail=1"));
         expect(await screen.findByRole("alert")).toHaveTextContent("会話を取得できませんでした");
         expect(statesRead).toEqual([]);
-        fireEvent.click(screen.getByRole("button", { name: "再読み込み" }));
+        await act(async () => {
+          fireEvent.click(screen.getByRole("button", { name: "再読み込み" }));
+        });
         await screen.findByText("最後の行", { exact: true });
         await flush();
       } else {
@@ -257,7 +259,7 @@ it.each([
         working = reopenWorking;
         nextResponse = response;
         if (response === "保留") {
-          await act(() => controller.navigate("/conversations/c1?tail=1"));
+          await act(async () => controller.navigate("/conversations/c1?tail=1"));
           await flush();
           expect(screen.getByRole("status", { name: "読み込み中" })).toBeVisible();
           expect(statesRead).toHaveLength(readCount);
@@ -318,7 +320,7 @@ it.each([
         payload: { text: "新しい出力", parent_tool_use_id: null },
       };
       events.push(event);
-      act(() =>
+      await act(async () =>
         socket.onmessage?.({
           data: JSON.stringify({
             topic: "conversation:c1",
@@ -343,7 +345,9 @@ it.each([
         });
       }
       const count = get.mock.calls.length;
-      fireEvent.click(screen.getByRole("button", { name: "再読み込み" }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "再読み込み" }));
+      });
       await waitFor(() => expect(get).toHaveBeenCalledTimes(count + 1));
       await flush();
       expect(controller.currentLine()?.text).toBe("途中の行");
@@ -354,7 +358,11 @@ it.each([
         ).not.toBeInTheDocument();
       }
     } finally {
-      stop();
+      await act(async () => {
+        mounted.unmount();
+        stop();
+        releaseGet();
+      });
     }
   },
   navigationTestTimeout,
@@ -569,11 +577,11 @@ it.each([
     const enterInboxRow = async () => {
       const row = await screen.findByText(inboxTitle, { exact: true });
       const view = editor("一覧");
-      act(() => {
+      await act(async () => {
         view.dispatch({ selection: { anchor: view.posAtDOM(row) } });
         view.focus();
+        fireEvent.keyDown(view.contentDOM, { key: "Enter" });
       });
-      key(view, "Enter");
       expect(path()).toBe(url);
     };
     try {
@@ -583,8 +591,10 @@ it.each([
       expect(path()).toBe("/issues/42");
       await screen.findByRole("alert");
       const tree = editor("sukuna");
-      act(() => tree.focus());
-      key(tree, "o", { ctrlKey: true });
+      await act(async () => {
+        tree.focus();
+        fireEvent.keyDown(tree.contentDOM, { key: "o", ctrlKey: true });
+      });
       expect(await screen.findByRole("status", { name: "読み込み中" })).toBeVisible();
       expect(path()).toBe(url);
       expect(completedGets).toEqual([1]);
@@ -595,23 +605,35 @@ it.each([
           exact: true,
         });
         const line = tree.posAtDOM(home);
-        act(() => tree.dispatch({ selection: { anchor: line } }));
-        key(tree, "Enter");
+        await act(async () => {
+          tree.dispatch({ selection: { anchor: line } });
+          fireEvent.keyDown(tree.contentDOM, { key: "Enter" });
+        });
         expect(path()).toBe("/");
         if (oldResponse === "通常表示より先") await act(async () => releaseOldGet());
         await enterInboxRow();
       } else if (cancel === "同じURLを開く") {
-        await act(() => controller.navigate(url));
+        await act(async () => controller.navigate(url));
         expect(path()).toBe(url);
       } else if (cancel === "Ctrl+oを続ける") {
-        key(tree, "o", { ctrlKey: true });
+        await act(async () => {
+          fireEvent.keyDown(tree.contentDOM, { key: "o", ctrlKey: true });
+        });
         expect(path()).toBe("/");
         await enterInboxRow();
       } else {
-        window.history.back();
-        await waitFor(() => expect(path()).toBe("/issues/42"));
-        window.history.forward();
-        await waitFor(() => expect(path()).toBe(url));
+        const traverse = async (direction: "back" | "forward", expectedPath: string) => {
+          await act(async () => {
+            const changed = new Promise<void>((resolve) => {
+              window.addEventListener("popstate", () => resolve(), { once: true });
+            });
+            window.history[direction]();
+            await changed;
+          });
+          expect(path()).toBe(expectedPath);
+        };
+        await traverse("back", "/issues/42");
+        await traverse("forward", url);
       }
 
       await screen.findByText("最後の行", { exact: true });
@@ -623,12 +645,14 @@ it.each([
       expect(completedGets).toEqual(oldResponse === "通常表示より先" ? [1, 2, 3] : [1, 3, 2]);
       expect(cursorLine()).toBe(expected);
     } finally {
-      await act(async () => releaseOldGet());
-      mounted.unmount();
-      dispose();
-      store.dispose();
-      window.history.replaceState(previousState, "", previousUrl);
-      window.sessionStorage.clear();
+      await act(async () => {
+        mounted.unmount();
+        dispose();
+        store.dispose();
+        releaseOldGet();
+        window.history.replaceState(previousState, "", previousUrl);
+        window.sessionStorage.clear();
+      });
     }
   },
   navigationTestTimeout,

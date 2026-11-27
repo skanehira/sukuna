@@ -755,9 +755,10 @@ it("左のツリーでプロジェクトを開き、別の行へ移動してか�
   const currentLine = (view: EditorView) =>
     view.state.doc.lineAt(view.state.selection.main.head).text;
   try {
-    await screen.findByRole("region", { name: "一覧" });
+    await act(async () => {});
+    expect(screen.getByRole("region", { name: "一覧" })).toBeVisible();
     const tree = screen.getByRole("region", { name: "sukuna" });
-    await screen.findByText("shop-api", { exact: true, selector: ".cm-kind-heading" });
+    await within(tree).findByText("shop-api", { exact: true, selector: ".cm-kind-heading" });
     const view = EditorView.findFromDOM(tree.querySelector(".cm-editor")!)!;
     const key = async (value: string, ctrlKey = false) => {
       await act(async () => fireEvent.keyDown(view.contentDOM, { key: value, ctrlKey }));
@@ -770,7 +771,7 @@ it("左のツリーでプロジェクトを開き、別の行へ移動してか�
     expect(currentLine(view)).toBe("shop-api");
     await key("Enter");
     expect(window.location.pathname).toBe("/projects/p");
-    await screen.findByRole("region", { name: "shop-api" });
+    expect(screen.getByRole("region", { name: "shop-api" })).toBeVisible();
     act(() => {
       view.focus();
       const line = view.state.doc.line(3);
@@ -779,10 +780,10 @@ it("左のツリーでプロジェクトを開き、別の行へ移動してか�
     expect(currentLine(view)).toBe("  会話: 予約 API の壁打ち");
     await key("o", true);
     expect(window.location.pathname).toBe("/");
-    await screen.findByRole("region", { name: "一覧" });
+    expect(screen.getByRole("region", { name: "一覧" })).toBeVisible();
     expect(currentLine(view)).toBe("shop-api");
     await key("Enter");
-    await screen.findByRole("region", { name: "shop-api" });
+    expect(screen.getByRole("region", { name: "shop-api" })).toBeVisible();
     act(() => {
       view.focus();
       view.dispatch({ selection: { anchor: view.state.doc.line(3).from } });
@@ -794,9 +795,11 @@ it("左のツリーでプロジェクトを開き、別の行へ移動してか�
     expect(window.location.pathname).toBe("/projects/p");
     expect(currentLine(view)).toBe("  会話: 予約 API の壁打ち");
   } finally {
-    mounted.unmount();
-    dispose();
-    store.dispose();
+    await act(async () => {
+      mounted.unmount();
+      dispose();
+      store.dispose();
+    });
   }
 }, 15000);
 

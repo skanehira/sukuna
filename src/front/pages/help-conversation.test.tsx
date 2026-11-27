@@ -456,7 +456,7 @@ describe("設定の通常操作", () => {
       screen: "help",
       entries: [{ keys: "Q", context: "normal", to: { action } }],
     });
-    expect(textInBuffer(f.main).split("\n")).toContain(`Q  ${label}  会話`);
+    await waitFor(() => expect(textInBuffer(f.main).split("\n")).toContain(`Q  ${label}  会話`));
     await f.command(`:map W ${action}`);
     expect(f.entries()).toEqual([
       { keys: "Q", context: "normal", to: { action } },

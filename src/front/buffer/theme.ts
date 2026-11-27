@@ -47,7 +47,7 @@ export const MARK_GUTTER = "cm-mark-gutter";
 export const NUM_GUTTER = "cm-num-gutter";
 export const CURSOR_NUMBER = "cm-cursor-number";
 
-export function bufferTheme(side: BufferSide): Extension {
+function createBufferTheme(side: BufferSide): Extension {
   const metrics = sideMetrics(side);
   return EditorView.theme({
     "&": {
@@ -276,6 +276,18 @@ export function bufferTheme(side: BufferSide): Extension {
     },
     ".cm-vim-panel input": { fontFamily: "var(--font-mono)" },
   });
+}
+
+const BUFFER_THEMES: Record<BufferSide, Extension> = {
+  tree: createBufferTheme("tree"),
+  list: createBufferTheme("list"),
+  table: createBufferTheme("table"),
+  main: createBufferTheme("main"),
+  right: createBufferTheme("right"),
+};
+
+export function bufferTheme(side: BufferSide): Extension {
+  return BUFFER_THEMES[side];
 }
 
 export function speakerTagClass(speaker: "you" | "ai"): string {

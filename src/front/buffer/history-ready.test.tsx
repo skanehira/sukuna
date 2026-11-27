@@ -39,8 +39,11 @@ const projects: ProjectsResponse = {
 const editor = (region: HTMLElement) =>
   EditorView.findFromDOM(region.querySelector(".cm-editor")!)!;
 const text = (view: EditorView) => view.state.doc.lineAt(view.state.selection.main.head).text;
+const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 async function press(view: EditorView, key: string, ctrlKey = false) {
-  await act(async () => fireEvent.keyDown(view.contentDOM, { key, ctrlKey }));
+  await act(async () => {
+    fireEvent.keyDown(view.contentDOM, { key, ctrlKey });
+  });
 }
 
 function ReloadProjects({ api, reload }: { api: ConversationApi; reload: () => Promise<void> }) {
@@ -78,11 +81,7 @@ it.each([
     const target = side === "tree" ? "docs-site" : "会話: 別の会話";
     window.history.replaceState(null, "", origin);
     window.sessionStorage.clear();
-    let incoming = projects;
-    let gate = Promise.resolve();
-    let release = () => {};
-    let requested = () => {};
-    function setup() {
+    async function setup(readProjects: () => Promise<ProjectsResponse>) {
       const navigation = createNavigation(parseRoute(window.location.pathname), () => {});
       const { controller, dispose } = createBrowserController(window, navigation.open);
       controller.options.prompt = () => ({
@@ -93,16 +92,8 @@ it.each([
         close: () => {},
       });
       const { store, api: inbox } = inboxFixture();
-      inbox.projects.mockImplementation(async () => {
-        requested();
-        await gate;
-        return incoming;
-      });
-      const api = createConversationApi(async () => {
-        requested();
-        await gate;
-        return Response.json(incoming);
-      });
+      inbox.projects.mockImplementation(readProjects);
+      const api = createConversationApi(async () => Response.json(await readProjects()));
       const unregister = registerConversationSwitch(controller);
       const mounted = render(
         <StrictMode>
@@ -132,6 +123,7 @@ it.each([
           </SWRConfig>
         </StrictMode>,
       );
+      await act(async () => {});
       return {
         controller,
         cleanup: () => {
@@ -144,9 +136,13 @@ it.each([
     }
     const region = () =>
       screen.getByRole("region", { name: side === "tree" ? "sukuna" : "会話を始める・切り替える" });
-    let current = setup();
+    const mainRegion = () => screen.getByRole("region", { name: "テスト本文" });
+    const destinationText = side === "tree" ? "q" : "c2";
+    const originText = side === "tree" ? "一覧" : "c1";
+    let release = () => {};
+    let current = await setup(async () => projects);
     try {
-      const main = editor(await screen.findByRole("region", { name: "テスト本文" }));
+      const main = editor(mainRegion());
       if (side === "right") {
         act(() => main.focus());
         await press(main, " ");
@@ -160,37 +156,46 @@ it.each([
       });
       await press(before, "Enter");
       expect(window.location.pathname).toBe(destination);
-      await screen.findByRole("region", { name: "テスト本文" });
-      current.cleanup();
-      incoming = empty ? { projects: [] } : projects;
-      gate = new Promise<void>((resolve) => {
+      expect(editor(mainRegion()).state.doc.toString()).toBe(destinationText);
+      await act(async () => current.cleanup());
+      let incoming = empty ? { projects: [] } : projects;
+      const gate = new Promise<void>((resolve) => {
         release = resolve;
       });
-      const request = new Promise<void>((resolve) => {
-        requested = resolve;
+      let requested = false;
+      current = await setup(async () => {
+        requested = true;
+        await gate;
+        return incoming;
       });
-      current = setup();
-      await screen.findByRole("region", { name: "テスト本文" });
-      await request;
-      await within(region()).findByText(side === "tree" ? "設定" : "読み込み中", { exact: true });
+      expect(requested).toBe(true);
+      expect(
+        within(region()).getByText(side === "tree" ? "設定" : "読み込み中", { exact: true }),
+      ).toBeVisible();
       const reopened = editor(region());
       expect(reopened.state.doc.toString()).toBe(
         side === "tree" ? "一覧\nアプリ\n設定\nヘルプ" : "読み込み中",
       );
       const initiator =
         newer === "main" || newer === "default" || newer === "search"
-          ? editor(screen.getByRole("region", { name: "テスト本文" }))
+          ? editor(mainRegion())
           : reopened;
-      act(() => initiator.focus());
-      await press(initiator, "o", true);
+      await act(async () => {
+        initiator.focus();
+        fireEvent.keyDown(initiator.contentDOM, { key: "o", ctrlKey: true });
+      });
       expect(window.location.pathname).toBe(origin);
-      const currentMain = editor(await screen.findByRole("region", { name: "テスト本文" }));
+      const currentMain = editor(mainRegion());
+      expect(currentMain.state.doc.toString()).toBe(originText);
       let prompt: EditorView | undefined;
       let search: HTMLInputElement | undefined;
       if (newer === "search") {
         await press(currentMain, "/");
-        search = currentMain.dom.querySelector<HTMLInputElement>(".cm-vim-panel input")!;
-        fireEvent.input(search, { target: { value: "a" } });
+        const input = currentMain.dom.querySelector<HTMLInputElement>(".cm-vim-panel input")!;
+        await act(async () => {
+          fireEvent.input(input, { target: { value: "a" } });
+        });
+        search = input;
         expect(search).toHaveFocus();
       } else if (newer !== "none" && newer !== "default") {
         act(() => {
@@ -212,7 +217,7 @@ it.each([
       }
       await act(async () => release());
       if (!empty) await within(region()).findByText(target, { exact: true });
-      await act(async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+      await act(nextFrame);
       expect(text(reopened)).toBe(empty ? (side === "tree" ? "ヘルプ" : "") : target);
       if (newer === "prompt") {
         expect(prompt!.state.doc.toString()).toBe("a");
@@ -234,13 +239,17 @@ it.each([
         act(() => reopened.dispatch({ selection: { anchor: reopened.posAtDOM(item) } }));
       }
       incoming = projects;
-      fireEvent.click(screen.getByRole("button", { name: "再取得" }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "再取得" }));
+      });
       await within(region()).findByText(target, { exact: true });
-      await act(async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+      await act(nextFrame);
       expect(text(reopened)).toBe(after);
     } finally {
-      release();
-      current.cleanup();
+      await act(async () => {
+        release();
+        current.cleanup();
+      });
     }
   },
   15000,
