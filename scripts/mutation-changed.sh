@@ -4,8 +4,8 @@
 set -eu
 
 base="${1:-origin/main}"
-files=$(git diff --name-only --diff-filter=AMR "$base...HEAD" -- 'src/*.ts' 'src/*.tsx' |
-  grep -Ev '\.test\.tsx?$|\.d\.ts$|^src/test/' | paste -sd, -) || true
+changed=$(git diff --name-only --diff-filter=AMR "$base...HEAD" -- 'src/*.ts' 'src/*.tsx')
+files=$(printf '%s\n' "$changed" | grep -Ev '\.test\.tsx?$|\.d\.ts$|^src/test/' | paste -sd, -) || true
 
 if [ -z "$files" ]; then
   echo "変異テストの対象になるファイルは変わっていない ($base...HEAD)"
