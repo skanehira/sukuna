@@ -1,3 +1,4 @@
+import { createInboxRepository, formatResetTime } from "./modules/inbox/adapter/inbox-repository";
 import { createApp } from "./app";
 import { buildId } from "./build-id";
 import { createIssueDependencies } from "./modules/issue/adapter/dependencies";
@@ -18,6 +19,7 @@ const workspace = createWorkspaceDependencies(() => getDatabase().db);
 export default createApp({
   build: buildId,
   workspace,
+  inbox: { repository: createInboxRepository(() => getDatabase().db), resetTime: formatResetTime },
   progress: getProgressDependencies(),
   messages: getMessageDependencies(),
   stock: createStockDependencies({

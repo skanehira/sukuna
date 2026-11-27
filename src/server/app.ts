@@ -1,3 +1,5 @@
+import { createInboxRoutes } from "./modules/inbox/adapter/routes";
+import type { InboxDependencies } from "./modules/inbox/domain/ports";
 import { createConversationProgressHandler } from "./modules/conversation/adapter/progress-routes";
 import { createIssueProgressHandler } from "./modules/flow/adapter/progress-routes";
 import type { ProgressDependencies } from "./modules/conversation/domain/progress-port";
@@ -37,6 +39,7 @@ export type AppOptions = {
   stock?: StockDependencies;
 
   issues?: IssueServerDeps;
+  inbox?: InboxDependencies;
 };
 
 export function createApp(options: AppOptions): Hono<IdentityEnv> {
@@ -59,6 +62,8 @@ export function createApp(options: AppOptions): Hono<IdentityEnv> {
     const body: HealthResponse = { status: "ok" };
     return c.json(body);
   });
+
+  if (options.inbox) app.route("/api", createInboxRoutes(options.inbox));
 
   if (options.issues) app.route("/api", createIssueRoutes(options.issues));
 

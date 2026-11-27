@@ -1,6 +1,6 @@
 import { fc, test } from "@fast-check/vitest";
 import { expect } from "vite-plus/test";
-import { formatLastAction, lastActionInTurn } from "./last-action";
+import { formatLastAction, lastActionInTurn, toolTarget } from "./last-action";
 
 const command = fc
   .array(fc.constantFrom("a", "あ", "🙂", "𠮷"), { minLength: 1, maxLength: 90 })
@@ -44,5 +44,14 @@ test.prop([command, fc.integer({ min: 1, max: 100000 })])(
       lastActionAt: at + 1,
       turnStartedAt: at,
     });
+  },
+);
+
+test.prop([command, fc.constantFrom("Read", "Edit", "Write", "NotebookEdit")])(
+  "許可対象のパスは作業ディレクトリからの相対にして文字数で省略しない",
+  (path, tool) => {
+    const target = `config/${path}/production.env`;
+    const field = tool === "NotebookEdit" ? "notebook_path" : "file_path";
+    expect(toolTarget(tool, { [field]: `/work/${target}` }, "/work")).toBe(target);
   },
 );

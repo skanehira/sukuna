@@ -1,3 +1,4 @@
+import { createInboxRepository, formatResetTime } from "./modules/inbox/adapter/inbox-repository";
 import { serve } from "@hono/node-server";
 import { accessSync, constants } from "node:fs";
 import { homedir } from "node:os";
@@ -52,6 +53,10 @@ const server = serve(
       clientDir,
       build: buildId,
       workspace,
+      inbox: {
+        repository: createInboxRepository(() => getDatabase().db),
+        resetTime: formatResetTime,
+      },
       progress: getProgressDependencies(),
       messages: getMessageDependencies(),
       stock: createStockDependencies({
