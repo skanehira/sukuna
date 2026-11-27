@@ -401,7 +401,7 @@ push の中身は `{ "type": "show", "tag": "…", "title": "…", "body": "…"
 - `key` は `issue:<識別子>` か `conversation:<識別子>` で、カーソルの追従に使う
 - `reason` は「一覧のセクション分け」の表の理由の値である。停止中の issue では `issues.stop_reason` の値を入れる
 - `status` は一覧の状況の文、`notice` は通知の本文である。理由が `working` の行の `status` は空にし、画面が `activity` と時計から作る
-- `activity` は理由が `working` の行だけに入り、形は `features/work-monitor.md`「API」の `activity` と同じである
+- `activity` は理由が `working` の行だけに入り、ほかの行では `null` にする。形は `features/work-monitor.md`「API」の `activity` と同じである
 - `issue` は issue の行だけに入る。会話の行では `null` にする
 - `priority` は、会話と優先度の無い issue では `null` にする
 
@@ -438,12 +438,13 @@ push の中身は `{ "type": "show", "tag": "…", "title": "…", "body": "…"
 {
   "project": { "id": "01JC…", "name": "shop-api", "flowPaused": false },
   "issueSections": [
-    { "state": "<issues.state の値>", "total": 23, "rows": [ { "key": "issue:01JD…", "id": "01JD…", "number": 9, "title": "通知メールの文面", "status": "—", "lastActivityAt": 1764050000000, "unread": false } ] }
+    { "state": "<issues.state の値>", "total": 23, "rows": [ { "key": "issue:01JD…", "id": "01JD…", "number": 9, "title": "通知メールの文面", "status": "—", "lastActivityAt": 1764050000000, "unread": false, "activity": null } ] }
   ],
-  "conversations": [ { "key": "conversation:01JE…", "id": "01JE…", "title": "予約 API の壁打ち", "status": "質問 2 件: 期限切れの戻し方 ほか", "lastActivityAt": 1764139700000, "unread": true } ]
+  "conversations": [ { "key": "conversation:01JE…", "id": "01JE…", "title": "予約 API の壁打ち", "status": "質問 2 件: 期限切れの戻し方 ほか", "lastActivityAt": 1764139700000, "unread": true, "activity": null } ]
 }
 ```
 
+- `status` と `activity` の決め方は「GET /api/inbox」の行と同じにする
 - `total` はその状態の issue の件数で、`rows` の件数より多ければ、画面は残りを畳んだ行を出す
 - 失敗: プロジェクトが無いか解除済みなら 404 `not_found`
 
