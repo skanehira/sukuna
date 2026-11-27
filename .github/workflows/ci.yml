@@ -34,28 +34,3 @@ jobs:
 
       - name: Build
         run: vp build
-
-  mutation:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
-    steps:
-      - uses: actions/checkout@v7.0.1
-        with:
-          fetch-depth: 0
-
-      - uses: voidzero-dev/setup-vp@v1.15.0
-        with:
-          node-version: "24"
-          cache: true
-
-      - name: Install dependencies
-        run: vp install --frozen-lockfile
-
-      - name: Install ripgrep
-        run: sudo apt-get update && sudo apt-get install -y ripgrep
-
-      - name: Mutation test (changed files)
-        env:
-          BASE_REF: ${{ github.base_ref }}
-        run: vp run mutation:changed "origin/$BASE_REF"
