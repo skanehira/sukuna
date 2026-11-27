@@ -6,13 +6,14 @@ export function createDependencyWithdrawn(
 ) {
   const move = createMoveState(deps);
   return {
-    withdraw: async (issueId: string) => {
+    withdraw: async (issueId: string, ownConversations: string[] = []) => {
       const committed = deps.unitOfWork.run((repository) => {
         const now = deps.clock.now();
         const result = moveStateWithin(repository, { issueId, trigger: "withdraw" }, now);
         const notices: IssueNotice[] = [];
         const conversations = new Set<string>();
         if (result.kind !== "moved") return { result, notices, conversations };
+        for (const id of ownConversations) conversations.add(id);
         notices.push(result.notice);
         for (const dependentId of repository.dependentIssueIds(issueId)) {
           const dependent = repository.getIssue(dependentId);
@@ -32,7 +33,11 @@ export function createDependencyWithdrawn(
         return { result, notices, conversations };
       });
       for (const notice of committed.notices) deps.notices.publish(notice);
-      await Promise.all([...committed.conversations].map((id) => deps.conversations.stop(id)));
+      const stopped = await Promise.allSettled(
+        [...committed.conversations].map((id) => deps.conversations.stop(id)),
+      );
+      if (stopped.some((result) => result.status === "rejected"))
+        return { kind: "stop_failed" as const };
       return committed.result;
     },
     clear: (issueId: string) => move({ issueId, trigger: "dependency_cleared" }),

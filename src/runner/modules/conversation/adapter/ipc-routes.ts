@@ -23,6 +23,7 @@ function wireResult(value: unknown): unknown {
   );
 }
 export type IpcExtensions = {
+  flow?: Hono;
   workspace?: (
     id: string,
     input: z.infer<typeof workspaceSchema>,
@@ -150,6 +151,7 @@ export function createIpcRoutes(
   const workspace = extensions.workspace;
   if (workspace)
     route("/conversations/:id/workspace", workspaceSchema, (id, p) => workspace(id, p));
+  if (extensions.flow) app.route("/flow", extensions.flow);
   app.get("/health", (c) => c.json(health));
   return app;
 }

@@ -18,6 +18,11 @@ import { ChangeFeed } from "./modules/conversation/adapter/change-feed";
 import { createIpcRoutes, type IpcExtensions } from "./modules/conversation/adapter/ipc-routes";
 import { reserveRunnerSocket } from "./modules/conversation/adapter/ipc-socket";
 import type { Clock } from "./modules/conversation/domain/clock";
+import { createIssueOperations } from "./modules/flow/adapter/issue-ops-dependencies";
+import { createIssueDataUnitOfWork } from "../server/modules/issue/adapter/issue-repository";
+import { registerIssueTools, unavailableIssueReports } from "./modules/issue/adapter/app-tools";
+import type { IssueReportsPort } from "./modules/issue/domain/ports";
+import { createIssueOpsHandler } from "./modules/flow/adapter/issue-ops-handler";
 
 export async function startRunnerApp(options: {
   database: OpenedDatabase;
@@ -27,6 +32,7 @@ export async function startRunnerApp(options: {
   clock?: Clock;
   children?: ChildProcesses;
   ipc?: IpcExtensions;
+  issueReports?: IssueReportsPort;
 }) {
   const { environment: env, database, log } = options;
   const socket = await reserveRunnerSocket(env.socket);
@@ -112,12 +118,29 @@ export async function startRunnerApp(options: {
           message: `会話が止まりました: ${signal.reason}`,
         });
     });
+    const issueOps = createIssueOperations(
+      database.db,
+      { now: () => clock.now(), id: ulid },
+      { publish: (notice) => changes.publish(notice) },
+      {
+        stop: async (id) => {
+          const result = await runtime.stop(id);
+          if (result.isErr() && result.error.code !== "conflict")
+            throw new Error(result.error.message);
+        },
+      },
+    );
+    registerIssueTools(runtime.tools, {
+      data: createIssueDataUnitOfWork(database.db),
+      flow: issueOps,
+      reports: options.issueReports ?? unavailableIssueReports,
+    });
     recover(runtime);
     const routes = createIpcRoutes(
       runtime,
       log,
       { pid: process.pid, started_at: clock.now(), version: "0.0.0" },
-      options.ipc,
+      { ...options.ipc, flow: createIssueOpsHandler(issueOps) },
     );
     socket.activate(routes, changes);
     return {

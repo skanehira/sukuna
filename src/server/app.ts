@@ -17,6 +17,9 @@ import type { WorkspaceDependencies } from "./modules/workspace/domain/ports";
 import { createStockRoutes } from "./modules/stock/adapter/http";
 import type { StockDependencies } from "./modules/stock/domain/ports";
 
+import { createIssueRoutes } from "./modules/issue/adapter/issue-routes";
+import type { IssueServerDeps } from "../shared/issue/ports";
+
 export type IdentityOptions = {
   login: string | undefined;
   devIdentity: string | undefined;
@@ -32,6 +35,8 @@ export type AppOptions = {
   progress?: ProgressDependencies;
   messages?: MessageDependencies;
   stock?: StockDependencies;
+
+  issues?: IssueServerDeps;
 };
 
 export function createApp(options: AppOptions): Hono<IdentityEnv> {
@@ -54,6 +59,8 @@ export function createApp(options: AppOptions): Hono<IdentityEnv> {
     const body: HealthResponse = { status: "ok" };
     return c.json(body);
   });
+
+  if (options.issues) app.route("/api", createIssueRoutes(options.issues));
 
   if (options.workspace) app.route("/api/conversations", createWorkspaceRoutes(options.workspace));
 
