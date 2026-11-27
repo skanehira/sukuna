@@ -1,7 +1,12 @@
 import { prepareAcceptance } from "./run-options";
 import { sameDraftReceipt } from "../../../../shared/conversation/api";
 import { err, ok, type Result } from "neverthrow";
-import type { ConversationRuntime, DeliveryError, InputAcceptance } from "./runtime";
+import type {
+  ConversationRuntime,
+  DeliveryError,
+  InputAcceptance,
+  OperationError,
+} from "./runtime";
 import type { ProjectRunReservation, SendResult } from "../domain/conversation-store";
 import type { SendInput } from "./runtime";
 import { activeStates, callerInputAcceptance, conflict, InputRefused } from "./runtime";
@@ -110,10 +115,17 @@ export async function sendUnlocked(
     accepted?.(true);
     return ok({ result: "queued", queuedId });
   }
-  const prepared = await this.runOptions.prepareDelivery(c, input, "message", () =>
-    Boolean(acceptance?.check?.()),
-  );
-  if (prepared.isErr()) return err(prepared.error);
+  let preparationRefusal: OperationError | undefined;
+  const prepared = await this.runOptions.prepareDelivery(c, input, "message", () => {
+    const refused = acceptance?.check?.();
+    if (refused) preparationRefusal = refused;
+    return Boolean(refused);
+  });
+  if (prepared.isErr()) {
+    if (prepared.error.code === "runner_unavailable" && preparationRefusal)
+      return err(acceptance?.checkBeforeCommit?.() ?? preparationRefusal);
+    return err(prepared.error);
+  }
   const { input: instruction, committed, rejected, release, prefix } = prepared.value;
   try {
     const delivered = await this.deliver(
