@@ -1,4 +1,4 @@
-import { Buffer, type BufferHandle } from "../buffer/Buffer";
+import { LifecycleBuffer } from "./lifecycle/LifecycleBuffer";
 import { Frame } from "../buffer/Frame";
 import type { ColumnDef, LineInfo } from "../buffer/line";
 import { formatStageElapsed } from "../../shared/activity/stage";
@@ -119,25 +119,16 @@ export function timelineLines(
   return rows;
 }
 
-export function TimelinePane({
-  posKey,
-  lines,
-  onReady,
-}: {
-  posKey: string;
-  lines: LineInfo[] | null;
-  onReady: (handle: BufferHandle) => void;
-}) {
+export function TimelinePane({ posKey, lines }: { posKey: string; lines: LineInfo[] | null }) {
   return (
     <Frame title="タイムライン" side="right">
       {lines ? (
-        <Buffer
+        <LifecycleBuffer
           side="right"
           viewName="timeline"
           posKey={posKey}
           columns={columns}
           lines={lines}
-          onReady={onReady}
         />
       ) : (
         <p className="px-4 py-2 text-[13px] text-muted" role="status">

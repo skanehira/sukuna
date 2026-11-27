@@ -74,7 +74,7 @@ export class ConversationSession {
   monitor?: WorkMonitor;
   unreadSeq: number | null = null;
   private tailLines: Record<string, LineInfo[]> = {};
-  private state: { data: Snapshot | null; version: number } = { data: null, version: 0 };
+  private state: { data: Snapshot | null; version: number };
   private listeners = new Set<() => void>();
   private handle: BufferHandle | null = null;
   private blocks: Block[] = [];
@@ -104,12 +104,14 @@ export class ConversationSession {
     api: ConversationApi,
     controller: BufferController,
     env: ConversationEnvironment,
+    initial?: Snapshot,
   ) {
     this.id = id;
     this.api = api;
     this.controller = controller;
     this.env = env;
-    this.draft = new DraftSync(env.clientId, null);
+    this.state = { data: initial ?? null, version: 0 };
+    this.draft = new DraftSync(env.clientId, initial?.draft ?? null);
   }
   snapshot = () => this.state;
   subscribe = (listener: () => void): (() => void) => {
@@ -153,12 +155,12 @@ export class ConversationSession {
     this.refreshTail();
     this.emit();
   }
-  async refresh(preserveDraft = false): Promise<void> {
+  async refresh(preserveDraft = false, current?: () => boolean): Promise<void> {
     const request = ++this.nextFetch;
     const draft = this.draft;
     const version = draft.readVersion();
     const data = await this.api.get(this.id);
-    if (request < this.appliedFetch) return;
+    if (request < this.appliedFetch || (current && !current())) return;
     this.appliedFetch = request;
     if (
       !this.state.data &&
@@ -179,13 +181,7 @@ export class ConversationSession {
       });
     const oldPrompt = this.controller.options.prompt?.bind(this.controller.options);
     this.controller.options.prompt = () => this.prompt();
-    this.bindAction(timelineStopAction, async () => {
-      await this.api.stop(this.id);
-      this.controller.notify(
-        `会話: ${this.state.data!.conversation.title} の AI を止めました。作業は保存され、指示待ちになります`,
-      );
-      await this.refresh();
-    });
+    const disconnectMonitor = this.monitor?.connect() ?? this.registerStop();
     this.bindAction(conversationActions.resume, async () => {
       await this.api.resume(this.id);
       await this.refresh();
@@ -212,12 +208,6 @@ export class ConversationSession {
     });
     this.removers.push(
       this.controller.commands.register({
-        ...conversationCommands.stop,
-        run: () => this.controller.run("agent.stop"),
-      }),
-    );
-    this.removers.push(
-      this.controller.commands.register({
         ...conversationCommands.images,
         run: async (args) => {
           if (args.join(" ") !== "clear") throw new Error("使い方: :images clear");
@@ -232,18 +222,37 @@ export class ConversationSession {
       ["conversation.switch", "会話を切り替える"],
     ]);
     const disconnectRecap = this.recap?.connect();
-    const disconnectMonitor = this.monitor?.connect();
     return () => {
       connecting = false;
       this.connected = false;
       disconnectRecap?.();
-      disconnectMonitor?.();
+      disconnectMonitor();
       this.cancelSave?.();
       this.controller.closePrompt();
       if (this.draft.dirty()) void this.saveDraft();
       this.controller.options.prompt = oldPrompt;
       this.removers.splice(0).forEach((remove) => remove());
       this.handle = null;
+    };
+  }
+  registerStop(): () => void {
+    const unbind = this.controller.actions.register({
+      ...timelineStopAction,
+      run: async () => {
+        await this.api.stop(this.id);
+        this.controller.notify(
+          `会話: ${this.state.data!.conversation.title} の AI を止めました。作業は保存され、指示待ちになります`,
+        );
+        await this.refresh();
+      },
+    });
+    const unregister = this.controller.commands.register({
+      ...conversationCommands.stop,
+      run: () => this.controller.run("agent.stop"),
+    });
+    return () => {
+      unbind();
+      unregister();
     };
   }
   private action(
@@ -661,6 +670,13 @@ export class ConversationSession {
     this.messageId = null;
     this.controller.openPrompt(this.prompt());
     void this.saveDraft();
+  }
+  async consultTimeline(
+    task: { id: string; title: string },
+    current: () => boolean,
+  ): Promise<void> {
+    if (!this.connected) await this.refresh(false, current);
+    if (current()) this.openConsultation(task);
   }
   async continueTimeline(title: string): Promise<void> {
     this.requireUndoResult();

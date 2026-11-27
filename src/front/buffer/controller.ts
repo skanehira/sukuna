@@ -124,6 +124,7 @@ export class BufferController {
   private searchSubmit: ((query: string) => void | Promise<void>) | null = null;
   private origin = "main";
   private promptOrigin = "main";
+  private rightUnavailable = false;
   private promptDraft = "";
   private opening = 0;
   private interaction = 0;
@@ -266,6 +267,7 @@ export class BufferController {
   registerWindow(side: string, handle: WindowHandle, initialize?: () => void): () => void {
     const registration = { handle, initialized: false };
     this.windows.set(side, registration);
+    if (side === "right") this.rightUnavailable = false;
     const stored =
       handle.temporary || handle.restorePosition === false
         ? null
@@ -383,7 +385,7 @@ export class BufferController {
     if (!confirmation || !run) return false;
     if (["Shift", "Control", "Alt", "Meta"].includes(event.key)) return true;
     this.dismissConfirmation();
-    this.focus(confirmation.context.window);
+    this.restoreInputFocus(confirmation.context.window);
     if (
       event.key === "y" &&
       !event.isComposing &&
@@ -539,7 +541,7 @@ export class BufferController {
     this.commandRetry = null;
     this.searchSubmit = null;
     this.update({ command: null, mode: "NORMAL" });
-    this.focus(this.origin);
+    this.restoreInputFocus(this.origin);
   }
   async command(input: string): Promise<void> {
     const search = this.searchSubmit;
@@ -682,7 +684,7 @@ export class BufferController {
     if (!spec) return;
     this.update({ prompt: null, mode: "NORMAL" });
     spec.close(text);
-    this.focus(this.promptOrigin);
+    this.restoreInputFocus(this.promptOrigin);
   }
   async submitPrompt(text: string, interrupt = false): Promise<boolean> {
     const spec = this.state.prompt;
@@ -703,7 +705,7 @@ export class BufferController {
       )
         return true;
       this.update({ prompt: null, mode: "NORMAL" });
-      this.focus(this.promptOrigin);
+      this.restoreInputFocus(this.promptOrigin);
       return true;
     } catch (error) {
       this.notify(error instanceof Error ? error.message : "送れませんでした", "error");
@@ -726,8 +728,22 @@ export class BufferController {
     this.update({});
     this.focusMain();
   }
+  focusMainFromRight(): void {
+    this.rightUnavailable = true;
+    this.cancelWindowRestoration("right");
+    if (this.state.active === "right") this.focusMain();
+  }
+  private restoreInputFocus(origin: string): void {
+    if (origin !== "right" || !this.rightUnavailable) {
+      this.focus(origin);
+      return;
+    }
+    const active = this.state.active;
+    if (active !== "right" && this.window(active)) this.focus(active);
+    else this.focusMain();
+  }
   private focusMain(): void {
-    if (this.window("main")) this.focus("main");
+    if (this.state.command === null && this.window("main")) this.focus("main");
     else {
       this.positions.setActive("main");
       this.update({ active: "main" });

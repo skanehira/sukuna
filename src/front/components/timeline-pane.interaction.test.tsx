@@ -98,7 +98,7 @@ it("次と前の木に移り、配信で行が増えても同じタスクを選�
     monitor.open();
     const { unmount } = render(
       <BufferControllerContext value={controller}>
-        <MonitorPane monitor={monitor} view={{ view: "timeline", target: "chat" }} />
+        <MonitorPane monitor={monitor} view="timeline" />
       </BufferControllerContext>,
     );
     const frame = screen.getByRole("region", { name: "タイムライン" });

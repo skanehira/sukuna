@@ -1,4 +1,6 @@
-import { useSyncExternalStore } from "react";
+import { useMemo, useSyncExternalStore } from "react";
+// oxlint-disable-next-line no-restricted-imports -- 外部システムとの同期: 右に表示する会話の配信を、表示を閉じるまで購読する
+import { useEffect } from "react";
 import { TaskDetailPane, taskDetailLines } from "../../components/task-detail-pane";
 import {
   TimelinePane,
@@ -9,9 +11,7 @@ import {
 import { WorkingLine, liveActivity } from "../../components/working-line";
 import { progressResponseSchema, type ProgressResponse } from "../../../shared/progress/schema";
 import type { ServerMessage } from "../../../shared/ws";
-import type { BufferHandle } from "../../buffer/Buffer";
 import type { ActionContext } from "../../buffer/keymap/registry";
-import type { RightView } from "../../buffer/right-window";
 import { timelineNote } from "../timeline-lines";
 import type { TabStorage } from "../recap/read-tracking";
 import { timelineActions } from "../work-actions";
@@ -53,8 +53,8 @@ export class WorkMonitor {
   private taskId: string | null;
   private treeId: string | null;
   private request = 0;
-  private connected = false;
-  private right: { view: TimelineView; handle: BufferHandle } | null = null;
+  private users = 0;
+  private stop: (() => void) | undefined;
   private listeners = new Set<() => void>();
   private cancelTimer: (() => void) | undefined;
   private readonly url: string;
@@ -85,6 +85,15 @@ export class WorkMonitor {
   now = () => this.options.now();
 
   connect(): () => void {
+    if (this.users++ === 0) this.stop = this.start();
+    return () => {
+      if (--this.users !== 0) return;
+      this.stop?.();
+      this.stop = undefined;
+    };
+  }
+
+  private start(): () => void {
     const { controller } = this.conversation;
     const register = (
       name: string,
@@ -101,6 +110,7 @@ export class WorkMonitor {
         run,
       });
     const removers = [
+      this.conversation.registerStop(),
       register(timelineActions.next.name, timelineActions.next.label, "timeline", () =>
         this.shift(1),
       ),
@@ -122,9 +132,17 @@ export class WorkMonitor {
         const tree = selectedTree(this.state.data?.timeline ?? null, this.treeId);
         if (tree) await this.conversation.continueTimeline(tree.title);
       }),
-      register("timeline.consult", "このタスクについて相談する", "timeline-task", () => {
+      register("timeline.consult", "このタスクについて相談する", "timeline-task", async () => {
         const task = this.state.data?.timeline?.tasks.find(({ id }) => id === this.taskId);
-        if (task) this.conversation.openConsultation(task);
+        if (!task) return;
+        const opening = controller.right.openingRevision();
+        const promptId = controller.snapshot().promptId;
+        await this.conversation.consultTimeline(
+          task,
+          () =>
+            controller.right.openingRevision() === opening &&
+            controller.snapshot().promptId === promptId,
+        );
       }),
     ];
     controller.setHints("timeline", [
@@ -139,22 +157,26 @@ export class WorkMonitor {
       ["right.close", "閉じる"],
     ]);
     let opening = controller.right.openingRevision();
+    let screen = controller.screenOpening();
     const unsubscribeRight = controller.subscribe(() => {
       const next = controller.right.openingRevision();
       if (next === opening) return;
+      const nextScreen = controller.screenOpening();
+      const navigating = nextScreen !== screen;
       opening = next;
-      if (this.visible()) void this.refresh();
+      screen = nextScreen;
+      if (!navigating && this.visible()) void this.refresh();
     });
-    this.connected = true;
-    this.loaded();
+    const request = this.request;
+    queueMicrotask(() => {
+      if (request === this.request) this.loaded();
+    });
     this.scheduleTick();
     return () => {
-      this.connected = false;
       unsubscribeRight();
       removers.forEach((remove) => remove());
       this.cancelTimer?.();
       this.cancelTimer = undefined;
-      this.right = null;
       this.request++;
     };
   }
@@ -173,7 +195,7 @@ export class WorkMonitor {
   }
 
   loaded(): void {
-    if (!this.connected) return;
+    if (this.users === 0) return;
     if (this.visible() || this.conversation.snapshot().data?.conversation.runState === "working")
       void this.refresh();
   }
@@ -251,17 +273,11 @@ export class WorkMonitor {
   }
 
   private paint(): void {
-    const right = this.conversation.controller.right.current;
-    if (this.right && right?.target === this.target.id && this.right.view === right.view) {
-      const lines = this.lines(this.right.view);
-      if (lines) this.right.handle.replaceAll(lines);
-    }
     this.state = { ...this.state, version: this.state.version + 1 };
     this.listeners.forEach((listener) => listener());
   }
 
-  lines(view: TimelineView) {
-    const { data, error } = this.state;
+  lines(view: TimelineView, { data, error }: TimelineSnapshot) {
     if (!data) return error ? [timelineNote(error)] : null;
     const now = new Date(this.now());
     const rows =
@@ -271,10 +287,6 @@ export class WorkMonitor {
     return error ? [timelineNote(error), ...rows] : rows;
   }
 
-  bind = (view: TimelineView, handle: BufferHandle): void => {
-    this.right = { view, handle };
-  };
-
   positionKey(view: string): string {
     return `${this.url}:${view}${view === "timeline-task" ? `:${encodeURIComponent(this.taskId ?? "")}` : ""}`;
   }
@@ -283,17 +295,21 @@ export class WorkMonitor {
 export function MonitorPane({
   monitor,
   view,
+  subscribe,
 }: {
   monitor: WorkMonitor;
-  view: RightView & { view: TimelineView };
+  view: TimelineView;
+  subscribe?: (monitor: WorkMonitor) => () => void;
 }) {
-  useSyncExternalStore(monitor.subscribe, monitor.snapshot);
-  const props = {
-    posKey: monitor.positionKey(view.view),
-    lines: monitor.lines(view.view),
-    onReady: (handle: BufferHandle) => monitor.bind(view.view, handle),
-  };
-  return view.view === "timeline" ? <TimelinePane {...props} /> : <TaskDetailPane {...props} />;
+  useEffect(() => subscribe?.(monitor), [monitor, subscribe]);
+  const snapshot = useSyncExternalStore(monitor.subscribe, monitor.snapshot);
+  const lines = useMemo(() => monitor.lines(view, snapshot), [monitor, view, snapshot]);
+  const posKey = monitor.positionKey(view);
+  return view === "timeline" ? (
+    <TimelinePane posKey={posKey} lines={lines} />
+  ) : (
+    <TaskDetailPane key={posKey} posKey={posKey} lines={lines} />
+  );
 }
 
 export function WorkingActivity({

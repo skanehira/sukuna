@@ -208,7 +208,12 @@ export function createFilesWorkspace({
       prepared = undefined;
       return opening;
     },
-    async render(route: Route, root: FileScope, prepared?: PreparedFile): Promise<ScreenContent> {
+    async render(
+      route: Route,
+      root: FileScope,
+      prepared?: PreparedFile,
+      onResolved?: (available: boolean) => void,
+    ): Promise<ScreenContent> {
       const params = new URLSearchParams(route.query);
       const url = routeUrl(route);
       if (route.view === "file") {
@@ -226,6 +231,7 @@ export function createFilesWorkspace({
               path={path}
               startLine={positive(params.get("line")) - 1}
               initialContent={prepared?.data}
+              onResolved={onResolved}
             />
           ),
         };

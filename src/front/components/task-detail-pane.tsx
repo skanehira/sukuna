@@ -1,4 +1,4 @@
-import { Buffer, type BufferHandle } from "../buffer/Buffer";
+import { LifecycleBuffer } from "./lifecycle/LifecycleBuffer";
 import { Frame } from "../buffer/Frame";
 import type { ColumnDef, LineInfo } from "../buffer/line";
 import type { Timeline } from "../../shared/progress/schema";
@@ -86,25 +86,16 @@ export function taskDetailLines(
   return rows;
 }
 
-export function TaskDetailPane({
-  posKey,
-  lines,
-  onReady,
-}: {
-  posKey: string;
-  lines: LineInfo[] | null;
-  onReady: (handle: BufferHandle) => void;
-}) {
+export function TaskDetailPane({ posKey, lines }: { posKey: string; lines: LineInfo[] | null }) {
   return (
     <Frame title="タスクの詳細" side="right">
       {lines ? (
-        <Buffer
+        <LifecycleBuffer
           side="right"
           viewName="timeline-task"
           posKey={posKey}
           columns={columns}
           lines={lines}
-          onReady={onReady}
         />
       ) : (
         <p className="px-4 py-2 text-[13px] text-muted" role="status">

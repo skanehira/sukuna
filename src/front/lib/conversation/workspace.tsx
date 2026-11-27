@@ -24,7 +24,7 @@ import { Realtime, type RealtimeSocket } from "../realtime";
 import { parseRoute, requestsConversationTail, screenKey, type Route } from "../routes";
 import { ConversationApiError } from "./api";
 import { ConversationSession, type ConversationEnvironment } from "./session";
-import type { ConversationApi, Conversation } from "./types";
+import type { ConversationApi, Conversation, Snapshot } from "./types";
 import type { InboxStore } from "../inbox-store";
 import {
   isTimelineView,
@@ -63,12 +63,24 @@ export function createConversationWorkspace(
   const sessions = new Map<string, ConversationSession>();
   const loadedSessions = new WeakSet<ConversationSession>();
   const active = new Set<ConversationSession>();
+  const rightTimelines = new Set<ConversationSession>();
   const shown = new Map<string, number>();
   const listeners = new Set<() => void>();
   const changes = new Map<string, Set<(message?: ServerMessage) => void>>();
   let connected = true;
   let visible = true;
   let currentSession: ConversationSession | null = null;
+  let resolvedFile: { opening: number; id: string; available: boolean } | undefined;
+  const releaseUnavailableFileFocus = () => {
+    if (resolvedFile?.opening !== controller.screenOpening()) return;
+    const right = controller.right.current;
+    if (
+      right &&
+      isTimelineView(right.view) &&
+      (!resolvedFile.available || right.target !== resolvedFile.id)
+    )
+      controller.focusMainFromRight();
+  };
   const reload = (topic: string) => {
     if (topic === "app") settingsChanged?.();
     changes.get(topic)?.forEach((receive) => receive());
@@ -93,6 +105,7 @@ export function createConversationWorkspace(
       connected = !value;
       if (!value) fileRealtime?.connected();
       active.forEach((session) => session.connection(connected));
+      for (const session of rightTimelines) if (!active.has(session)) session.connection(connected);
       listeners.forEach((listener) => listener());
     },
     reload,
@@ -152,11 +165,12 @@ export function createConversationWorkspace(
   const fileScopes = new Map<string, Conversation>();
   const storedConversation = (id: string) =>
     sessions.get(id)?.snapshot().data?.conversation ?? fileScopes.get(id);
-  const getConversation = async (id: string) => {
-    const { conversation } = await api.get(id);
-    fileScopes.set(id, conversation);
-    return conversation;
+  const getSnapshot = async (id: string) => {
+    const snapshot = await api.get(id);
+    fileScopes.set(id, snapshot.conversation);
+    return snapshot;
   };
+  const getConversation = async (id: string) => (await getSnapshot(id)).conversation;
   const fileRealtime =
     filesApi &&
     createFileRealtime(
@@ -215,6 +229,48 @@ export function createConversationWorkspace(
       unsubscribe();
       unshow();
     };
+  };
+  const subscribeTimeline = (monitor: WorkMonitor) => {
+    const id = monitor.target.id;
+    const session = sessions.get(id);
+    const disconnect = monitor.connect();
+    if (session) {
+      rightTimelines.add(session);
+      if (!active.has(session)) session.connection(connected);
+    }
+    const unsubscribe = subscribeChanges(`conversation:${id}`, (message) => {
+      if (session && active.has(session)) return;
+      if (message) monitor.receive(message);
+      else monitor.loaded();
+    });
+    const unshow = showConversation(id);
+    return () => {
+      if (session) rightTimelines.delete(session);
+      unshow();
+      unsubscribe();
+      disconnect();
+    };
+  };
+  const sessionFor = (id: string, initial?: Snapshot) => {
+    const existing = sessions.get(id);
+    if (existing) return existing;
+    const session = new ConversationSession(id, api, controller, env, initial);
+    if (recap)
+      session.recap = new RecapSession(session, recap.api, recap.storage, (fn, ms) =>
+        env.schedule(fn, ms),
+      );
+    if (progress)
+      session.monitor = new WorkMonitor(session, {
+        ...progress,
+        now: () => env.now(),
+        schedule: (fn, ms) => env.schedule(fn, ms),
+      });
+    sessions.set(id, session);
+    return session;
+  };
+  const hasSavedTimeline = (id: string) => {
+    const { current, stack } = controller.right.state();
+    return [current, ...stack].some((view) => view?.target === id && isTimelineView(view.view));
   };
   const conversationScreen = (
     session: ConversationSession,
@@ -278,32 +334,40 @@ export function createConversationWorkspace(
           message: "開いた対象が見つかりません。一覧から選び直してください。",
         },
       };
+    const openingRevision = controller.screenOpening();
+    const hasTimelineFile = progress !== undefined && route.view === "file";
+    const id = route.id;
+    const resolveFile = (available: boolean, initial?: Snapshot) => {
+      if (!hasTimelineFile) return;
+      const current = parseRoute(controller.options.url ?? "/");
+      if (
+        openingRevision !== controller.screenOpening() ||
+        screenKey(route) !== screenKey({ ...current, entry: controller.options.entry }) ||
+        (openingRevision === resolvedFile?.opening && available === resolvedFile.available)
+      )
+        return;
+      resolvedFile = { opening: openingRevision, id, available };
+      if (available && initial && hasSavedTimeline(id)) sessionFor(id, initial);
+      releaseUnavailableFileFocus();
+      controller.update({});
+    };
     try {
       if (route.view && files) {
         const opening = files.takePrepared(route);
-        if (opening) return files.render(route, opening.scope, opening);
-        const conversation = await getConversation(route.id);
+        const restoreTimeline = hasTimelineFile && hasSavedTimeline(id);
+        const fileResolved = (initial?: Snapshot) =>
+          hasTimelineFile ? (available: boolean) => resolveFile(available, initial) : undefined;
+        if (opening && (!restoreTimeline || sessions.has(id)))
+          return files.render(route, opening.scope, opening, fileResolved());
+        const initial = await getSnapshot(id);
+        const conversation = initial.conversation;
         const root = conversation.parentConversationId
           ? await getConversation(conversation.parentConversationId)
           : conversation;
         controller.update({});
-        return files.render(route, root);
+        return files.render(route, root, opening, fileResolved(initial));
       }
-      let session = sessions.get(route.id);
-      if (!session) {
-        session = new ConversationSession(route.id, api, controller, env);
-        if (recap)
-          session.recap = new RecapSession(session, recap.api, recap.storage, (fn, ms) =>
-            env.schedule(fn, ms),
-          );
-        if (progress)
-          session.monitor = new WorkMonitor(session, {
-            ...progress,
-            now: () => env.now(),
-            schedule: (fn, ms) => env.schedule(fn, ms),
-          });
-        sessions.set(route.id, session);
-      }
+      const session = sessionFor(route.id);
       currentSession = session;
       session.recap?.visibility(visible);
       await session.load();
@@ -313,6 +377,7 @@ export function createConversationWorkspace(
       loadedSessions.add(session);
       return conversationScreen(session, route);
     } catch (error) {
+      resolveFile(false);
       const code = error instanceof ConversationApiError ? error.code : "network_error";
       const cachedSession = sessions.get(route.id);
       return {
@@ -336,12 +401,23 @@ export function createConversationWorkspace(
     renderRight: (view: RightView) => {
       if (view.view === "file-tree") return files?.tree(view.target) ?? null;
       if (isTimelineView(view.view)) {
+        const route = parseRoute(controller.options.url ?? "/");
+        if (
+          route.kind !== "conversation" ||
+          route.id !== view.target ||
+          (route.view &&
+            (route.view !== "file" ||
+              resolvedFile?.opening !== controller.screenOpening() ||
+              !resolvedFile.available))
+        )
+          return null;
         const monitor = sessions.get(view.target)?.monitor;
         return monitor ? (
           <MonitorPane
-            key={monitor.positionKey(view.view)}
+            key={view.target}
             monitor={monitor}
-            view={{ ...view, view: view.view }}
+            view={view.view}
+            subscribe={subscribeTimeline}
           />
         ) : null;
       }
@@ -364,6 +440,7 @@ export function createConversationWorkspace(
     start() {
       const unregister = registerConversationSwitch(controller);
       const unregisterLifecycle = lifecycle?.start();
+      const unsubscribeFileFocus = progress && controller.subscribe(releaseUnavailableFileFocus);
       const unregisterTimeline = progress
         ? controller.actions.register({
             ...timelineActions.open,
@@ -405,6 +482,7 @@ export function createConversationWorkspace(
         unregister();
         unregisterTimeline?.();
         unregisterLifecycle?.();
+        unsubscribeFileFocus?.();
         removeActionHelp();
         removeCommandHelp();
         unsubscribeApp?.();

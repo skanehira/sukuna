@@ -239,6 +239,7 @@ function MainWindow({
             message={identityRecovery?.message ?? failure.message}
             onHome={onHome}
             onReload={reload}
+            keyboardBuffer={route.kind === "conversation" && route.view === "file"}
           />
         ) : isLoading ? (
           requestsConversationTail(route) ? (

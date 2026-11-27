@@ -54,6 +54,7 @@ export function FileView({
   path,
   startLine,
   initialContent,
+  onResolved,
 }: {
   files: FileViewContext;
   scope: FileScope;
@@ -61,6 +62,7 @@ export function FileView({
   path: string;
   startLine: number;
   initialContent?: FileContentResponse;
+  onResolved?: (available: boolean) => void;
 }) {
   const { id, cwd } = scope;
   const watchedPath = relativeFilePath(path, cwd) ?? path;
@@ -130,6 +132,10 @@ export function FileView({
     { revalidateOnFocus: false, revalidateOnReconnect: false, shouldRetryOnError: false },
   );
   const lines = useMemo(() => contentLines(data, error), [data, error]);
+  const available = error ? false : data !== undefined ? true : undefined;
+  useEffect(() => {
+    if (available !== undefined) onResolved?.(available);
+  }, [available, onResolved]);
   useEffect(() => {
     const firstRead = opening.current === null;
     const baseline = (opening.current ??= files.readStart(scope));
