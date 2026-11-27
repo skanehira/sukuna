@@ -36,7 +36,8 @@ export function resume(
       { includeQueued: false },
     );
     if (sent.isErr()) return err(sent.error);
-    if (by === "usage_limit") this.options.notice(id, "利用枠が戻ったため、作業を再開しました。");
+    if (by === "usage_limit")
+      this.options.notice(id, "利用枠が戻ったため、作業を再開しました。", "info");
     return ok({ seq: sent.value.result === "delivered" ? sent.value.seq : 0 });
   });
 }

@@ -71,16 +71,16 @@ export async function startRunnerApp(options: {
           ...(context.issueId === null ? {} : { issue_id: context.issueId }),
           ...(error === undefined ? {} : { error }),
         }),
-      notice: (conversationId, message) => {
+      notice: (conversationId, message, level) => {
         const issueId = runtime.store.get(conversationId)?.issueId;
         changes.publish({
           kind: "notice",
-          level: "info",
+          level,
           conversation_id: conversationId,
           message,
         });
         log({
-          level: "info",
+          level,
           component: "runner.agent",
           conversation_id: conversationId,
           ...(issueId ? { issue_id: issueId } : {}),

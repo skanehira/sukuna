@@ -20,6 +20,7 @@ import {
   incomingWith,
 } from "../../../../server/modules/identity/test-support";
 import type { AgentOutput, AgentSession, OpenParams } from "../domain/agent-port";
+import type { Clock } from "../domain/clock";
 import { ScriptedAgent, turnEnd } from "./scripted-agent";
 
 const png = Buffer.from(
@@ -77,7 +78,7 @@ const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
 });
-async function fixture() {
+async function fixture(clock?: Clock) {
   const home = createTempHome();
   const database = openMigratedDatabase(home);
   const agent = new RecordingAgent();
@@ -86,6 +87,7 @@ async function fixture() {
   const runner = await startRunnerApp({
     database,
     agent,
+    clock,
     environment: readEnvironment("runner", { SUKUNA_HOME: home }, home, () => true)._unsafeUnwrap(),
     log: createLogger({
       now: () => 1000,
@@ -95,15 +97,19 @@ async function fixture() {
       level: "info",
     }),
   });
-  runner.changes.subscribe((notice) => {
-    if (notice.kind === "notice") notices.push(notice);
-  });
+  let connected = false;
   const link = new RunnerLink({
     socket: join(home, "runner.sock"),
     log: () => {},
-    notice: () => {},
-    connection: () => {},
+    notice: (notice) => {
+      if (notice.kind === "notice") notices.push(notice);
+    },
+    connection: (value) => {
+      connected = value;
+    },
   });
+  link.start();
+  await expect.poll(() => connected).toBe(true);
   const app = createApp({
     build: "test",
     identity: {
@@ -137,6 +143,7 @@ async function fixture() {
     writeFileSync(join(directory, `${image.id}.${image.extension}`), image.data);
   };
   cleanups.push(async () => {
+    link.stop();
     await runner.shutdown();
     database.close();
     removeTempHome(home);
@@ -327,6 +334,7 @@ it.each([false, true])(
       f.agent.outputs.get(f.id)!.push(turnEnd("success"));
       await expect.poll(() => f.runner.runtime.store.get(f.id)?.runState).toBe("idle");
       await f.runner.runtime.serial(f.id, async () => ok(undefined));
+      await expect.poll(() => f.notices.length).toBe(1);
       expect({
         queue: f.runner.runtime.store.queue(f.id),
         messages: f.agent.messages,
@@ -344,7 +352,7 @@ it.each([false, true])(
         notices: [
           {
             kind: "notice",
-            level: "info",
+            level: "error",
             conversation_id: f.id,
             message: "画像を読み取れませんでした。もう一度操作してください。",
           },
@@ -360,6 +368,13 @@ it.each([false, true])(
               name: "Error",
               message: "画像を読み取れませんでした。もう一度操作してください。",
             },
+          },
+          {
+            level: "error",
+            component: "runner.agent",
+            conversation_id: f.id,
+            message: "画像を読み取れませんでした。もう一度操作してください。",
+            time: "1970-01-01T00:00:01.000Z",
           },
         ],
       });
@@ -399,6 +414,7 @@ it.each([false, true])(
       rmSync(join(f.home, "images", f.id, `${id}.png`));
     f.agent.outputs.get(f.id)!.push(turnEnd("success"));
     await expect.poll(() => f.agent.messages.length).toBe(2);
+    await expect.poll(() => f.notices.length).toBe(1);
     expect({
       message: f.agent.messages.at(-1),
       images: f.runner.runtime.store
@@ -422,6 +438,51 @@ it.each([false, true])(
     });
   },
 );
+
+it("利用枠後の自動再開は通常のお知らせを実ランナーから配信する", async () => {
+  const callbacks = new Set<() => void | Promise<void>>();
+  const f = await fixture({
+    now: () => 1000,
+    setTimeout: (callback) => {
+      callbacks.add(callback);
+      return () => {
+        callbacks.delete(callback);
+      };
+    },
+  });
+  await f.post("作業開始", [], "start");
+  f.agent.outputs.get(f.id)!.push({
+    kind: "rate_limit",
+    status: "rejected",
+    resetsAt: 2000,
+    overageStatus: null,
+    errorCode: null,
+    raw: { status: "rejected", resets_at: 2 },
+  });
+  f.agent.outputs.get(f.id)!.push(turnEnd("error_during_execution"));
+  await expect.poll(() => f.runner.runtime.store.get(f.id)?.runState).toBe("usage_limited");
+  for (const callback of callbacks) await callback();
+  await expect.poll(() => f.notices.length).toBe(1);
+  expect({
+    messages: f.agent.messages,
+    notices: f.notices,
+    state: f.runner.runtime.store.get(f.id)?.runState,
+  }).toEqual({
+    messages: [
+      { text: "作業開始", images: [] },
+      { text: "中断したところから続けてください。", images: [] },
+    ],
+    notices: [
+      {
+        kind: "notice",
+        level: "info",
+        conversation_id: f.id,
+        message: "利用枠が戻ったため、作業を再開しました。",
+      },
+    ],
+    state: "working",
+  });
+});
 
 it.each([
   "traversal",

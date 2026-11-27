@@ -54,7 +54,7 @@ export type RuntimeOptions = {
     message: string,
     error?: unknown,
   ) => void;
-  notice: (conversationId: string, message: string) => void;
+  notice: (conversationId: string, message: string, level: "info" | "error") => void;
   tools?: AppToolRegistry;
 };
 export type SendInput = {
@@ -331,7 +331,11 @@ export class ConversationRuntime {
       images: images.map(({ data, mediaType }) => ({ data, mediaType })),
     });
     if (missingImages)
-      this.options.notice(id, `画像 ${missingImages} 件が見つからないため、外して届けました`);
+      this.options.notice(
+        id,
+        `画像 ${missingImages} 件が見つからないため、外して届けました`,
+        "info",
+      );
     return ok({ result: "delivered", seq: record.seq });
   }
   private async consume(id: string, execution: Execution): Promise<void> {
@@ -424,7 +428,7 @@ export class ConversationRuntime {
             );
             if (result.isErr()) {
               this.log(id, "預かった指示を届けられませんでした。", result.error.message);
-              this.options.notice(id, result.error.message);
+              this.options.notice(id, result.error.message, "error");
             }
             return result.map(() => undefined);
           }
