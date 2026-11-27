@@ -98,6 +98,7 @@ function fixture() {
       tail[part] = lines;
     },
     jumpTo: () => {},
+    setDisplay: () => {},
     pushJump: () => {},
     findSeq: () => null,
   };

@@ -9,6 +9,8 @@ const normal: [string, string][] = [
   ["<C-o>", "jump.back"],
   ["<Space>q", "stock.question"],
   ["<Space>c", "stock.instruct"],
+  ["<Space>q", "files.diff-question"],
+  ["<Space>c", "files.diff-instruct"],
   ["<Space>l", "stock.list"],
   ["<Space>sa", "stock.send.all"],
   ["<Space>sq", "stock.send.questions"],
@@ -72,6 +74,8 @@ export const defaultKeymap: KeymapEntry[] = [
   ...[
     ["<Space>q", "stock.question"],
     ["<Space>c", "stock.instruct"],
+    ["<Space>q", "files.diff-question"],
+    ["<Space>c", "files.diff-instruct"],
     [":", "cmdline"],
   ].map(([keys, action]): KeymapEntry => ({ keys, context: "visual", to: { action } })),
   { keys: "<CR>", context: "prompt", to: { action: "prompt.submit" } },

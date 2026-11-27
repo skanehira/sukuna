@@ -103,7 +103,8 @@ export class RecapSession {
     if (!this.position || !this.opening) return;
     const lines = this.conversation.bodyLines();
     const previous = this.findLine(this.opening.lastPosition, lines);
-    if (previous !== null && !this.rememberedPrevious) {
+    const restoring = this.conversation.controller.options.restoringPosition;
+    if (!restoring && previous !== null && !this.rememberedPrevious) {
       handle.pushJump(previous);
       this.rememberedPrevious = true;
     }
@@ -214,6 +215,7 @@ export class RecapSession {
     );
     let previousCursor = controller.windowPosition("main");
     let previousSeq = this.cursorSeq();
+    if (this.main && this.opening) this.tracking.cursor(previousSeq);
     this.cancelCursor = controller.subscribe(() => {
       if (!this.main || !this.opening) return;
       const cursor = controller.windowPosition("main");

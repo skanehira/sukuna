@@ -13,8 +13,9 @@ import { PositionStore, type Jump, type SavedPosition } from "./position-store";
 import { RightWindow, type RightView } from "./right-window";
 import { JumpHistory } from "./jump-history";
 import type { Hint } from "./hints";
-import type { LineInfo } from "./line";
+import type { LineInfo, OpenTarget } from "./line";
 import { menuAt } from "./menu";
+import { findSeqLine } from "./seq-index";
 import type { ClipboardPort } from "./clipboard";
 
 export function windowId(side: string): string {
@@ -46,7 +47,10 @@ export type WindowHandle = {
   view: string;
   name: string;
   posKey: string;
+  restorePosition?: boolean;
+  historyKey?: string;
   url: string;
+  entry?: string;
   opening?: number;
   temporary?: boolean;
   identity?: object;
@@ -79,7 +83,10 @@ export type ControllerOptions = {
   positions?: PositionStore;
   keymap?: KeymapPort;
   url?: string;
-  navigate?(url: string): void | Promise<void>;
+  entry?: string;
+  restoringPosition?: boolean;
+  navigate?(url: string, entry?: string): void | Promise<void>;
+  openTarget?(this: void, target: OpenTarget, context: ActionContext): boolean;
   back?(): boolean;
   prompt?(): PromptSpec | undefined;
   clipboard?: ClipboardPort;
@@ -251,11 +258,12 @@ export class BufferController {
   registerWindow(side: string, handle: WindowHandle, initialize?: () => void): () => void {
     const registration = { handle, initialized: false };
     this.windows.set(side, registration);
-    if (!handle.temporary) {
-      const stored = this.positions.position(handle.posKey);
-      if (stored) handle.place(stored);
-    }
+    const stored =
+      handle.temporary || handle.restorePosition === false
+        ? null
+        : this.positions.position(handle.posKey);
     initialize?.();
+    if (stored) handle.place(stored);
     registration.initialized = true;
     this.restoreWindow(side);
     if (this.state.active === side) this.focus(side);
@@ -305,6 +313,12 @@ export class BufferController {
   }
   windowPosition(side: string): SavedPosition | undefined {
     return this.window(side)?.position();
+  }
+  currentColumn(side = this.state.active): number {
+    return this.window(side)?.position().column ?? 0;
+  }
+  place(side: string, line: number, column: number): void {
+    this.window(side)?.place({ line, column, topLine: line });
   }
   context(side = this.state.active): ActionContext {
     const window = this.window(side);
@@ -381,7 +395,19 @@ export class BufferController {
     if (!chosen?.line) return;
     if (number) handle.place({ line: chosen.index, column: 0, topLine: chosen.index });
     const { line } = chosen;
-    if (line.action) {
+    if (line.open) {
+      this.pending.add(side);
+      this.update({});
+      void Promise.resolve()
+        .then(line.open)
+        .catch((error: unknown) => {
+          this.notify(error instanceof Error ? error.message : "開けませんでした", "error");
+        })
+        .finally(() => {
+          this.pending.delete(side);
+          this.update({});
+        });
+    } else if (line.action) {
       if (this.actions.get(line.action)?.confirm) {
         void this.run(line.action, this.context(side));
         return;
@@ -393,6 +419,7 @@ export class BufferController {
         this.update({});
       });
     } else if (line.target) {
+      if (this.options.openTarget?.(line.target, this.context(side))) return;
       this.pushJump(side, handle.position().line);
       void this.navigate(line.target.url);
     }
@@ -697,8 +724,13 @@ export class BufferController {
   screenOpening(): number {
     return this.opening;
   }
-  changeScreen(url: string, jump: Jump | null = null): void {
-    if (url !== this.options.url) {
+  changeScreen(
+    url: string,
+    entry?: string,
+    restoringPosition = false,
+    jump: Jump | null = null,
+  ): void {
+    if (url !== this.options.url || entry !== this.options.entry) {
       this.commandRevision++;
       this.commandRetry = null;
       this.closePrompt();
@@ -706,11 +738,13 @@ export class BufferController {
     }
     this.opening += 1;
     this.options.url = url;
+    this.options.entry = entry;
+    this.options.restoringPosition = restoringPosition;
     this.restoration = jump ? this.pendingJump(jump) : null;
   }
-  navigate(url: string): void | Promise<void> {
-    this.changeScreen(url);
-    return this.options.navigate?.(url);
+  navigate(url: string, entry?: string, restoringPosition = false): void | Promise<void> {
+    this.changeScreen(url, entry, restoringPosition);
+    return entry === undefined ? this.options.navigate?.(url) : this.options.navigate?.(url, entry);
   }
   pushJump(side: string, line: number): void {
     const handle = this.window(side);
@@ -718,9 +752,13 @@ export class BufferController {
     const info = handle?.lines()[line];
     this.jumps.push({
       url: this.options.url ?? "/",
+      ...(this.options.entry === undefined ? {} : { entry: this.options.entry }),
       window: side,
       line,
+      ...(handle?.historyKey === undefined ? {} : { windowKey: handle.historyKey }),
       ...(info?.id ? { id: info.id } : {}),
+      ...(info?.seq === undefined ? {} : { seq: info.seq }),
+      ...(info?.seqLine === undefined ? {} : { seqLine: info.seqLine }),
     });
   }
   private pendingJump(jump: Jump): PendingJump {
@@ -748,30 +786,43 @@ export class BufferController {
       handle.ready?.() === false ||
       (handle.opening !== undefined && handle.opening !== opening) ||
       jump.window !== side ||
-      (target !== undefined ? target !== (handle.identity ?? handle) : jump.url !== handle.url)
+      (jump.windowKey !== undefined && jump.windowKey !== handle.historyKey) ||
+      (target !== undefined
+        ? target !== (handle.identity ?? handle)
+        : jump.url !== handle.url || jump.entry !== handle.entry)
     )
       return;
     this.restoration = null;
-    const found = jump.id ? handle.lines().findIndex((line) => line.id === jump.id) : -1;
+    const lines = handle.lines();
+    const byId = jump.id ? lines.findIndex((line) => line.id === jump.id) : -1;
+    const bySeq =
+      byId < 0 && jump.seq !== undefined ? findSeqLine(lines, jump.seq, jump.seqLine) : null;
     if (pending.interaction === this.interaction) this.focus(side);
-    handle.place({ line: found >= 0 ? found : jump.line, column: 0, topLine: jump.line });
+    handle.place({ line: byId >= 0 ? byId : (bySeq ?? jump.line), column: 0, topLine: jump.line });
   }
   async jumpBack(): Promise<void> {
     let opening = this.opening;
     let pending: PendingJump | null = null;
-    await this.jumps.back(this.options.url ?? "/", {
-      open: (url, jump) => {
-        this.changeScreen(url, jump);
-        opening = this.opening;
-        pending = this.restoration;
-        return this.options.navigate?.(url);
+    await this.jumps.back(
+      this.options.url ?? "/",
+      {
+        open: (url, jump) => {
+          this.changeScreen(url, jump.entry, true, jump);
+          opening = this.opening;
+          pending = this.restoration;
+          return jump.entry === undefined
+            ? this.options.navigate?.(url)
+            : this.options.navigate?.(url, jump.entry);
+        },
+        place: (jump) => {
+          if (this.opening !== opening || (pending !== null && this.restoration !== pending))
+            return;
+          if (pending === null) this.restoration = this.pendingJump(jump);
+          this.restoreWindow(jump.window);
+        },
       },
-      place: (jump) => {
-        if (this.opening !== opening || (pending !== null && this.restoration !== pending)) return;
-        if (pending === null) this.restoration = this.pendingJump(jump);
-        this.restoreWindow(jump.window);
-      },
-    });
+      this.options.entry,
+    );
   }
 }
 export const BufferControllerContext = createContext<BufferController | null>(null);

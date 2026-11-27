@@ -1,17 +1,24 @@
 import { z } from "zod";
 import type { RightState } from "./right-window";
+const anchor = {
+  id: z.string().optional(),
+  seq: z.number().int().nonnegative().optional(),
+  seqLine: z.number().int().nonnegative().optional(),
+};
 const positionSchema = z.object({
   line: z.number().int().nonnegative(),
   column: z.number().int().nonnegative(),
   topLine: z.number().int().nonnegative(),
-  id: z.string().optional(),
+  ...anchor,
 });
 const rightView = z.object({ view: z.string(), target: z.string() });
 const jumpSchema = z.object({
   url: z.string(),
+  entry: z.string().optional(),
   window: z.string(),
+  windowKey: z.string().optional(),
   line: z.number().int().nonnegative(),
-  id: z.string().optional(),
+  ...anchor,
 });
 const schema = z.object({
   positions: z.array(z.tuple([z.string(), positionSchema])),

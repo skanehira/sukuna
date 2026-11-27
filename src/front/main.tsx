@@ -12,6 +12,7 @@ import { createRecapApi } from "./lib/recap/api";
 import { createConversationApi } from "./lib/conversation/api";
 import { createLifecycleApi } from "./lib/lifecycle/api";
 import { createConversationWorkspace } from "./lib/conversation/workspace";
+import { createFilesApi } from "./lib/files/api";
 import type { RealtimeSocket } from "./lib/realtime";
 import { createSettingsApi, createSettingsStore } from "./lib/settings-store";
 import { loadSettingsScreen, registerSettingsCommands } from "./lib/settings-workspace";
@@ -86,6 +87,7 @@ const conversations = createConversationWorkspace(
     ) as unknown as RealtimeSocket,
   {
     inbox,
+    files: createFilesApi(window.fetch.bind(window)),
     recap: { api: createRecapApi(window.fetch.bind(window)), storage: window.sessionStorage },
     lifecycle: {
       api: createLifecycleApi(window.fetch.bind(window)),

@@ -11,7 +11,7 @@ export function canPlaceCursor(line: LineInfo): boolean {
   if ((line.kind === "heading" || line.kind === "section") && line.target === undefined) {
     return false;
   }
-  return !isWhitespaceOnly(line);
+  return line.cursor === true || !isWhitespaceOnly(line);
 }
 
 function search(lines: LineInfo[], from: number, direction: 1 | -1): number | null {
