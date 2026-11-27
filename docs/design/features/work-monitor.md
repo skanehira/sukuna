@@ -170,7 +170,7 @@ AI が作業中: <工程> <工程の経過> / 最後にしたこと: <最後に�
 
 - 履歴の 1 行は `<YYYY/MM/DD HH:MM:SS>  <変更の後の状態>  <前の割合> → <後の割合>  重み <重み>` とし、その変更で書いた説明とメモ、サブエージェントの id があれば後ろに足す。時刻が分からなければ日時を `—` にする
 - 子のあるタスクには、子の変更で状態か割合が動いたときにも履歴を 1 行足す。最新の履歴の状態は、タスクの状態と一致する
-- コメントは、ファイルの `comments` のうちこのタスクのものと、この会話で開発者が送った相談の発言を合わせて作る。相談の発言は、下の「相談」の前置きで始まる行を探して見つける。同じ時刻と文の組は 1 つにまとめる
+- コメントは、ファイルの `comments` のうちこのタスクのものと、この会話で開発者が送った相談を合わせて作る。同じタスク・時刻・文の組は 1 つにまとめる。相談の読み方は「相談コメントの保存と抽出」に従う
 
 ### 続きを依頼する
 
@@ -195,6 +195,40 @@ AI が作業中: <工程> <工程の経過> / 最後にしたこと: <最後に�
 - 書きかけの入力が空なら、前置きを先頭に入れる。空でなければ、末尾に空行を足してから前置きを入れる。書きかけはふだんの入力欄と同じくサーバーに残る (P1、`features/conversation.md`)
 - 送り方、届く前の指示の扱いは、ふだんの指示と同じである。AI には、どのタスクの話かが前置きで伝わる
 - 前置きの文面は、「続きを依頼する」と同じくプラグインに合わせる。アプリはファイルの `comments` に書かない
+
+### 相談コメントの保存と抽出
+
+相談は、表示する文とは別にタスクの ID と本文を保存し、それを読取りの正本にする。
+決定: 送信の `timeline_comments` に、`[{ "task_id": "<ID>", "text": "<本文>" }]` を渡す。
+理由: ID と題名に引用符や改行があると、表示する文だけでは所属や本文の始まりを一意に戻せない。
+採らなかった案: 最長の前置きから所属と本文を推測する。
+
+入力欄は、相談を選んだときの ID と書いた本文から配列を作る。表示する `text` は「相談」の前置きを保つ。
+画面のサーバーは、指示の送信 API で受けた配列を、ランナーの `POST /conversations/:id/messages` の同名の項目に渡す。
+項目は省略できる。配列の各要素は ID と本文の文字列を持ち、改行・引用符・空白・空文字列をそのまま保存する。
+配列以外の値や、文字列でない ID・本文は 400 `invalid_input` にする。
+相談画面は、この送信の接続点を使って相談の配列を渡す。
+
+- 作業中に預けるときは、`queued_instructions.timeline_comments` の JSON に配列を保存する。`NULL` は構造化情報の無い入力、`[]` は相談を含まないことを明示した入力である
+- 直接送るときも、預かった指示をまとめて送るときも、配列を入力の順に連結して `user_message.payload.timeline_comments` に残す。本文は切り詰めず、末尾の改行も保つ
+- 構造化情報のある入力と無い入力をまとめるときは、情報の無かった入力の原文だけを `user_message.payload.timeline_legacy_texts` の配列に残す。構造化情報のある部分は前置きから読み直さない
+- すべての入力に構造化情報が無いときは、上の 2 項目を省略し、既存の発言と同じく `payload.text` から読む。配列を明示した入力は、空配列でもこの読取りに戻さない
+- 配達と割り込みでも情報を保つ。キューの削除と発言の保存は同じトランザクションで行い、失敗したらキューを残す。二重送信は `client_id` の初回の結果を返し、相談を足し直さない
+- 相談として取り込むのは、開発者由来の `developer`・`queued`・`interrupt`・`stock`・`answer_text` の発言だけとする。`flow`・`resume`・`finish_proposal` は取り込まない
+
+構造化情報の無い発言は、現在と履歴の ID・題名から作った前置きが行頭にあるかを調べる。
+同じ ID と同じ前置きの候補は 1 つとして扱う。別々の相談は、次の前置きの直前の改行 1 つか空行 1 つで区切る。
+所属と本文の始まりが一意なら、複数タスクの相談もそれぞれに付ける。判定が曖昧な原文は分割せず、どのタスクにも付けない。
+`timeline.unresolvedComments` に `{ "at": <発言の時刻>, "text": "<原文全体>", "reason": "<理由>" }` として古い順に返す。
+混在した配達では、構造化情報の無かった各入力を 1 つの原文として扱い、時刻には配達した発言の時刻を使う。
+
+| 理由 | 条件 |
+| --- | --- |
+| `ambiguous_task` | 同じ位置から同じ本文の始まりを指す前置きに、別の ID が対応する |
+| `ambiguous_boundary` | 別の長さの前置きが同じ位置に合う、または ID・題名の改行の中に別の候補の前置きがある |
+
+複数の曖昧さがある原文は `ambiguous_boundary` を優先する。同じ時刻・原文・理由の組は 1 つにまとめる。
+プラグインのファイルは読み取りだけに使い、構造化情報や未確定の原文は書き込まない。
 
 ### 止める
 
@@ -269,7 +303,8 @@ issue の担当の会話について、作業の状況とタイムラインを�
       { "at": 1764139320000, "taskId": "t2", "title": "CSV の書き出し", "from": "pending", "to": "in_progress", "weight": 3, "completedBefore": 0, "completedAfter": 0.5, "description": null, "note": "正常系が完了", "agentId": null }
     ],
     "reports": [ { "at": 1764139320000, "text": "文字コードの判定が終わり、書き出しの正常系を実装した。" } ],
-    "comments": [ { "at": 1764139200000, "taskId": "t2", "text": "BOM 付きのときの扱いも決めてください" } ]
+    "comments": [ { "at": 1764139200000, "taskId": "t2", "text": "BOM 付きのときの扱いも決めてください" } ],
+    "unresolvedComments": []
   },
   "readError": null
 }
@@ -278,7 +313,7 @@ issue の担当の会話について、作業の状況とタイムラインを�
 - `activity` は、担当の会話が `working` でないときは `null` にする。`stage` の値は `review`・`pr`・`ci`・`merge`・`implement`・`triage`・`design`・`reply` のどれかである
 - `timeline` は、担当の会話が無いとき、`session_id` がまだ無いとき、ファイルが無いときは `null` にする。ファイルがあって木が 0 本のときは `trees` を空にして返す
 - `trees` は足した順、`tasks` は木ごとに深さ優先の順に返す
-- `history` と `reports` は新しい順、`comments` は古い順に返す
+- `history` と `reports` は新しい順、`comments` と `unresolvedComments` は古い順に返す
 - `status` の値は、プラグインと同じ `pending`・`in_progress`・`completed`・`blocked` である
 - `readError` は、ファイルが読めないときに理由の文を入れる。そのとき `timeline` は前に読めた中身か `null` にする
 - 失敗: issue が無ければ 404 `not_found`
@@ -309,6 +344,8 @@ issue の担当の会話について、作業の状況とタイムラインを�
 | issue の進捗の組み立て → issues, issue_events, conversations, conversation_events | ユースケース | `src/server/modules/flow/usecase/issue-progress.ts` |
 | 会話の進捗の組み立て → conversations, conversation_events | ユースケース | `src/server/modules/conversation/usecase/conversation-progress.ts` |
 | コメントの組み立て (ファイルと相談の発言) → conversation_events | ユースケース | `src/server/modules/conversation/usecase/timeline-comments.ts` |
+| 相談の入力・イベントの検査と、預かった相談の保存 | 共有・アダプター | `src/shared/ipc.ts`, `src/shared/events.ts`, `src/shared/progress/schema.ts`, `src/runner/modules/conversation/adapter/sqlite-conversation-store.ts` |
+| 相談の直接送信・キュー配達・割り込み | ユースケース | `src/runner/modules/conversation/usecase/send.ts`, `runtime.ts` |
 | API ハンドラ | API ハンドラ | `src/server/modules/flow/adapter/progress-routes.ts`, `src/server/modules/conversation/adapter/progress-routes.ts` |
 | タイムラインとタスクの詳細の右のウィンドウ | UI | `src/front/components/timeline-pane.tsx`, `src/front/components/task-detail-pane.tsx` |
 | 作業中の表示の文 | UI | `src/front/components/working-line.tsx` |
@@ -346,6 +383,17 @@ issue の担当の会話について、作業の状況とタイムラインを�
 - 進捗の数え方の単体テストは、上の「進捗の数え方」の例 (75.00%、90.00% と 50.00%、99.99% の上限) と、受け付けない操作の各行を入れる
 - 工程の単体テストは、工程の表の各行と、段階の記録の有無、最後にしたことのツールの表の各行を入れる。時計は Port で差し替える
 - 結合テストは、`CLAUDE_CONFIG_DIR` を一時ディレクトリにし、そこにタイムラインのファイルを置いて読ませる。Agent SDK は Port の偽物にし、届いた指示の文を完全一致で確かめる
+- 相談の単体・API 結合テストは、次の条件表を両方で固定する。5 種類の開発者由来の取り込みと、ほかの 3 種類の除外も確かめる
+
+| 条件 | 構造化情報あり | 構造化情報なし |
+| --- | --- | --- |
+| 別 ID が完全に同じ前置きを作る | 保存した ID と本文を使う | `ambiguous_task` で原文全体を返す |
+| 別 ID の前置きが包含される | 保存した ID と本文を使う | `ambiguous_boundary` で原文全体を返す |
+| 同一 ID の現旧題名の前置きが包含される | 保存した ID と本文を使う | `ambiguous_boundary` で原文全体を返す |
+| ID・題名の改行の中に別候補の前置きがある | 保存した ID と本文を使う | `ambiguous_boundary` で原文全体を返す |
+| 同一 ID と同一前置きの候補が重複する | 保存した ID と本文を使う | 一意な相談として取り込む |
+
+- 配達の結合テストは、直接送信・正常終了後の自動配達・手動配達・割り込み・混在キュー・空配列・再送の初回結果を確かめる。保存失敗時の原子性と、構造化情報の無い既存行の移行も本物の SQLite で固定する
 - E2E は、前提データとして、作業中の会話と、その会話のタイムラインのファイルを一時ディレクトリに用意する
 
 E2E 対象動線: （US-024）作業中の会話を見て、タイムラインを開き、止めるまでを、Vim と同じ操作感のキーボード操作だけで行える

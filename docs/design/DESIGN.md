@@ -152,7 +152,7 @@ SQLite のファイルを 1 つ使う。識別子は ULID の文字列、時刻�
 | `conversations` | `id`、`project_id`、`kind`、`issue_id`、`parent_conversation_id`、`title`、`session_id`、`cwd`、`worktree_id`、`run_state`、`stop_reason`、`resets_at`、`last_seq`、`last_read_seq`、`last_position`、`recap_seq`、`recap_failed_at`、`last_activity_at`、`closed_at` | 会話。`kind` は `chat` / `triage` / `design` / `impl` / `thread` |
 | `conversation_events` | `conversation_id`、`seq`、`type`、`payload`、`sdk_uuid`、`created_at` | 会話のイベントの記録。画面はこの記録を表示する |
 | `drafts` | `conversation_id`、`text`、`images`、`updated_at`、`updated_by` | 書きかけの入力。会話ごとに 1 つ |
-| `queued_instructions` | `id`、`conversation_id`、`text`、`images`、`position`、`stock_item_id`、`client_id`、`created_at` | 届く前の指示。`client_id` は二重の送信を見分ける値。ストックから送った指示は、元のストックを指す |
+| `queued_instructions` | `id`、`conversation_id`、`text`、`images`、`position`、`stock_item_id`、`client_id`、`created_at`、`timeline_comments` | 届く前の指示。`client_id` は二重の送信を見分ける値。ストックから送った指示は、元のストックを指す。相談の配列の扱いは `features/work-monitor.md`「相談コメントの保存と抽出」に従う |
 | `pending_answers` | `conversation_id`、`question_seq`、`answers`、`updated_at` | 送る前の回答 |
 | `stock_items` | `id`、`conversation_id`、`kind`、`text`、`quote`、`state`、`sent_at`、`sent_seq`、`thread_conversation_id`、`github_comment_url` | 質問と指示のストック。`kind` は `question` / `instruction`、`state` は `stocked` / `sent` / `cancelled` |
 | `toc_entries` | `conversation_id`、`position`、`title`、`start_seq` | 目次の章 |
@@ -402,6 +402,7 @@ issue の状態の移り変わりは `features/issue-flow.md` の表が正本で
 - `rg --files` は、既定ではシンボリックリンクの名前も返さない。`git ls-files --cached --others --exclude-standard -z` の一覧から、実体をたどらず `lstat` でリンクを選ぶ。`git check-ignore --no-index -z --stdin` で無視の対象を除き、ファイルツリーと名前の検索の一覧に補う
 - rg の JSON 出力では `--max-columns` が効かない。中身の検索の本文は、サーバーで先頭の 500 文字に切る。列番号は元の行の最初の一致を指す
 - CodeMirror の文字の位置は UTF-16 コード単位で数え、サロゲートペアは 2 単位になる。中身の検索の列も同じ単位で返す ([公式ガイド](https://codemirror.net/docs/guide/#data-structures))
+- Vite+ のテストのファイルキャッシュに、`import.meta.glob` が集めたマイグレーションの一覧が残ることがある。SQL ファイルを追加したあとに一覧が更新されなければ、`vp test --clearCache` を実行してからテストを流す
 - `http://macstudio:<port>` は安全なオリジンではない。Service Worker、通知の許可、Web Push の購読は使えない。使えるかは実行時に判定し、使えないときは通知の購読を試みない (PoC `web-push-tailscale`)
 - 通知の取り下げは Web Push の仕組みに無い。取り下げ用の push を送り、Service Worker が同じ `tag` の通知を探して閉じる。push を受けて通知を 1 件も出さないと、Chrome が代わりの通知を出すことがある
 - Agent SDK の停止は、入力を流れとして渡した実行でだけ使える。バックグラウンドへ移ったコマンドは停止では止まらず、終わると AI の番が自動で始まる。停止の操作では、動いているバックグラウンドのタスクも止める (PoC `agent-sdk-interrupt`)
