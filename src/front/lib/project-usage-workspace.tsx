@@ -54,7 +54,7 @@ export function loadProjectUsageScreen(
         },
       }),
     );
-  if (route.kind === "project" && route.view === "github-import" && route.id)
+  if (route.kind === "project" && route.view === "import" && route.id)
     return Promise.resolve({
       kind: "ready",
       title: githubImportTitle,
