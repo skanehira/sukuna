@@ -4,6 +4,8 @@ import type { ServerMessage } from "../../../shared/ws";
 import type { BufferHandle } from "../../buffer/Buffer";
 import type { BufferController, PromptSpec } from "../../buffer/controller";
 import type { LineInfo } from "../../buffer/line";
+import { canPlaceCursor } from "../../buffer/no-cursor";
+import type { RecapSession } from "../recap/session";
 import { DraftSync } from "./draft-sync";
 import { ConversationApiError } from "./api";
 import { eventLines, stoppedText } from "./lines";
@@ -18,6 +20,9 @@ export type ConversationEnvironment = {
 type QuestionEvent = Extract<Event, { type: "question" }>;
 type Block = { event: Event; lines: LineInfo[] };
 export class ConversationSession {
+  recap?: RecapSession;
+  unreadSeq: number | null = null;
+  private tailLines: Record<string, LineInfo[]> = {};
   private state: { data: Snapshot | null; version: number } = { data: null, version: 0 };
   private listeners = new Set<() => void>();
   private handle: BufferHandle | null = null;
@@ -77,6 +82,7 @@ export class ConversationSession {
       after = next;
     }
     this.refreshTail();
+    this.recap?.loaded(this.state.data!, this.events);
     this.emit();
     return this.id;
   }
@@ -204,7 +210,9 @@ export class ConversationSession {
       ["prompt.open", "入力"],
       ["conversation.switch", "会話を切り替える"],
     ]);
+    const disconnectRecap = this.recap?.connect();
     return () => {
+      disconnectRecap?.();
       this.cancelSave?.();
       this.controller.closePrompt();
       if (this.draft.dirty()) void this.saveDraft();
@@ -231,24 +239,62 @@ export class ConversationSession {
       }),
     );
   }
-  bind = (handle: BufferHandle): void => {
+  eventRecords(): Event[] {
+    return this.events;
+  }
+  private withUnread(lines: LineInfo[]): LineInfo[] {
+    const index = lines.findIndex((line) => line.seq === this.unreadSeq && canPlaceCursor(line));
+    return index < 0
+      ? lines
+      : [
+          ...lines.slice(0, index),
+          { kind: "separator", text: "ここから未読" },
+          ...lines.slice(index),
+        ];
+  }
+  searchLines(): LineInfo[] {
+    return [
+      ...this.blocks.flatMap((block) =>
+        block.event.type === "diff"
+          ? eventLines(block.event, this.id, this.state.data!.conversation.cwd, null, true)
+          : block.lines,
+      ),
+      ...["reply", "question", "queue"].flatMap((part) => this.tailLines[part] ?? []),
+    ];
+  }
+  bodyLines(): LineInfo[] {
+    return [
+      ...this.blocks.flatMap((block) => this.withUnread(block.lines)),
+      ...["reply", "question", "queue"].flatMap((part) => this.tailLines[part] ?? []),
+    ];
+  }
+  private setTail(part: "reply" | "question" | "queue", lines: LineInfo[]): void {
+    this.tailLines[part] = part === "question" ? this.withUnread(lines) : lines;
+    this.handle?.setTail(part, this.tailLines[part]);
+  }
+  bind = (handle: BufferHandle, openAtTail = false): void => {
     this.handle = handle;
     handle.replaceAll(
       this.blocks.length || this.question || this.state.data?.queue.length
-        ? this.blocks.flatMap((block) => block.lines)
+        ? this.blocks.flatMap((block) => this.withUnread(block.lines))
         : [{ kind: "note", text: "i で指示を書いて送ると、AI が作業を始めます。" }],
     );
     this.refreshTail();
+    if (this.recap) this.recap.bound(handle);
+    else if (openAtTail)
+      handle.jumpTo(Math.max(0, this.bodyLines().length - 1), { remember: false });
   };
   private append(event: Event, lines: LineInfo[], clearReply = false): void {
     if (this.blocks.length === 0) this.handle?.replaceAll([]);
     this.blocks.push({ event, lines });
-    this.handle?.append(lines, clearReply ? ["reply"] : []);
+    this.handle?.append(this.withUnread(lines), clearReply ? ["reply"] : []);
   }
   private replaceBlock(block: Block, lines: LineInfo[]): void {
     const index = this.blocks.indexOf(block);
-    const from = this.blocks.slice(0, index).reduce((sum, block) => sum + block.lines.length, 0);
-    this.handle?.replace(from, from + block.lines.length, lines);
+    const from = this.blocks
+      .slice(0, index)
+      .reduce((sum, block) => sum + this.withUnread(block.lines).length, 0);
+    this.handle?.replace(from, from + this.withUnread(block.lines).length, this.withUnread(lines));
     block.lines = lines;
   }
   receiveEvent(event: Event): void {
@@ -261,6 +307,7 @@ export class ConversationSession {
       this.applyEvent(next);
       next = this.pendingEvents.get(this.contiguousSeq + 1);
     }
+    this.recap?.received();
   }
   receivedThrough(): number {
     return this.contiguousSeq;
@@ -317,7 +364,7 @@ export class ConversationSession {
     if (!this.question) return;
     const question = this.question;
     this.question = null;
-    this.handle?.setTail("question", []);
+    this.setTail("question", []);
     this.append(question, this.questionLines(question, answers, true));
   }
   delta(text: string): void {
@@ -380,10 +427,11 @@ export class ConversationSession {
         text: `回答をまとめて送る (${count} / ${total} 件)  ${description}`,
         cols: [`回答をまとめて送る (${count} / ${total} 件)`, description],
         action: "conversation.answers.send",
+        seq: question.seq,
         main: true,
       });
     }
-    return lines;
+    return lines.map((line, seqLine) => ({ ...line, seqLine }));
   }
   private installQuestionActions(): void {
     this.question?.payload.questions.forEach((item, index) => {
@@ -470,7 +518,7 @@ export class ConversationSession {
   private refreshTail(): void {
     const data = this.state.data;
     if (!data) return;
-    this.handle?.setTail(
+    this.setTail(
       "reply",
       this.reply
         ? [
@@ -491,11 +539,14 @@ export class ConversationSession {
       questionLines.push({
         kind: "ask",
         text: `許可の確認: ${permission.toolName}(${permission.summary})`,
+        seq: permission.seq,
+        seqLine: 0,
       });
-      for (const [decision, label] of [
+      const choices = [
         ["allow", "許可する"],
         ["deny", "拒否する"],
-      ] as const) {
+      ] as const;
+      for (const [index, [decision, label]] of choices.entries()) {
         this.action(`conversation.permission.${decision}`, label, async () => {
           await this.api.permission(this.id, permission.requestId, decision);
           await this.refresh();
@@ -504,10 +555,12 @@ export class ConversationSession {
           kind: "menu",
           text: label,
           action: `conversation.permission.${decision}`,
+          seq: permission.seq,
+          seqLine: index + 1,
         });
       }
     }
-    this.handle?.setTail("question", questionLines);
+    this.setTail("question", questionLines);
     const queued = [...data.queue]
       .sort((a, b) => a.position - b.position)
       .map((item): LineInfo => ({
@@ -534,7 +587,7 @@ export class ConversationSession {
         action: "conversation.resume",
       });
     }
-    this.handle?.setTail("queue", queued);
+    this.setTail("queue", queued);
   }
   private working(): boolean {
     return ["working", "waiting_answer", "waiting_permission"].includes(
@@ -722,16 +775,16 @@ export class ConversationSession {
     for (const block of this.blocks) {
       if (
         this.controller.context().line >= offset &&
-        this.controller.context().line < offset + block.lines.length &&
+        this.controller.context().line < offset + this.withUnread(block.lines).length &&
         block.event.type === "diff"
       ) {
         this.expandDiff(block.event.seq, !collapse);
         return;
       }
-      offset += block.lines.length;
+      offset += this.withUnread(block.lines).length;
     }
   }
-  private expandDiff(seq: number, open: boolean): void {
+  expandDiff(seq: number, open: boolean): void {
     const block = this.blocks.find((block) => block.event.seq === seq);
     if (!block || !this.state.data) return;
     this.replaceBlock(
@@ -741,6 +794,7 @@ export class ConversationSession {
   }
   receive(message: ServerMessage): void {
     if (message.topic !== `conversation:${this.id}`) return;
+    if (message.type === "changed" || message.type === "state") this.recap?.changed();
     if (message.type === "delta") this.delta(message.payload.text);
     else if (message.type === "event") {
       const value = eventSchema.safeParse(message.payload);

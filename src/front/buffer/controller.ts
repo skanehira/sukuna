@@ -7,7 +7,7 @@ import {
 } from "./keymap/registry";
 import { defaultKeymap } from "./keymap/defaults";
 import { resolveKeymap } from "./keymap/resolve";
-import { CommandRegistry, executeCommand } from "./commands";
+import { CommandRegistry, CommandRetry, executeCommand } from "./commands";
 import { PositionStore, type Jump, type SavedPosition } from "./position-store";
 import { RightWindow, type RightView } from "./right-window";
 import { JumpHistory } from "./jump-history";
@@ -64,6 +64,7 @@ export type BufferSnapshot = {
   prefix: string;
   number: string;
   command: string | null;
+  commandPrefix?: ":" | "/";
   prompt: PromptSpec | null;
   promptId: number;
   confirmation: { text: string; action: string; context: ActionContext } | null;
@@ -97,6 +98,9 @@ export class BufferController {
   private hints = new Map<string, Hint[]>();
   private promptUpdate: ((text: string) => void) | null = null;
   private promptFocus: (() => void) | null = null;
+  private commandRevision = 0;
+  private commandRetry: { input: string; run: () => Promise<void> } | null = null;
+  private searchSubmit: ((query: string) => void | Promise<void>) | null = null;
   private origin = "main";
   private promptOrigin = "main";
   private promptDraft = "";
@@ -252,9 +256,12 @@ export class BufferController {
       ? (this.state.prompt?.label ?? "入力欄")
       : (this.windows.get(this.state.active)?.name ?? this.state.active);
   }
-  currentLine(): LineInfo | undefined {
-    const window = this.windows.get(this.state.active);
+  currentLine(side = this.state.active): LineInfo | undefined {
+    const window = this.windows.get(side);
     return window?.lines()[window.position().line];
+  }
+  windowPosition(side: string): SavedPosition | undefined {
+    return this.windows.get(side)?.position();
   }
   context(side = this.state.active): ActionContext {
     const window = this.windows.get(side);
@@ -320,7 +327,7 @@ export class BufferController {
     if (!chosen?.line) return;
     if (number) handle.place({ line: chosen.index, column: 0, topLine: chosen.index });
     const { line } = chosen;
-    if (line.kind === "menu" && line.action) {
+    if (line.action) {
       if (this.actions.get(line.action)?.confirm) {
         void this.run(line.action, this.context(side));
         return;
@@ -406,18 +413,47 @@ export class BufferController {
   statusItems(): string[] {
     return [...this.status.values()];
   }
+  openSearch(submit: (query: string) => void | Promise<void>): void {
+    this.openCommand();
+    this.searchSubmit = submit;
+    this.update({ commandPrefix: "/" });
+  }
   openCommand(initial = ""): void {
+    this.commandRevision++;
+    this.commandRetry = null;
+    this.searchSubmit = null;
     this.origin = this.state.active;
-    this.update({ command: initial, mode: "COMMAND", prefix: "" });
+    this.update({ command: initial, mode: "COMMAND", prefix: "", commandPrefix: ":" });
   }
   closeCommand(): void {
+    this.commandRevision++;
+    this.commandRetry = null;
+    this.searchSubmit = null;
     this.update({ command: null, mode: "NORMAL" });
     this.focus(this.origin);
   }
   async command(input: string): Promise<void> {
+    const search = this.searchSubmit;
+    if (search) {
+      this.closeCommand();
+      try {
+        await search(input);
+      } catch (error) {
+        this.notify(error instanceof Error ? error.message : "検索できませんでした", "error");
+      }
+      return;
+    }
+    const retry = this.commandRetry?.input === input ? this.commandRetry.run : null;
     this.positions.addCommand(input);
     this.closeCommand();
+    const revision = this.commandRevision;
+    const right = this.right.openingRevision();
+    const promptId = this.state.promptId;
     try {
+      if (retry) {
+        await retry();
+        return;
+      }
       await executeCommand(input, {
         actions: this.actions,
         commands: this.commands,
@@ -456,6 +492,16 @@ export class BufferController {
         },
       });
     } catch (error) {
+      if (error instanceof CommandRetry) {
+        if (
+          this.commandRevision !== revision ||
+          this.right.openingRevision() !== right ||
+          this.state.promptId !== promptId
+        )
+          return;
+        this.openCommand(input);
+        this.commandRetry = { input, run: error.run };
+      }
       this.notify(error instanceof Error ? error.message : "コマンドの実行に失敗しました", "error");
     }
   }
@@ -557,7 +603,11 @@ export class BufferController {
     if (!this.options.back?.()) this.notify("これより前の画面はありません");
   }
   changeScreen(url: string): void {
-    if (url !== this.options.url) this.closePrompt();
+    if (url !== this.options.url) {
+      this.commandRevision++;
+      this.commandRetry = null;
+      this.closePrompt();
+    }
     this.options.url = url;
   }
   navigate(url: string): void | Promise<void> {

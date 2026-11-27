@@ -1,6 +1,13 @@
 import type { ActionRegistry, KeymapEntry } from "./keymap/registry";
 import { normalizeKeys, parseKeys } from "./keymap/notation";
 export type CommandDef = { name: string; label: string; run(args: string[]): void | Promise<void> };
+export class CommandRetry extends Error {
+  readonly run: () => Promise<void>;
+  constructor(message: string, run: () => Promise<void>) {
+    super(message);
+    this.run = run;
+  }
+}
 export class CommandRegistry {
   private commands = new Map<string, CommandDef>();
   register(command: CommandDef): () => void {

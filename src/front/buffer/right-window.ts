@@ -2,12 +2,17 @@ export type RightView = { view: string; target: string };
 export type RightState = { current: RightView | null; stack: RightView[] };
 export class RightWindow {
   current: RightView | null;
+  private revision = 0;
   private stack: RightView[];
   constructor(state: RightState = { current: null, stack: [] }) {
     this.current = state.current;
     this.stack = state.stack.slice(-20);
   }
+  openingRevision(): number {
+    return this.revision;
+  }
   open(next: RightView): void {
+    this.revision++;
     if (this.current?.view === next.view && this.current.target === next.target) return;
     this.stack = this.stack.filter(
       (value) => value.view !== next.view || value.target !== next.target,
@@ -16,14 +21,17 @@ export class RightWindow {
     this.current = next;
   }
   back(): RightView | null {
+    this.revision++;
     this.current = this.stack.pop() ?? null;
     return this.current;
   }
   close(): void {
+    this.revision++;
     this.current = null;
     this.stack = [];
   }
   navigate(kind: string, target: string): void {
+    this.revision++;
     if (!this.current) return;
     if (
       !["conversation", "issue", "file"].includes(kind) ||

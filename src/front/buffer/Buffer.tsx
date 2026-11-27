@@ -8,7 +8,12 @@ import {
   type Extension,
   type Text,
 } from "@codemirror/state";
-import { drawSelection, EditorView, highlightActiveLine } from "@codemirror/view";
+import {
+  drawSelection,
+  EditorView,
+  highlightActiveLine,
+  scrollPastEnd as scrollBeyondEnd,
+} from "@codemirror/view";
 import { getCM, vim } from "@replit/codemirror-vim";
 import type { ColumnDef, LineInfo } from "./line";
 import { BufferControllerContext, windowId, type WindowHandle } from "./controller";
@@ -48,7 +53,8 @@ export type BufferHandle = {
   replace(from: number, to: number, lines: LineInfo[]): void;
   setTail(part: TailPart, lines: LineInfo[]): void;
   replaceAll(lines: LineInfo[]): void;
-  jumpTo(line: number): void;
+  jumpTo(line: number, options?: { remember?: boolean; topLine?: number; column?: number }): void;
+  cursorRevision?(): number;
   pushJump(line: number): void;
   findSeq(seq: number, seqLine?: number): number | null;
 };
@@ -62,6 +68,7 @@ export type BufferProps = {
   columns?: ColumnDef[];
   startLine?: number;
   followTail?: boolean;
+  scrollPastEnd?: boolean;
   onReady: (handle: BufferHandle) => void;
 };
 
@@ -157,6 +164,7 @@ export function Buffer({
   columns,
   startLine,
   followTail = false,
+  scrollPastEnd = false,
   onReady,
 }: BufferProps) {
   const controller = useContext(BufferControllerContext);
@@ -169,7 +177,15 @@ export function Buffer({
   const viewRef = useRef<EditorView | null>(null);
   const batchRef = useRef<Batch | null>(null);
   const frameRef = useRef<number | null>(null);
-  const configRef = useRef({ side, lines, columns: columns ?? [], startLine, followTail, onReady });
+  const configRef = useRef({
+    side,
+    lines,
+    columns: columns ?? [],
+    startLine,
+    followTail,
+    scrollPastEnd,
+    onReady,
+  });
 
   useEffect(() => {
     const host = hostRef.current;
@@ -178,14 +194,22 @@ export function Buffer({
     const content = createContent(numberMenus(config.lines));
     const initial = initialLine(config.lines, config.startLine);
     let rememberSelection = () => {};
+    let cursorRevision = 0;
     const extensions: Extension[] = [
       EditorView.updateListener.of((update) => {
+        if (
+          !update.docChanged &&
+          update.selectionSet &&
+          update.startState.selection.main.head !== update.state.selection.main.head
+        )
+          cursorRevision++;
         if (update.selectionSet || update.docChanged) rememberSelection();
       }),
       vim(),
       drawSelection(),
       highlightActiveLine(),
       EditorView.lineWrapping,
+      ...(config.scrollPastEnd ? [scrollBeyondEnd()] : []),
       EditorState.allowMultipleSelections.of(true),
       EditorState.readOnly.of(true),
       EditorView.editable.of(false),
@@ -317,8 +341,8 @@ export function Buffer({
       controller?.update({});
     };
     const focus = () => {
-      controller?.focus(logicalSide);
-      controller?.update({ mode: vimMode(view) });
+      controller?.positions.setActive(logicalSide);
+      controller?.update({ active: logicalSide, mode: vimMode(view) });
     };
     const doubleClick = () => {
       controller?.open();
@@ -345,8 +369,12 @@ export function Buffer({
       replaceAll(allLines) {
         enqueue({ kind: "replaceAll" }, (base) => replaceAllLines(base, allLines));
       },
-      jumpTo(line) {
-        controller?.pushJump(logicalSide, window.position().line);
+      jumpTo(line, options) {
+        if (batchRef.current) {
+          if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+          flush();
+        }
+        if (options?.remember !== false) controller?.pushJump(logicalSide, window.position().line);
         if (viewRef.current !== view) return;
         const currentLines = view.state.field(bufferField).lines;
         if (currentLines.length === 0) return;
@@ -355,14 +383,28 @@ export function Buffer({
           ? index
           : placeCursor(currentLines, index, index);
         view.dispatch({
-          selection: EditorSelection.single(lineStart(currentLines, target)),
-          scrollIntoView: true,
+          selection: EditorSelection.single(
+            lineStart(currentLines, target) +
+              Math.min(options?.column ?? 0, currentLines[target].text.length),
+          ),
+          effects: EditorView.scrollIntoView(lineStart(currentLines, options?.topLine ?? target), {
+            y: options?.topLine === undefined ? "nearest" : "start",
+          }),
         });
       },
+      cursorRevision: () => cursorRevision,
       pushJump(line) {
+        if (batchRef.current) {
+          if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+          flush();
+        }
         controller?.pushJump(logicalSide, line);
       },
       findSeq(seq, seqLine) {
+        if (batchRef.current) {
+          if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+          flush();
+        }
         return findSeqLine(view.state.field(bufferField).lines, seq, seqLine);
       },
     });
