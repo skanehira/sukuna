@@ -154,3 +154,35 @@ describe("replaceAllLines", () => {
     expect(applySpecs(contentText(before), specs)).toBe(contentText(after));
   });
 });
+
+describe("複数区画を同時に確定する", () => {
+  it.each([
+    ["reply", "question"],
+    ["reply", "question", "queue"],
+    ["question", "queue"],
+    ["reply", "queue"],
+  ] as const)("%s と続く区画を空にしても文字と行情報が一致する", (...parts) => {
+    let before = content();
+    before = setTailLines(before, "reply", [text("書きかけ")]).content;
+    before = setTailLines(before, "question", [text("質問")]).content;
+    before = setTailLines(before, "queue", [text("指示")]).content;
+
+    const { content: after, specs } = appendLines(before, [text("確定した本文")], parts);
+
+    expect(contentText(after)).toBe(
+      [
+        "はじめに",
+        "本文",
+        "確定した本文",
+        ...[
+          ["reply", "書きかけ"],
+          ["question", "質問"],
+          ["queue", "指示"],
+        ]
+          .filter(([part]) => !parts.some((value) => value === part))
+          .map(([, value]) => value),
+      ].join("\n"),
+    );
+    expect(applySpecs(contentText(before), specs)).toBe(contentText(after));
+  });
+});

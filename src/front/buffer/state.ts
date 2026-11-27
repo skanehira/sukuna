@@ -50,7 +50,7 @@ function rebuildRange(
     decorations: decorations.update({
       filterFrom: fromPos,
       filterTo: toPos,
-      filter: () => false,
+      filter: (position) => position < fromPos || (to < lines.length && position >= toPos),
       add: buildDecorations(tr.state, lines, from, to, columns),
     }),
   };

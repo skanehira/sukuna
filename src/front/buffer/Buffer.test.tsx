@@ -5,7 +5,7 @@ import { EditorView } from "@codemirror/view";
 import { getCM } from "@replit/codemirror-vim";
 import { Buffer, type BufferHandle, type BufferProps } from "./Buffer";
 import { bufferField } from "./state";
-import type { LineInfo } from "./line";
+import type { ColumnDef, LineInfo } from "./line";
 
 function text(value: string, extra: Partial<LineInfo> = {}): LineInfo {
   return { kind: "text", text: value, ...extra };
@@ -189,11 +189,11 @@ describe("並べ替え", () => {
     const { handle, view } = mount({ lines });
     handle.jumpTo(1);
 
-    handle.replaceAll([text("C", { id: "c" }), text("B", { id: "b" }), text("A", { id: "a" })]);
+    handle.replaceAll([text("B", { id: "b" }), text("C", { id: "c" }), text("A", { id: "a" })]);
     await nextFrame();
 
-    expect(cursorLine(view)).toBe(1);
-    expect(view.state.doc.line(2).text).toBe("B");
+    expect(cursorLine(view)).toBe(0);
+    expect(view.state.doc.line(1).text).toBe("B");
   });
 
   it("同じ識別子が無ければ同じ行番号に詰めて置く", async () => {
@@ -379,5 +379,145 @@ describe("追記のまとめ", () => {
     expect(create).toHaveBeenCalledTimes(1);
     expect(setState).toHaveBeenCalledTimes(0);
     expect(view.state.doc.lines).toBe(10_001);
+  });
+});
+
+describe("同じ描画までに追記と操作が重なったとき", () => {
+  it("複数の追記をまとめても、新しい最後の行について行く", async () => {
+    const { handle, view } = mount({ lines: [text("一"), text("二")], followTail: true });
+    handle.jumpTo(1);
+
+    handle.append([text("三")]);
+    handle.append([text("四")]);
+    handle.append([text("五")]);
+    await nextFrame();
+
+    expect(view.state.doc.toString()).toBe("一\n二\n三\n四\n五");
+    expect(cursorLine(view)).toBe(4);
+  });
+
+  it("追記を予約した後に前の行へ移ったら、その位置を保つ", async () => {
+    const { handle, view } = mount({ lines: [text("一"), text("二")], followTail: true });
+    handle.jumpTo(1);
+    view.focus();
+
+    handle.append([text("三")]);
+    fireEvent.keyDown(view.contentDOM, { key: "k" });
+    await nextFrame();
+
+    expect(cursorLine(view)).toBe(0);
+    expect(view.state.doc.toString()).toBe("一\n二\n三");
+  });
+
+  it("追記を予約した後に回数を打ちかけたら、位置と入力を保つ", async () => {
+    const { handle, view } = mount({ lines: [text("一"), text("二")], followTail: true });
+    handle.jumpTo(1);
+    view.focus();
+
+    handle.append([text("三")]);
+    fireEvent.keyDown(view.contentDOM, { key: "3" });
+    await nextFrame();
+
+    expect(cursorLine(view)).toBe(1);
+    expect(getCM(view)?.state.vim?.status).toBe("3");
+    expect(view.state.doc.toString()).toBe("一\n二\n三");
+  });
+
+  it("追記の後の書き換えでも、範囲の中の行番号と桁を保つ", async () => {
+    const { handle, view } = mount({ lines: [text("一番"), text("二番"), text("三番")] });
+    view.dispatch({ selection: { anchor: view.state.doc.line(2).from + 1 } });
+
+    handle.append([text("四番")]);
+    handle.replace(0, 3, [text("変更一"), text("変更二"), text("変更三")]);
+    await nextFrame();
+
+    expect(cursorLine(view)).toBe(1);
+    expect(view.state.selection.main.head - view.state.doc.line(2).from).toBe(1);
+    expect(view.state.doc.toString()).toBe("変更一\n変更二\n変更三\n四番");
+  });
+});
+
+describe("末尾の区画のカーソル", () => {
+  it("区画を縮めても、範囲の中のカーソルを新しい最後の行と桁に詰める", async () => {
+    const { handle, view } = mount({ lines: [text("確定")] });
+    handle.setTail("reply", [text("途中一"), text("途中二"), text("途中三")]);
+    await nextFrame();
+    view.dispatch({ selection: { anchor: view.state.doc.line(3).from + 1 } });
+
+    handle.setTail("reply", [text("新しい本文")]);
+    await nextFrame();
+
+    expect(cursorLine(view)).toBe(1);
+    expect(view.state.selection.main.head - view.state.doc.line(2).from).toBe(1);
+    expect(view.state.doc.toString()).toBe("確定\n新しい本文");
+  });
+});
+
+describe("桁の装飾", () => {
+  it.each([
+    ["", "本文", "最後"],
+    ["番号", "", "最後"],
+    ["番号", "本文", ""],
+  ])("空欄を含む桁 %s/%s/%s は、描画と更新で文字と列の対応を保つ", async (...cols) => {
+    const classes = ["first-column", "second-column", "third-column"];
+    const columns: ColumnDef[] = [
+      {
+        name: "empty-columns",
+        widths: [3, 5, 7],
+        align: ["left", "right", "left"],
+        classes,
+      },
+    ];
+    const row: LineInfo = { kind: "row", text: cols.join("  "), cols, colDef: "empty-columns" };
+    const { handle, view } = mount({ lines: [row], columns });
+    const readColumns = () =>
+      [...view.dom.querySelectorAll<HTMLElement>(".cm-column")].map((element) => ({
+        text: element.textContent,
+        class: element.className,
+        align: element.style.textAlign,
+      }));
+    const expected = cols.map((value, index) => ({
+      text: value,
+      class: `cm-column ${classes[index]}`,
+      align: index === 1 ? "right" : "",
+    }));
+
+    expect(view.state.doc.toString()).toBe(row.text);
+    expect(readColumns()).toEqual(expected);
+
+    handle.append([row]);
+    await nextFrame();
+    expect(view.state.doc.toString()).toBe(`${row.text}\n${row.text}`);
+    expect(readColumns()).toEqual([...expected, ...expected]);
+
+    handle.replace(0, 1, [row]);
+    handle.setTail("reply", [row]);
+    await nextFrame();
+    expect(view.state.doc.toString()).toBe([row.text, row.text, row.text].join("\n"));
+    expect(readColumns()).toEqual([...expected, ...expected, ...expected]);
+  });
+
+  it("メニューの番号と名前に、桁をつなぐ空白を混ぜない", () => {
+    const { view } = mount({
+      lines: [{ kind: "menu", text: "1  続ける  実行する", cols: ["1", "続ける", "実行する"] }],
+    });
+
+    expect([...view.dom.querySelectorAll(".cm-column")].map((el) => el.textContent)).toEqual([
+      "1",
+      "続ける",
+      "実行する",
+    ]);
+    expect(view.state.doc.toString()).toBe("1  続ける  実行する");
+  });
+
+  it("途中を書き換えても、範囲の外の行の装飾は残る", async () => {
+    const { handle, view } = mount({
+      lines: [text("一"), text("二"), text("三"), { kind: "tool", text: "残すコマンド" }],
+    });
+    handle.replace(1, 2, [text("変更")]);
+    await nextFrame();
+
+    expect(lineClasses(view.state, 3)).toEqual(["cm-kind-tool"]);
+    expect(view.state.doc.line(4).text).toBe("残すコマンド");
   });
 });

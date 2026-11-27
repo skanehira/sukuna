@@ -14,7 +14,7 @@ export type FrameProps = {
 export function Frame({ title, side, active = false, columns, children }: FrameProps) {
   return (
     <section
-      className="flex min-h-0 min-w-0 flex-col"
+      className="flex min-h-0 min-w-0 flex-1 flex-col"
       style={{ containerType: "inline-size" }}
       aria-label={title}
     >
@@ -29,7 +29,7 @@ export function Frame({ title, side, active = false, columns, children }: FrameP
             aria-hidden="true"
           />
         ) : null}
-        <span className="min-w-0 truncate">{title}</span>
+        <h2 className="min-w-0 truncate">{title}</h2>
       </div>
       {columns === undefined ? null : <ColHead columns={columns} side={side} />}
       {children}

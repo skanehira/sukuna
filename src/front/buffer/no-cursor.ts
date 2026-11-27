@@ -28,7 +28,7 @@ export function placeCursor(lines: LineInfo[], previous: number, next: number): 
   if (forward !== null) return forward;
   const backward = search(lines, next - direction, -direction as 1 | -1);
   if (backward !== null) return backward;
-  return Math.max(0, Math.min(previous, lines.length - 1));
+  return 0;
 }
 
 export function initialLine(lines: LineInfo[], startLine: number | undefined): number {
@@ -38,7 +38,7 @@ export function initialLine(lines: LineInfo[], startLine: number | undefined): n
     if (down !== null) return down;
     const up = search(lines, startLine - 1, -1);
     if (up !== null) return up;
-    return startLine;
+    return 0;
   }
   const first = search(lines, 0, 1);
   return first ?? 0;

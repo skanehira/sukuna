@@ -1,5 +1,5 @@
 import type { EditorState, Range } from "@codemirror/state";
-import { Decoration } from "@codemirror/view";
+import { Decoration, type EditorView, WidgetType } from "@codemirror/view";
 import { columnSpans, columnWidth, type ColumnDef, type LineInfo, type LineKind } from "./line";
 import {
   BAND_AI,
@@ -107,10 +107,37 @@ function mark(
   classes: string[],
   style: string | null,
 ): Range<Decoration> {
+  if (span.from === span.to) {
+    return Decoration.widget({ widget: new EmptyColumn(classes.join(" "), style), side: 1 }).range(
+      lineFrom + span.from,
+    );
+  }
   return Decoration.mark({
     class: classes.join(" "),
     ...(style === null ? {} : { attributes: { style } }),
   }).range(lineFrom + span.from, lineFrom + span.to);
+}
+
+class EmptyColumn extends WidgetType {
+  private readonly classes: string;
+  private readonly style: string | null;
+
+  constructor(classes: string, style: string | null) {
+    super();
+    this.classes = classes;
+    this.style = style;
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const span = view.dom.ownerDocument.createElement("span");
+    span.className = this.classes;
+    if (this.style !== null) span.setAttribute("style", this.style);
+    return span;
+  }
+
+  ignoreEvent(): boolean {
+    return false;
+  }
 }
 
 function lineDecoration(

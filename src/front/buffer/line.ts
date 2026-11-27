@@ -56,10 +56,9 @@ export function columnSpans(line: LineInfo): ColumnSpan[] {
   const spans: ColumnSpan[] = [];
   let from = 0;
   for (let index = 0; index < cols.length; index += 1) {
-    const isLast = index === cols.length - 1;
-    const to = isLast ? line.text.length : from + cols[index].length + COLUMN_GAP.length;
+    const to = from + cols[index].length;
     spans.push({ from, to });
-    from = to;
+    from = to + COLUMN_GAP.length;
   }
   return spans;
 }

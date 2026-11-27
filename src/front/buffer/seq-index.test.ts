@@ -30,4 +30,21 @@ describe("findSeqLine", () => {
     expect(findSeqLine(lines, 99)).toBeNull();
     expect(findSeqLine(lines, 3, 3)).toBeNull();
   });
+
+  it.each([
+    [undefined, 0],
+    [0, 1],
+    [8, 3],
+    [1, null],
+  ])("札や畳んだ行がある発言の seqLine=%s を属性で探し、%s を返す", (seqLine, expected) => {
+    const quoted: LineInfo[] = [
+      { kind: "speaker", text: "AI", seq: 7 },
+      line("本文", { seq: 7, seqLine: 0 }),
+      { kind: "menu", text: "残りの差分を開く", seq: 7 },
+      line("差分の続き", { seq: 7, seqLine: 8 }),
+      line("別の発言", { seq: 8, seqLine: 1 }),
+    ];
+
+    expect(findSeqLine(quoted, 7, seqLine)).toBe(expected);
+  });
 });

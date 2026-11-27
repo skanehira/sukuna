@@ -69,6 +69,7 @@ describe("placeCursor", () => {
   it("置ける行が 1 行も無いバッファでは、カーソルを動かさない", () => {
     const empty = [speaker("あなた"), separator(), line("colhead", "番号")];
     expect(placeCursor(empty, 0, 1)).toBe(0);
+    expect(placeCursor(empty, 2, 1)).toBe(0);
   });
 
   it("置ける行に乗ったときは、その行のままにする", () => {
@@ -91,5 +92,6 @@ describe("initialLine", () => {
 
   it("置ける行が 1 行も無いバッファでは 1 行目に置く", () => {
     expect(initialLine([line("heading", "目次")], undefined)).toBe(0);
+    expect(initialLine([line("heading", "目次"), speaker("AI")], 1)).toBe(0);
   });
 });

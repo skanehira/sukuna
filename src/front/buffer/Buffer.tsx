@@ -1,7 +1,13 @@
 import { useRef } from "react";
 // oxlint-disable-next-line no-restricted-imports -- CodeMirror の EditorView は要素の寿命に合わせて 1 度だけ作り、追記は dispatch で当てるため effect が要る
 import { useEffect } from "react";
-import { ChangeSet, EditorSelection, EditorState, type Extension } from "@codemirror/state";
+import {
+  ChangeSet,
+  EditorSelection,
+  EditorState,
+  type Extension,
+  type Text,
+} from "@codemirror/state";
 import { drawSelection, EditorView, highlightActiveLine } from "@codemirror/view";
 import { getCM, vim } from "@replit/codemirror-vim";
 import type { ColumnDef, LineInfo } from "./line";
@@ -24,6 +30,7 @@ import {
   replaceAllLines,
   replaceLines,
   setTailLines,
+  tailPartRange,
   type BufferContent,
   type BufferOp,
   type LineRange,
@@ -52,7 +59,7 @@ export type BufferProps = {
 
 type CursorIntent =
   | { kind: "append" }
-  | { kind: "setTail" }
+  | { kind: "setTail"; from: number; to: number; count: number }
   | { kind: "replace"; from: number; to: number; count: number }
   | { kind: "replaceAll" };
 
@@ -60,8 +67,7 @@ type Batch = {
   changes: ChangeSet;
   content: BufferContent;
   rebuild: LineRange;
-  selection: EditorSelection | undefined;
-  scrollIntoView: boolean;
+  operations: { intent: CursorIntent; op: BufferOp; changes: ChangeSet }[];
 };
 
 function lineStart(lines: LineInfo[], index: number): number {
@@ -72,8 +78,11 @@ function lineStart(lines: LineInfo[], index: number): number {
   return offset;
 }
 
-function unionRange(left: LineRange, right: LineRange): LineRange {
-  return { from: Math.min(left.from, right.from), to: Math.max(left.to, right.to) };
+function unionRange(left: LineRange, right: LineRange, added: number): LineRange {
+  return {
+    from: Math.min(left.from, right.from),
+    to: Math.max(left.to + Math.max(0, added), right.to),
+  };
 }
 
 function isBusy(view: EditorView): boolean {
@@ -91,31 +100,32 @@ function isBusy(view: EditorView): boolean {
 }
 
 function cursorSelection(
-  view: EditorView,
+  doc: Text,
+  selection: EditorSelection,
+  lines: LineInfo[],
   intent: CursorIntent,
   content: BufferContent,
   followTail: boolean,
 ): EditorSelection | undefined {
-  const state = view.state;
-  const lines = state.field(bufferField).lines;
-  const head = state.selection.main.head;
-  const cursorLine = state.doc.lineAt(head).number - 1;
+  const head = selection.main.head;
+  const cursorLine = doc.lineAt(head).number - 1;
   const nextLines = contentLines(content);
 
   if (intent.kind === "append" || intent.kind === "setTail") {
-    if (!followTail || isBusy(view)) return undefined;
     const onLastLine = lines.length === 0 || cursorLine === lines.length - 1;
-    if (!onLastLine || nextLines.length === 0) return undefined;
-    return EditorSelection.single(lineStart(nextLines, nextLines.length - 1));
+    if (followTail && onLastLine && nextLines.length > 0) {
+      return EditorSelection.single(lineStart(nextLines, nextLines.length - 1));
+    }
+    if (intent.kind === "append") return undefined;
   }
 
-  if (intent.kind === "replace") {
+  if (intent.kind === "replace" || intent.kind === "setTail") {
     const from = Math.max(0, Math.min(intent.from, lines.length));
     const to = Math.max(from, Math.min(intent.to, lines.length));
     if (cursorLine < from || cursorLine >= to || nextLines.length === 0) return undefined;
     const offset = Math.min(cursorLine - from, Math.max(0, intent.count - 1));
     const target = Math.min(from + offset, nextLines.length - 1);
-    const column = head - state.doc.line(cursorLine + 1).from;
+    const column = head - doc.line(cursorLine + 1).from;
     const start = lineStart(nextLines, target);
     return EditorSelection.single(Math.min(start + column, start + nextLines[target].text.length));
   }
@@ -182,29 +192,53 @@ export function Buffer({
       if (batch === null || viewRef.current !== view) return;
       batchRef.current = null;
       const options: BufferTransactionOptions = {};
-      if (batch.selection !== undefined) options.selection = batch.selection;
-      if (batch.scrollIntoView) options.scrollIntoView = true;
+      let doc = view.state.doc;
+      let selection = view.state.selection;
+      let currentLines = view.state.field(bufferField).lines;
+      const follow = config.followTail && !isBusy(view);
+      for (const { intent, op, changes } of batch.operations) {
+        const resolved = cursorSelection(doc, selection, currentLines, intent, op.content, follow);
+        selection = resolved ?? selection.map(changes);
+        if (resolved !== undefined) {
+          options.selection = selection;
+          if (follow && (intent.kind === "append" || intent.kind === "setTail")) {
+            options.scrollIntoView = true;
+          }
+        } else if (options.selection !== undefined) {
+          options.selection = selection;
+        }
+        doc = changes.apply(doc);
+        currentLines = contentLines(op.content);
+      }
       view.dispatch(bufferTransaction(batch.changes, batch.content, batch.rebuild, options));
     };
 
-    const enqueue = (intent: CursorIntent, build: (base: BufferContent) => BufferOp): void => {
+    const enqueue = (
+      intent: CursorIntent | ((base: BufferContent) => CursorIntent),
+      build: (base: BufferContent) => BufferOp,
+    ): void => {
       if (viewRef.current !== view) return;
       const batch = batchRef.current;
       const base = batch?.content ?? view.state.field(bufferField).content;
       const op = build(base);
       const changes = ChangeSet.of(op.specs, contentText(base).length);
-      const mapped = batch?.selection?.map(changes);
-      const selection =
-        batch === null ? cursorSelection(view, intent, op.content, config.followTail) : mapped;
+      const operation = {
+        intent: typeof intent === "function" ? intent(base) : intent,
+        op,
+        changes,
+      };
       batchRef.current = {
         changes: batch === null ? changes : batch.changes.compose(changes),
         content: op.content,
-        rebuild: batch === null ? op.rebuild : unionRange(batch.rebuild, op.rebuild),
-        selection,
-        scrollIntoView:
+        rebuild:
           batch === null
-            ? selection !== undefined && (intent.kind === "append" || intent.kind === "setTail")
-            : batch.scrollIntoView,
+            ? op.rebuild
+            : unionRange(
+                batch.rebuild,
+                op.rebuild,
+                contentLines(op.content).length - contentLines(base).length,
+              ),
+        operations: [...(batch?.operations ?? []), operation],
       };
       if (frameRef.current === null) frameRef.current = requestAnimationFrame(flush);
     };
@@ -219,7 +253,10 @@ export function Buffer({
         );
       },
       setTail(part, tailLines) {
-        enqueue({ kind: "setTail" }, (base) => setTailLines(base, part, tailLines));
+        enqueue(
+          (base) => ({ kind: "setTail", ...tailPartRange(base, part), count: tailLines.length }),
+          (base) => setTailLines(base, part, tailLines),
+        );
       },
       replaceAll(allLines) {
         enqueue({ kind: "replaceAll" }, (base) => replaceAllLines(base, allLines));

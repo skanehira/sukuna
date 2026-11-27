@@ -64,6 +64,9 @@ export function bufferTheme(side: BufferSide): Extension {
       padding: "4px 0 24px",
     },
     ".cm-content": {
+      containerType: "inline-size",
+      minWidth: "0",
+      flexBasis: "0",
       maxWidth: side === "list" || side === "table" ? "64rem" : "none",
       padding: "0",
       caretColor: "transparent",
@@ -77,12 +80,15 @@ export function bufferTheme(side: BufferSide): Extension {
       ? { [`.cm-line.${KIND_CLASS}heading`]: { color: "var(--color-muted)", fontSize: "12px" } }
       : {
           [`.cm-line.${KIND_CLASS}heading`]: {
+            fontSize: "13px",
+            fontWeight: "700",
             borderBottom: "1px solid var(--color-line)",
             borderRadius: "0",
             paddingBottom: "2px",
           },
         }),
     [`.cm-line.${MENU}`]: {
+      whiteSpace: "pre",
       marginLeft: "8px",
       marginRight: "16px",
       padding: "0 8px",
@@ -166,7 +172,13 @@ export function bufferTheme(side: BufferSide): Extension {
     },
     [`.cm-line.${KIND_CLASS}queued`]: { color: "var(--color-doing)" },
     [`.cm-line.${KIND_CLASS}row`]: { whiteSpace: "pre" },
-    [`.cm-line.${KIND_CLASS}section`]: { whiteSpace: "pre" },
+    [`.cm-line.${KIND_CLASS}section`]: { whiteSpace: "pre", fontSize: "13px", fontWeight: "700" },
+    [`.cm-line.${KIND_CLASS}section > span:nth-child(2)`]: {
+      fontFamily: "var(--font-mono)",
+      fontSize: "12px",
+      fontWeight: "400",
+      color: "var(--color-muted)",
+    },
     [`.cm-line.${STRONG}`]: { fontWeight: "700" },
     [`.cm-line.${TONE_CLASS}wait`]: { color: "var(--color-wait)" },
     [`.cm-line.${TONE_CLASS}doing`]: { color: "var(--color-doing)" },
@@ -233,11 +245,11 @@ export function bufferTheme(side: BufferSide): Extension {
       fontSize: side === "list" ? "8px" : "12px",
     },
     [`.${NUM_GUTTER} .cm-gutterElement`]: {
-      width: "2.5rem",
+      minWidth: "2.5rem",
       textAlign: "right",
       paddingRight: "8px",
     },
-    [`.${NUM_GUTTER} .cm-gutterElement.${CURSOR_NUMBER}`]: { color: "var(--color-ink)" },
+    [`.${NUM_GUTTER} .cm-gutterElement .${CURSOR_NUMBER}`]: { color: "var(--color-ink)" },
     ".cm-line.cm-activeLine": { backgroundColor: "transparent" },
     "&.cm-focused .cm-line.cm-activeLine": { backgroundColor: "var(--color-raised)" },
     "&:not(.cm-focused) .cm-cursorLayer": { display: "none" },

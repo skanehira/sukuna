@@ -110,7 +110,11 @@ export function appendLines(
 
   for (const part of TAIL_ORDER) {
     const range = tailPartRange(content, part);
-    if (clearTail.includes(part) && range.to > range.from) clearedRanges.push(range);
+    if (clearTail.includes(part) && range.to > range.from) {
+      const previous = clearedRanges.at(-1);
+      if (previous !== undefined && previous.to === range.from) previous.to = range.to;
+      else clearedRanges.push(range);
+    }
     if (clearTail.includes(part)) tail[part] = [];
   }
 
