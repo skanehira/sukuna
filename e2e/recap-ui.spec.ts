@@ -97,7 +97,8 @@ test("API fixtureを使うUIブラウザ確認: 未読から目次を編集し�
       path === "/api/me" ||
       path === "/api/health" ||
       path === "/api/settings" ||
-      path === "/api/projects"
+      path === "/api/projects" ||
+      path === "/api/inbox"
     )
       return route.continue();
     if (path.endsWith("/read")) {

@@ -62,6 +62,10 @@ export default createApp({
   projects: createProjectDependencies(getDatabase, {
     runner: getRunnerLink,
     changed: (id) => getWsHub().notice({ kind: "project", project_id: id }),
+    notifications: {
+      dismissProject: (id, at) => getWsHub().projectRemoved(id, at),
+      restoreProject: (id) => getWsHub().projectRestored(id),
+    },
   }),
   worktrees: createWorktreeDependencies(getDatabase, { terminals: getPtySessions() }),
   recap: createRecapDependencies(

@@ -36,6 +36,7 @@ export async function registerProject(
     if (previous.removedAt === null) return err(projectPathTaken);
     if (deps.repository.nameTaken(previous.name, previous.id)) return err(projectNameTaken);
     deps.repository.update(previous.id, { removedAt: null });
+    deps.notifications?.restoreProject(previous.id);
     return ok({ project: identity(previous), restored: true, notes });
   };
   const existing = deps.transaction(() => {

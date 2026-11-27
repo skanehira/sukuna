@@ -26,6 +26,36 @@
         { "text": "選んだ方針で設計を進めます。" },
         { "end": "success" }
       ]
+    },
+    {
+      "match": "^予約 API の通知を確認 notice-[A-Za-z0-9]+$",
+      "steps": [
+        {
+          "shell": "i=0; while [ ! -f .e2e-notice-ready ] && [ \"$i\" -lt 300 ]; do i=$((i + 1)); sleep 0.05; done; test -f .e2e-notice-ready"
+        },
+        {
+          "ask": [
+            {
+              "question": "在庫を戻す方法は?",
+              "header": "方法",
+              "multi_select": false,
+              "options": [
+                {
+                  "label": "定期処理",
+                  "description": "1分ごと"
+                },
+                {
+                  "label": "次の処理",
+                  "description": "必要なとき"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "end": "success"
+        }
+      ]
     }
   ]
 }

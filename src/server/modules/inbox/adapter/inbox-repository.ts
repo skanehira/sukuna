@@ -15,7 +15,7 @@ import {
 import type { InboxRepositoryPort } from "../domain/ports";
 export function createInboxRepository(database: () => OpenedDatabase["db"]): InboxRepositoryPort {
   return {
-    load() {
+    load(projectId) {
       const db = database();
       return ok({
         flowPaused:
@@ -23,7 +23,12 @@ export function createInboxRepository(database: () => OpenedDatabase["db"]): Inb
         projects: db
           .select()
           .from(projects)
-          .where(isNull(projects.removedAt))
+          .where(
+            and(
+              isNull(projects.removedAt),
+              projectId === undefined ? undefined : eq(projects.id, projectId),
+            ),
+          )
           .orderBy(sql`projects.rowid`)
           .all()
           .map((project) => ({

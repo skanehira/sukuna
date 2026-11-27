@@ -25,6 +25,7 @@ import type { ProgressDependencies } from "./modules/conversation/domain/progres
 import { WebSocketServer, type WebSocket } from "ws";
 import { RunnerLink } from "./runner-link";
 import { WsHub } from "./ws-hub";
+import { createInboxRepository, formatResetTime } from "./modules/inbox/adapter/inbox-repository";
 import { createLogger, type Logger } from "../shared/log";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
@@ -213,7 +214,20 @@ export async function initializeRuntime(
     if (result.isErr()) return err(result.error);
     database = result.value;
     if (connection?.log) log = connection.log;
-    hub = new WsHub(database.sqlite);
+    hub = new WsHub(database.sqlite, {
+      inbox: {
+        repository: createInboxRepository(() => getDatabase().db),
+        resetTime: formatResetTime,
+      },
+      now,
+      id: ulid,
+      onError: () =>
+        log({
+          level: "error",
+          component: "server.inbox",
+          message: "一覧のお知らせの記録を更新できませんでした。",
+        }),
+    });
     runner = new RunnerLink({
       socket:
         connection?.socket ??

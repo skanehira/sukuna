@@ -21,6 +21,7 @@ import { InboxPage } from "./pages/inbox";
 import { ProjectPage } from "./pages/project";
 import { Tree, registerInboxNavigation } from "./components/tree";
 import type { ScreenLoader } from "./App";
+import { createBrowserNotifications } from "./lib/notifications";
 
 const reload = () => window.location.reload();
 const navigation = createNavigation(
@@ -29,13 +30,20 @@ const navigation = createNavigation(
   (url) => controller.navigate(url),
 );
 const { controller, dispose } = createBrowserController(window, navigation.open);
-const notices = createNotices({
-  schedule: (fn, ms) => {
+const timer = {
+  schedule: (fn: () => void, ms: number) => {
     const id = window.setTimeout(fn, ms);
     return () => window.clearTimeout(id);
   },
-});
+};
+const notices = createNotices(timer);
 controller.options.notify = notices.notify;
+const notifications = createBrowserNotifications({
+  notify: notices.notify,
+  title: (value) => {
+    document.title = value;
+  },
+});
 const reportSettingsError = (error: unknown) => {
   notices.notify(error instanceof Error ? error.message : "設定を読み込めませんでした。", "error");
 };
@@ -54,14 +62,11 @@ const timeFormat = new Intl.DateTimeFormat("ja-JP", {
 });
 const formatTime = (at: number) => timeFormat.format(at);
 const inboxApi = createInboxApi(window.fetch.bind(window));
-const inbox = new InboxStore(inboxApi, {
-  now: () => Date.now(),
-  schedule: (fn, ms) => {
-    const id = window.setTimeout(fn, ms);
-    return () => window.clearTimeout(id);
-  },
-  storage: window.sessionStorage,
-});
+const inbox = new InboxStore(
+  inboxApi,
+  { ...timer, now: () => Date.now(), storage: window.sessionStorage },
+  notifications.updateTitle,
+);
 const stopInboxNavigation = registerInboxNavigation(controller, inbox);
 const conversations = createConversationWorkspace(
   createConversationApi(window.fetch.bind(window)),
@@ -88,6 +93,7 @@ const conversations = createConversationWorkspace(
         window.open(url, "_blank", "noopener,noreferrer");
       },
     },
+    notifications,
     settingsChanged: () => {
       void settings.refresh().catch(reportSettingsError);
     },

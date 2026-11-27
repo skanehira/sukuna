@@ -34,11 +34,13 @@ export function createConversationWorkspace(
     lifecycle: lifecycleOptions,
     settingsChanged,
     inbox,
+    notifications,
   }: {
     recap?: { api: RecapApi; storage: TabStorage };
     lifecycle?: LifecycleOptions;
     settingsChanged?: () => void;
     inbox?: Pick<InboxStore, "reload" | "receive">;
+    notifications?: { receive(message: ServerMessage): void };
   } = {},
 ) {
   const sessions = new Map<string, ConversationSession>();
@@ -77,6 +79,7 @@ export function createConversationWorkspace(
     gap: reload,
     message: (message) => {
       inbox?.receive(message);
+      notifications?.receive(message);
       if (message.topic === "app" && message.type === "settings_changed") settingsChanged?.();
       active.forEach((session) => session.receive(message));
       if (message.type !== "resync")
@@ -253,7 +256,8 @@ export function createConversationWorkspace(
         ...Object.values(conversationCommands),
         ...(recap ? Object.values(recapCommands) : []),
       ]);
-      const unsubscribeApp = settingsChanged ? realtime.subscribe("app") : undefined;
+      const unsubscribeApp =
+        settingsChanged || notifications ? realtime.subscribe("app") : undefined;
       const unsubscribeInbox = inbox ? realtime.subscribe("inbox") : undefined;
       realtime.start();
       return () => {

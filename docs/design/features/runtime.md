@@ -118,6 +118,7 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 | `settings` のキー `conversation-close-withdraw:<会話の id>` | 画面のサーバー | 閉鎖時刻と未取り下げの通知 ID (`features/conversation-lifecycle.md`「閉じる」) |
 | `settings` のキー `backup_status` | ランナー | バックアップはランナーがとる (`features/operations.md`) |
 | `settings` のキー `last_restore` と、復元のときの `flow_paused` | 復元の処理と、起動時の後始末 (`db.lock` の中) | 2 つのプロセスを止めてから書く (`features/operations.md`) |
+| `settings` の `inbox_notification_markers:` で始まるキー | 画面のサーバー | 待機中の通知の契機を再起動後も照合する (`features/inbox.md`「通知を出す条件」) |
 | `settings` のほかのキー、`projects` | 画面のサーバー | 開発者の操作 |
 | `worktrees` の行の作成 (`origin = user`) | 画面のサーバー | 開発者が作った worktree と、一覧でアプリの外で作ったと分かった worktree (`features/worktree-terminal.md`「書くプロセス」) |
 | `worktrees` の行の作成 (`origin = flow`) | ランナー (自動フロー) | 自動フローが段階の worktree を作る (`features/worktree-terminal.md`「書くプロセス」) |

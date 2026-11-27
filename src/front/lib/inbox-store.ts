@@ -19,9 +19,11 @@ type Failure = { code: string; message: string };
 type QueuedRefresh = { after: Promise<void>; promise: Promise<void> };
 export class InboxApiError extends Error {
   readonly code: string;
-  constructor(code: string, message: string) {
+  readonly status?: number;
+  constructor(code: string, message: string, status?: number) {
     super(message);
     this.code = code;
+    this.status = status;
   }
 }
 export function createInboxApi(
@@ -29,17 +31,17 @@ export function createInboxApi(
 ): InboxApi & { withdraw: (id: string) => Promise<{ stoppedDependents: number[] }> } {
   async function request<T>(path: string, schema: z.ZodType<T>, method = "GET"): Promise<T> {
     const response = await fetcher(path, { method });
-    const body: unknown = await response.json();
     if (!response.ok) {
-      const failure = errorResponseSchema.safeParse(body);
+      const failure = errorResponseSchema.safeParse(await response.json().catch(() => null));
       throw new InboxApiError(
         failure.success ? failure.data.error.code : "network_error",
         failure.success
           ? failure.data.error.message
           : "一覧を取得できませんでした。再読み込みしてください。",
+        response.status,
       );
     }
-    return schema.parse(body);
+    return schema.parse(await response.json());
   }
   return {
     inbox: () => request("/api/inbox", inboxResponseSchema),
@@ -80,9 +82,13 @@ export class ListingResource<T> {
   private cancelClock?: () => void;
   private fetchData: () => Promise<T>;
   private env: InboxEnvironment;
-  constructor(fetchData: () => Promise<T>, env: InboxEnvironment) {
+  private onData?: (data: T) => void;
+  private retries = 0;
+  private disposed = false;
+  constructor(fetchData: () => Promise<T>, env: InboxEnvironment, onData?: (data: T) => void) {
     this.fetchData = fetchData;
     this.env = env;
+    this.onData = onData;
     this.state = { data: null, error: null, loading: true, now: env.now() };
   }
   snapshot = () => this.state;
@@ -95,8 +101,8 @@ export class ListingResource<T> {
     }
     return () => {
       this.listeners.delete(listener);
+      if (this.listeners.size === 0) this.cancelClock?.();
       if (!this.active()) {
-        this.cancelClock?.();
         this.cancelChange?.();
         this.cancelChange = undefined;
         this.changed = false;
@@ -104,7 +110,7 @@ export class ListingResource<T> {
     };
   };
   active() {
-    return this.listeners.size > 0;
+    return !this.disposed && (this.listeners.size > 0 || this.onData !== undefined);
   }
   private publish(patch: Partial<ListingSnapshot<T>>) {
     this.state = { ...this.state, ...patch };
@@ -113,11 +119,12 @@ export class ListingResource<T> {
   private tick() {
     this.cancelClock = this.env.schedule(() => {
       this.publish({ now: this.env.now() });
-      if (this.active()) this.tick();
+      if (this.listeners.size > 0) this.tick();
     }, 30000);
   }
   invalidate() {
     if (!this.active()) return;
+    this.retries = 2;
     this.changed = true;
     this.scheduleChange(1000);
   }
@@ -143,6 +150,7 @@ export class ListingResource<T> {
   }
   refresh(): Promise<void> {
     if (!this.active()) return Promise.resolve();
+    this.retries = 2;
     if (!this.pending) return this.request();
     if (this.queuedRefresh?.after === this.pending) return this.queuedRefresh.promise;
     const queued: QueuedRefresh = {
@@ -168,8 +176,13 @@ export class ListingResource<T> {
     this.publish({ loading: this.state.data === null });
     this.pending = this.fetchData()
       .then(
-        (data) => this.publish({ data, error: null, loading: false, now: this.env.now() }),
-        (error: unknown) =>
+        (data) => {
+          if (this.disposed) return;
+          this.publish({ data, error: null, loading: false, now: this.env.now() });
+          this.onData?.(data);
+        },
+        (error: unknown) => {
+          if (this.disposed) return;
           this.publish({
             error: {
               code: error instanceof InboxApiError ? error.code : "network_error",
@@ -179,7 +192,20 @@ export class ListingResource<T> {
                   : "一覧を取得できませんでした。再読み込みしてください。",
             },
             loading: false,
-          }),
+          });
+          if (
+            this.onData &&
+            !this.changed &&
+            this.queuedRefresh?.after !== this.pending &&
+            this.retries > 0 &&
+            (error instanceof TypeError ||
+              (error instanceof InboxApiError && (error.status ?? 0) >= 500))
+          ) {
+            this.retries--;
+            this.changed = true;
+            this.scheduleChange(0);
+          }
+        },
       )
       .finally(() => {
         this.pending = null;
@@ -187,6 +213,7 @@ export class ListingResource<T> {
     return this.pending;
   }
   dispose() {
+    this.disposed = true;
     this.cancelClock?.();
     this.cancelChange?.();
     this.changed = false;
@@ -201,10 +228,10 @@ export class InboxStore {
   private expanded = new Map<string, Set<string>>();
   private api: InboxApi;
   private env: InboxEnvironment;
-  constructor(api: InboxApi, env: InboxEnvironment) {
+  constructor(api: InboxApi, env: InboxEnvironment, onInboxData?: (data: InboxResponse) => void) {
     this.api = api;
     this.env = env;
-    this.inbox = new ListingResource(api.inbox, env);
+    this.inbox = new ListingResource(api.inbox, env, onInboxData);
     this.projects = new ListingResource(api.projects, env);
   }
   overview(id: string) {

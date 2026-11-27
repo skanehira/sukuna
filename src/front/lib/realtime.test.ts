@@ -137,8 +137,8 @@ it.each<ServerMessage>([
     expect(s.sockets[1]?.sent).toEqual([
       { op: "subscribe", topic: "conversation:a", after: 7 },
       ...(message.topic === "conversation:a" ? [] : [{ op: "subscribe", topic: message.topic }]),
-      { op: "shown", topics: [] },
       { op: "visibility", visible: true },
+      { op: "shown", topics: [] },
     ]);
   } finally {
     s.realtime.stop();
@@ -193,8 +193,8 @@ it("続きの番号と表示中の対象を再接続で送り直し、3秒切断
     expect(s.sockets[1]?.sent).toEqual([
       { op: "subscribe", topic: "conversation:a", after: 1 },
       { op: "subscribe", topic: "inbox" },
-      { op: "shown", topics: ["conversation:a"] },
       { op: "visibility", visible: false },
+      { op: "shown", topics: ["conversation:a"] },
     ]);
     expect(s.states).toEqual([false, true, false]);
     expect(s.read).toEqual(["conversation:a", "inbox", "conversation:a", "inbox"]);
@@ -299,8 +299,8 @@ it("同じ会話を2か所が購読すると片方を閉じても残りへ配信
     expect(s.received).toEqual([event]);
     expect(s.sockets[0]?.sent).toEqual([
       { op: "subscribe", topic: "conversation:a", after: 0 },
-      { op: "shown", topics: [] },
       { op: "visibility", visible: true },
+      { op: "shown", topics: [] },
       { op: "unsubscribe", topic: "conversation:a" },
     ]);
     s.realtime.stop();
