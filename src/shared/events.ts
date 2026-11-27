@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { timelineInputCommentSchema } from "./progress/schema";
 
 export const runStateSchema = z.enum([
   "idle",
@@ -67,6 +68,8 @@ export const eventSchema = z.discriminatedUnion("type", [
       text: z.string(),
       images: z.array(z.object({ path: z.string(), media_type: z.string() })),
       origin: originSchema,
+      timeline_comments: z.array(timelineInputCommentSchema).optional(),
+      timeline_legacy_texts: z.array(z.string()).optional(),
       client_ids: z.array(z.string()).optional(),
       queued_ids: z.array(z.string()).optional(),
       client_receipts: z

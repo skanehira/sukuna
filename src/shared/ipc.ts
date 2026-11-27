@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { answersSchema, originSchema, runStateSchema } from "./events";
+import { timelineInputCommentSchema } from "./progress/schema";
 
 export const startConversationSchema = z.object({
   project_id: z.string().min(1),
@@ -17,6 +18,7 @@ export const sendMessageSchema = z.object({
   interrupt: z.boolean(),
   client_id: z.string().min(1),
   origin: originSchema,
+  timeline_comments: z.array(timelineInputCommentSchema).optional(),
 });
 export const forkConversationSchema = z.object({ title: z.string(), kind: z.literal("thread") });
 export const answerSchema = z.object({ request_id: z.string(), answers: answersSchema });

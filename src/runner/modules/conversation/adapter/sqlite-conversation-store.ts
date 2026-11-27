@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
 import { eventSchema, type ConversationEvent, type StoredEvent } from "../../../../shared/events";
 import { nextRunState } from "../domain/run-state";
+import { timelineInputCommentSchema } from "../../../../shared/progress/schema";
 import type {
   Conversation,
   ConversationStore,
@@ -112,15 +113,28 @@ export class SqliteConversationStore implements ConversationStore {
   queue(id: string): QueuedInstruction[] {
     const rows = this.sqlite
       .prepare(
-        "SELECT id, conversation_id AS conversationId, text, images, position, client_id AS clientId, created_at AS createdAt FROM queued_instructions WHERE conversation_id = ? ORDER BY position, rowid",
+        "SELECT id, conversation_id AS conversationId, text, images, position, client_id AS clientId, created_at AS createdAt, timeline_comments AS timelineComments FROM queued_instructions WHERE conversation_id = ? ORDER BY position, rowid",
       )
-      .all(id) as (Omit<QueuedInstruction, "images"> & { images: string })[];
-    return rows.map((r) => ({ ...r, images: JSON.parse(r.images) as string[] }));
+      .all(id) as (Omit<QueuedInstruction, "images" | "timelineComments"> & {
+      images: string;
+      timelineComments: string | null;
+    })[];
+    return rows.map(({ timelineComments, ...r }) => ({
+      ...r,
+      images: JSON.parse(r.images) as string[],
+      ...(timelineComments === null
+        ? {}
+        : {
+            timelineComments: timelineInputCommentSchema
+              .array()
+              .parse(JSON.parse(timelineComments)),
+          }),
+    }));
   }
   enqueue(q: QueuedInstruction): void {
     this.sqlite
       .prepare(
-        "INSERT INTO queued_instructions (id, conversation_id, text, images, position, client_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO queued_instructions (id, conversation_id, text, images, position, client_id, created_at, timeline_comments) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       )
       .run(
         q.id,
@@ -130,6 +144,9 @@ export class SqliteConversationStore implements ConversationStore {
         q.position,
         q.clientId,
         q.createdAt,
+        q.timelineComments === undefined
+          ? null
+          : JSON.stringify(timelineInputCommentSchema.array().parse(q.timelineComments)),
       );
   }
   dequeue(id: string): void {

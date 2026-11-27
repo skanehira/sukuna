@@ -83,7 +83,7 @@ it("開発用ランナーのコマンドを実行すると、全テーブルを�
         "worktrees",
       ]);
       expect(sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get()).toEqual({
-        count: 1,
+        count: 2,
       });
       expect(existsSync(join(home, "db.lock"))).toBe(false);
     } finally {
@@ -205,7 +205,7 @@ it.each(["SIGTERM", "SIGINT"] as const)(
       const sqlite = new Database(join(home, "sukuna.db"), { readonly: true });
       try {
         expect(sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get()).toEqual({
-          count: 1,
+          count: 2,
         });
         expect(existsSync(join(home, "db.lock"))).toBe(false);
       } finally {

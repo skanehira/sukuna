@@ -1,3 +1,8 @@
+import { createConversationProgressHandler } from "./modules/conversation/adapter/progress-routes";
+import { createIssueProgressHandler } from "./modules/flow/adapter/progress-routes";
+import type { ProgressDependencies } from "./modules/conversation/domain/progress-port";
+import type { MessageDependencies } from "./modules/conversation/domain/message-port";
+import { createMessageHandler } from "./modules/conversation/adapter/message-routes";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import type { HealthResponse } from "../shared/api";
@@ -21,6 +26,8 @@ export type AppOptions = {
   build: string;
   identity?: IdentityOptions;
   workspace?: WorkspaceDependencies;
+  progress?: ProgressDependencies;
+  messages?: MessageDependencies;
 };
 
 export function createApp(options: AppOptions): Hono<IdentityEnv> {
@@ -29,6 +36,13 @@ export function createApp(options: AppOptions): Hono<IdentityEnv> {
   const app = new Hono<IdentityEnv>();
 
   app.use("*", createIdentityMiddleware({ resolve: resolveIdentity }));
+  if (options.messages)
+    app.post("/api/conversations/:id/messages", createMessageHandler(options.messages));
+
+  if (options.progress) {
+    app.get("/api/conversations/:id/progress", createConversationProgressHandler(options.progress));
+    app.get("/api/issues/:id/progress", createIssueProgressHandler(options.progress));
+  }
 
   app.get("/api/me", createMeHandler(options.build));
 

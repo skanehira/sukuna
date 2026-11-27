@@ -1,0 +1,1 @@
+ALTER TABLE `queued_instructions` ADD `timeline_comments` text;

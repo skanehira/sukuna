@@ -4,6 +4,7 @@ import type {
   StopReason,
   StoredEvent,
 } from "../../../../shared/events";
+import type { TimelineInputComment } from "../../../../shared/progress/schema";
 export type ConversationKind = "chat" | "triage" | "design" | "impl" | "thread";
 export type Conversation = {
   id: string;
@@ -27,6 +28,7 @@ export type QueuedInstruction = {
   conversationId: string;
   text: string;
   images: string[];
+  timelineComments?: TimelineInputComment[];
   position: number;
   clientId: string | null;
   createdAt: number;

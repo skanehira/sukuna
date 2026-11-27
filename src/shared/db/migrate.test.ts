@@ -12,6 +12,49 @@ function countMigrations(sqlite: Database.Database): number {
 }
 
 describe("マイグレーション", () => {
+  it("構造化コメントの列を足しても既存のキューと会話イベントをそのまま読める", () => {
+    const home = createTempHome();
+    const opened = openDatabase(home);
+    try {
+      expect(applyMigrations(opened.sqlite, migrations.slice(0, 1)).isOk()).toBe(true);
+      opened.sqlite.exec(
+        "INSERT INTO conversations (id, project_id, kind, cwd) VALUES ('c', 'p', 'chat', '/work')",
+      );
+      opened.sqlite.exec(
+        "INSERT INTO queued_instructions (id, conversation_id, text, images, position, client_id, created_at) VALUES ('q', 'c', '旧入力', '[\"image\"]', 1, 'client', 10)",
+      );
+      opened.sqlite
+        .prepare(
+          "INSERT INTO conversation_events (conversation_id, seq, type, payload, created_at) VALUES ('c', 1, 'user_message', ?, 10)",
+        )
+        .run(JSON.stringify({ text: "旧発言", images: [], origin: "developer" }));
+      expect(applyMigrations(opened.sqlite, migrations).isOk()).toBe(true);
+      expect(
+        opened.sqlite
+          .prepare(
+            "SELECT id, conversation_id, text, images, position, client_id, created_at, timeline_comments FROM queued_instructions",
+          )
+          .all(),
+      ).toEqual([
+        {
+          id: "q",
+          conversation_id: "c",
+          text: "旧入力",
+          images: '["image"]',
+          position: 1,
+          client_id: "client",
+          created_at: 10,
+          timeline_comments: null,
+        },
+      ]);
+      expect(opened.sqlite.prepare("SELECT payload FROM conversation_events").all()).toEqual([
+        { payload: JSON.stringify({ text: "旧発言", images: [], origin: "developer" }) },
+      ]);
+    } finally {
+      opened.close();
+      removeTempHome(home);
+    }
+  });
   it("当て済みのデータベースにもう一度当てても、何も変わらない", () => {
     const home = createTempHome();
     const opened = openMigratedDatabase(home);

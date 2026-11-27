@@ -85,7 +85,13 @@ export function createIpcRoutes(
       return result.isErr()
         ? c.json(
             { error: result.error },
-            result.error.code === "conflict" ? 409 : result.error.code === "not_found" ? 404 : 500,
+            result.error.code === "conflict"
+              ? 409
+              : result.error.code === "not_found"
+                ? 404
+                : result.error.code === "invalid_input"
+                  ? 400
+                  : 500,
           )
         : c.json(wireResult(result.value));
     });
@@ -110,6 +116,7 @@ export function createIpcRoutes(
       interrupt: p.interrupt,
       clientId: p.client_id,
       origin: p.origin,
+      timelineComments: p.timeline_comments,
     });
     return result;
   });
