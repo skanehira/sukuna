@@ -245,7 +245,7 @@ issue の会話 (`kind` が `triage` / `design` / `impl`) へ開発者の指示�
   - アプリのツール (`features/issue.md`「AI に渡すツール」)
   - 追加の指示。`features/issue.md`「issue の扱いの追加の指示」の文と、`features/recap.md`「会話の AI が一覧を読む」の文を、どの会話の実行にも渡す
 - ユーザー設定 (`~/.claude` の skills、プラグイン、CLAUDE.md、hooks) は、端末の Claude Code と同じに読み込ませる (DESIGN.md「AI の実行の作り」)
-- 会話の識別子は、会話を作るときにアプリが UUID を作って Agent SDK に渡し、`conversations.session_id` に保存する
+- Agent SDK の会話の識別子は、アプリの会話 ID と分けて持つ。通常の新規会話ではアプリが UUID を作って実行に渡し、`init` を受けてから `conversations.session_id` に保存する。分岐で得た識別子は成立済みとして保存する。保存と再開の規則は、`features/runtime.md`「Agent SDK を包む Port」に従う
 
 ## API
 
@@ -308,7 +308,7 @@ DESIGN.md「API 一覧」のうち本機能の分を書く。エラーの形と�
 
 - `mode` は `send` (作業中なら預ける) / `interrupt` (割り込む) とする
 - `clientMessageId` はタブが送信ごとに作る ULID とする。画面のサーバーは判定せず、ランナーへ `client_id` として渡す
-- ランナーは、同じ会話で同じ `client_id` が 10 分以内に届いたら、何もせずに前の結果を返す。届く前の指示の `client_id` と、記録の `user_message` の `client_ids` (1 通にまとめた指示の `client_id` の配列) で見分ける
+- ランナーは、同じ会話で同じ `client_id` が 10 分以内に届いたら、何もせずに初回の結果を返す。届く前の指示の `client_id` と、`user_message.client_receipts` に残した受付時刻・初回の結果で判定する。`client_ids` と `queued_ids` は、1 通にまとめた指示の番号の一覧として残す。詳しい規則は、`features/runtime.md`「画面のサーバーからランナーへの操作」に従う
 - `text` が空で画像も無いときは、預かった指示が残っていれば「届く前の指示を送る」として扱う
 - 202: `{ "result": "delivered" | "queued", "queueItem": <届く前の指示> | null }`
 - 400 `invalid_input`: 文も画像も預かった指示も無い。画像が 20 枚を超える。画像のファイルが無い

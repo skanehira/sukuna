@@ -176,8 +176,8 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 - 回答の操作の `result` は、質問を待っている会話に答えを返したとき `answered` とする。待ちの消えた質問の回答を指示の文にして送ったときは、指示を送る操作と同じく `delivered` か `queued` とする。`seq` は、記録を書いたときだけ返す
 - `/flow/projects/:id/stop` は、作業中と回答待ち・許可待ちの会話を止める。作業中でない `usage_limited` と `stopped` (`restarted`) の会話も、`stopped` (`user`) にし、利用枠の戻りを待つタイマーを外す
 - `client_id` は、画面が送信ごとに作る ULID である (API の `clientMessageId`)。二重の送信の判定は、ランナーのこの操作の 1 か所だけで行う
-- 同じ会話で、同じ `client_id` が 10 分以内に届いていたら、ランナーは何もせずに前の結果を返す。届いていたかは、届く前の指示の `client_id` と、記録の `user_message` の `client_ids` で調べる
-- 預けた指示は、`client_id` を `queued_instructions.client_id` に持つ。まとめて届けるときは、まとめた指示の `client_id` をすべて `user_message` の `client_ids` に入れる
+- 同じ会話で、同じ `client_id` が 10 分以内に届いていたら、ランナーは何もせずに前の結果を返す。届いていたかは、届く前の指示の `client_id` と、記録の `user_message` の `client_receipts` で調べる
+- 預けた指示は、`client_id` を `queued_instructions.client_id` に持つ。まとめて届けるときは、`user_message.client_receipts` に各指示の `client_id`、受付時刻、初回の結果を対応付けて残す。預けた指示には元の `queued_id` も保存する。番号のない指示は本文に含め、対応付けには含めない。`client_ids` と `queued_ids` は、まとめた指示の番号の一覧として残す
 - 自動フローは同じランナーの中で動くので、これらの操作をソケットを通さずに直接呼ぶ
 - 会話のモジュールは、自動フローだけが呼ぶ口として、段階の会話に止まった記録を書く操作を持つ。`stopped` の記録と `run_state` を 1 つのトランザクションで書く
 - 段階の worktree を作れなかったとき、`flow` はこの口で `stopped` (`reason` は `error`) を書き、会話を `failed` にする。`detail` には worktree を作れなかったことを書く (`features/issue-flow.md`)
@@ -227,7 +227,7 @@ type RunnerNotice =
 
 | `type` | いつ書くか | 主な `payload` |
 | --- | --- | --- |
-| `user_message` | ランナーが AI に指示を送る直前 | `text`、`images`、`origin`、`client_ids?`、`queued_ids?` |
+| `user_message` | ランナーが AI に指示を送る直前 | `text`、`images`、`origin`、`client_ids?`、`queued_ids?`、`client_receipts?` |
 | `assistant_text` | AI の発言が 1 つ終わったとき | `text`、`parent_tool_use_id` |
 | `tool_use` | AI がツールを呼んだとき | `tool_use_id`、`name`、`input`、`parent_tool_use_id` |
 | `tool_result` | ツールの結果が届いたとき | `tool_use_id`、`is_error`、`content`、`truncated`、`bytes` |
@@ -245,6 +245,7 @@ type UserMessage = {
   text: string;
   images: { path: string; media_type: string }[]; // path は SUKUNA_HOME からの相対
   origin: "developer" | "queued" | "interrupt" | "stock" | "resume" | "flow" | "answer_text" | "finish_proposal";
+  client_receipts?: ({ client_id: string; received_at: number } & ({ result: "queued"; queued_id: string } | { result: "delivered" }))[];
   client_ids?: string[]; // 1 通にまとめた指示の client_id (届く前の指示の分を含む)
   queued_ids?: string[]; // まとめて届けた届く前の指示の id
 };
@@ -311,7 +312,7 @@ SDK のメッセージは、まず Port の出力 (「Agent SDK を包む Port�
 | 上のどれでもない `type` | 出さない | 書かない |
 
 - SDK のメッセージの流れには、開発者の指示は出てこない。ランナーは指示を送る直前に `user_message` を自分で書く
-- `sdk_uuid` には、SDK のメッセージの `uuid` を入れる。同じ `uuid` の 2 件目は書かない
+- `sdk_uuid` は SDK の `uuid` に、ブロックの種類と 0 始まりの番号を付けて作る (例: `<uuid>:text:0`)。1 件の SDK メッセージに複数のブロックが入るためである。同じ識別子の 2 件目は書かない。差分は、ツールの結果の識別子に `:diff` を付ける
 - `parent_tool_use_id` がある発言とツールは、サブエージェントのものである。同じ種類で保存し、`parent_tool_use_id` で親のツールの実行に結びつける
 - `tool_result` の `content` は、文字に直して 64 KiB までを保存する。超えた分は切り、`truncated: true` と元の `bytes` を入れる
 - `diff` の `hunks` は合わせて 5,000 行までを保存する。`create` の `content` も 5,000 行までとする。超えた分は切り、`truncated: true` を入れる
@@ -463,6 +464,7 @@ type OpenParams = {
   permissionMode: "bypassPermissions" | "default" | "acceptEdits" | "plan";
   appendSystemPrompt: string; // 追加の指示 (features/conversation.md「AI の実行の設定」)
   appTools: AppTool[];
+  context: { conversationId: string; projectId: string; issueId: string | null };
   onQuestion(req: QuestionRequest): Promise<Record<string, string>>; // 回答がそろうまで保留する
   onPermission(req: PermissionRequest): Promise<{ behavior: "allow" } | { behavior: "deny"; message: string }>;
 };
@@ -490,13 +492,13 @@ type TokenUsage = { inputTokens: number; outputTokens: number; cacheCreationInpu
 
 | 操作 | SDK での作り |
 | --- | --- |
-| 会話の開始 | `query({ prompt: <非同期の入力の流れ>, options })` で開く。`options.sessionId` に UUID を渡す。`init` の `session_id` が違えば、それを保存し直す |
+| 会話の開始 | `query({ prompt: <非同期の入力の流れ>, options })` で開く。`options.sessionId` に UUID を渡す。`conversations.session_id` は `init` を受けるまで空にし、受け取った識別子を保存する。`init` より前に失敗した実行は、新しい会話として開き直す |
 | 再開 | `options.resume` に保存した `session_id`、`cwd` に `conversations.cwd` を渡す。許可の設定・アプリのツールは毎回同じものを渡す |
 | 共通の `options` | `cwd`、`model` (`null` なら渡さない)、`permissionMode` (既定は `bypassPermissions` と `allowDangerouslySkipPermissions: true`)、`includePartialMessages: true`、`canUseTool`、`mcpServers`。`settingSources` は渡さない (端末と同じ設定を読む) |
 | 追加の指示 | `systemPrompt: { type: "preset", preset: "claude_code", append: <appendSystemPrompt> }` で、Claude Code のシステムプロンプトの末尾に足す。再開のたびに同じ文を渡す |
 | 指示の送信 | `{ type: "user", message: { role: "user", content }, parent_tool_use_id: null, origin: { kind: "human" } }` を入力の流れへ足す。画像は base64 の `image` ブロックにする |
 | 停止 | `Query.interrupt()` を呼ぶ。続けて、動いているバックグラウンドのタスクごとに `stopTask(taskId)` を呼ぶ |
-| 分岐 | `forkSession(元の session_id, { dir: 元の cwd })`。返った ID でスレッドの会話の行を先に作り、最初の指示から `resume` で送る |
+| 分岐 | `forkSession(元の session_id, { dir: 元の cwd })`。元の会話の履歴が成立していなければ 409 にする。返った ID は成立済みとしてスレッドの会話の行に保存し、最初の指示から `resume` で送る |
 | 質問への回答 | `canUseTool` の `AskUserQuestion` を `onQuestion` が返すまで保留し、`{ behavior: "allow", updatedInput: { questions, answers } }` を返す |
 | 許可の確認 | `AskUserQuestion` 以外の `canUseTool` は、許可の扱いに関係なく `onPermission` に回し、開発者に確かめる |
 | 候補の一覧 | 実行中なら `supportedCommands()`。実行が無ければ、同じプロジェクトで最後に受けた `init` の一覧を返す |
@@ -598,7 +600,7 @@ interface GhRunner {
 
 **残った子プロセスを止める**: ランナーは、Claude Code の子プロセスを SDK の `spawnClaudeCodeProcess` で起動し、PID を `$SUKUNA_HOME/runner/children` に 1 行ずつ書く。起動時はこのファイルの PID のうち、生きていてコマンドが Claude Code のものに SIGTERM を送る。5 秒たっても残るものには SIGKILL を送り、ファイルを空にする。`spawnClaudeCodeProcess` で PID を取れないときは、`ps` の一覧から、引数に保存済みの `session_id` を含む Claude Code のプロセスを探して止める。
 
-<!-- POC_NEEDED: id=runner-child-cleanup, scope=Claude Code の子プロセスの PID を取り、ランナーの次の起動で止められることを確かめる, risk=medium, blocker=false -->
+子プロセスの PID は `spawnClaudeCodeProcess` の戻り値から取得する。この方法で止めた会話も、保存した識別子で再開する (PoC `runner-child-cleanup`)。
 
 **会話の状態を直す**: 子プロセスを止めたあと、会話ごとに次のように扱う。会話の種類で扱いを分けない。
 
@@ -618,7 +620,7 @@ interface GhRunner {
 
 ### 再開と利用枠の戻り
 
-- 再開の操作は、`resumed` を書き、アプリが決めた文「中断したところから続けてください。」を `user_message` (`origin: "resume"`) として送る
+- 再開の操作は、`resumed` を書き、アプリが決めた文「中断したところから続けてください。」だけを `user_message` (`origin: "resume"`) として送る。届く前の指示は残し、再開した番が正常に終わってから届ける
 - `usage_limited` の会話は、`resets_at` の 1 分後にタイマーで再開する (`resumed` の `by: "usage_limit"`)。その時刻が過ぎていたら、起動の直後に再開する
 - 自動フローの会話 (`triage`、`design`、`impl`) は、再開の前に、再開してよいかを `flow` に問う。一時停止のときと、その段階を自動で処理する段階から外しているときは、`flow` が断り、再開しない。解除か段階を戻したあとの評価が再開を呼ぶ (`features/issue-flow.md`「AI が止まったとき」)
 - `resets_at` が無いときは、15 分ごとに再開を試みる。再開して再び利用枠切れになったら、新しい `resets_at` でタイマーを張り直す
