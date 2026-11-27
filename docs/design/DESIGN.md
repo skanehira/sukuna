@@ -401,7 +401,10 @@ issue の状態の移り変わりは `features/issue-flow.md` の表が正本で
 - 作業中の会話から分岐すると、実行途中のツールの呼び出しが「中断され結果不明」として分岐した側に写る (PoC `agent-sdk-thread`)
 - 利用枠切れは、利用枠の状態を知らせるイベントの「上限に達した」で判定する。発言に付くエラーの種類だけでは判定しない (クレジット不足にも同じ種類が付く)。超過分の利用が許可されているときは利用枠切れと扱わない。クレジットの購入が要る場合は、時刻を待っても戻らないので自動では再開しない。戻る時刻は秒単位で、省略されることがある。無いときは 15 分ごとに再開を試みる (PoC `usage-limit-detect`)
 - 上限に達したときのイベントの実物は、まだ観測していない。実装の初期にログへ残し、上の判定を実物で確かめる
+- React の StrictMode は、開発時に Effect の生成と破棄を追加で繰り返す。入力欄を閉じて本文を返す処理は、終了操作・画面移動・欄の差し替えで行う。エディターの破棄は、入力欄の終了として扱わない ([React 公式ドキュメント](https://react.dev/reference/react/StrictMode#fixing-bugs-found-by-re-running-effects-in-development))
 - CodeMirror のエディターの状態は、開くときに 1 度だけ作る。追記と行の書き換えは transaction の dispatch で行い、状態を作り直さない。読み取り専用は、追記用の印が付いた transaction だけを通す形で作る (PoC `codemirror-vim-buffer`)
+- CodeMirror Vim は、途中まで合う追加キーより、最後まで合う組み込みキーを先に使う。`Space` と `Ctrl+w` は先頭で受け止め、キー列が完成してから Vim に渡す。`f` / `t` などが次の文字を待つ間は、その文字を Vim に直接渡す
+- 同じ worktree で `vp build` と `vp dev` を並行すると、最適化した依存の URL が古くなり、画面の読み込みが 504 になることがある。順に実行し、発生時は `vp dev --force` で再起動する
 - `vp dev` では、Hono の WebSocket の部品が使えない。WebSocket は `ws` の受け口を 1 つ作り、開発と本番の両方から同じものを呼ぶ (PoC `vite-plus-node-stack`)
 - `vp dev` で API のファイルを編集しても、データベースの接続・配信・WebSocket の受け口は作り直さない。プロセスに 1 つのモジュールに置く
 - `vp dev` では Vite が `/api` 以外のパスを配るため、本人の判定を受けるのは API だけになる。本番の起動では画面のサーバーが静的ファイルと SPA の HTML も判定し、本人でなければ拒否の HTML を返す
