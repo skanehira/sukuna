@@ -6,6 +6,8 @@ import { createMeHandler } from "./modules/identity/adapter/routes";
 import { createTailscaleLocalApi } from "./modules/identity/adapter/tailscale-local-api";
 import type { ClockPort, TailscaleLocalApiPort } from "./modules/identity/domain/ports";
 import { createResolveIdentity } from "./modules/identity/usecase/resolve-identity";
+import { createWorkspaceRoutes } from "./modules/workspace/adapter/http";
+import type { WorkspaceDependencies } from "./modules/workspace/domain/ports";
 
 export type IdentityOptions = {
   login: string | undefined;
@@ -18,6 +20,7 @@ export type AppOptions = {
   clientDir?: string;
   build: string;
   identity?: IdentityOptions;
+  workspace?: WorkspaceDependencies;
 };
 
 export function createApp(options: AppOptions): Hono<IdentityEnv> {
@@ -33,6 +36,8 @@ export function createApp(options: AppOptions): Hono<IdentityEnv> {
     const body: HealthResponse = { status: "ok" };
     return c.json(body);
   });
+
+  if (options.workspace) app.route("/api/conversations", createWorkspaceRoutes(options.workspace));
 
   if (options.clientDir !== undefined) {
     const serveClient = serveStatic({ root: options.clientDir });
