@@ -43,6 +43,7 @@ export type WindowHandle = {
   focus(): void;
   lines(): LineInfo[];
   position(): SavedPosition;
+  selectionLines?(): [number, number] | undefined;
   place(position: SavedPosition): void;
   view: string;
   name: string;
@@ -322,7 +323,13 @@ export class BufferController {
   }
   context(side = this.state.active): ActionContext {
     const window = this.window(side);
-    return { window: side, view: window?.view ?? "", line: window?.position().line ?? 0 };
+    const range = window?.selectionLines?.();
+    return {
+      window: side,
+      view: window?.view ?? "",
+      line: window?.position().line ?? 0,
+      ...(range && window ? { selectedLines: window.lines().slice(range[0], range[1] + 1) } : {}),
+    };
   }
   async run(name: string, context = this.context()): Promise<void> {
     const action = this.actions.get(name);
@@ -393,6 +400,7 @@ export class BufferController {
       return;
     }
     if (!chosen?.line) return;
+    const source = this.context(side);
     if (number) handle.place({ line: chosen.index, column: 0, topLine: chosen.index });
     const { line } = chosen;
     if (line.open) {
@@ -408,13 +416,16 @@ export class BufferController {
           this.update({});
         });
     } else if (line.action) {
+      const context = this.context(side);
+      if (number)
+        context.selectedLines = source.selectedLines ?? lines.slice(source.line, source.line + 1);
       if (this.actions.get(line.action)?.confirm) {
-        void this.run(line.action, this.context(side));
+        void this.run(line.action, context);
         return;
       }
       this.pending.add(side);
       this.update({});
-      void this.run(line.action, this.context(side)).finally(() => {
+      void this.run(line.action, context).finally(() => {
         this.pending.delete(side);
         this.update({});
       });

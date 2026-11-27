@@ -77,6 +77,7 @@ export const defaultKeymap: KeymapEntry[] = [
     ["<Space>q", "files.diff-question"],
     ["<Space>c", "files.diff-instruct"],
     [":", "cmdline"],
+    ["<CR>", "github-import.selected"],
   ].map(([keys, action]): KeymapEntry => ({ keys, context: "visual", to: { action } })),
   { keys: "<CR>", context: "prompt", to: { action: "prompt.submit" } },
   { keys: "<A-CR>", context: "prompt", to: { action: "prompt.interrupt" } },

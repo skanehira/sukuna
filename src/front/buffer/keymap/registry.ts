@@ -1,3 +1,4 @@
+import type { LineInfo } from "../line";
 import type { KeymapConfig, KeymapEntry } from "../../../shared/settings/keymap-schema";
 export type { KeymapConfig, KeymapEntry } from "../../../shared/settings/keymap-schema";
 
@@ -8,7 +9,13 @@ export type HelpGroup =
   | "質問と指示"
   | "状況を思い出す"
   | "そのほか";
-export type ActionContext = { view: string; window: string; line: number; text?: string };
+export type ActionContext = {
+  view: string;
+  window: string;
+  line: number;
+  text?: string;
+  selectedLines?: readonly LineInfo[];
+};
 export type ActionInfo = {
   name: string;
   label: string;

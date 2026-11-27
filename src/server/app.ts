@@ -1,3 +1,9 @@
+import {
+  createGithubImportRoutes,
+  type createGithubImportDependencies,
+} from "./modules/issue/adapter/github-import-routes";
+import { createUsageRoutes } from "./modules/conversation/adapter/usage-routes";
+import type { UsageDependencies } from "./modules/conversation/usecase/get-usage";
 import { createProjectRoutes } from "./modules/workspace/adapter/project-routes";
 import type { ProjectDependencies } from "./modules/workspace/domain/project-settings";
 import { createDesignRoutes } from "./modules/flow/adapter/design-routes";
@@ -45,6 +51,8 @@ export type { IdentityOptions } from "./modules/identity/adapter/options";
 
 export type AppOptions = {
   projects?: ProjectDependencies;
+  githubImport?: ReturnType<typeof createGithubImportDependencies>;
+  usage?: UsageDependencies;
   pr?: PrDependencies;
   clientDir?: string;
   build: string;
@@ -100,6 +108,8 @@ export function createApp(options: AppOptions): Hono<IdentityEnv> {
 
   if (options.pr) app.route("/api", createPrRoutes(options.pr));
   if (options.design) app.route("/api", createDesignRoutes(options.design));
+  if (options.githubImport) app.route("/api", createGithubImportRoutes(options.githubImport));
+  if (options.usage) app.route("/api", createUsageRoutes(options.usage));
   if (options.issues) app.route("/api", createIssueRoutes(options.issues));
   if (options.recap) app.route("/api/conversations", createRecapRoutes(options.recap));
 

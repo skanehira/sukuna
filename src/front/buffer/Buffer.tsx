@@ -401,6 +401,14 @@ export function Buffer({
           ...(info?.seqLine === undefined ? {} : { seqLine: info.seqLine }),
         };
       },
+      selectionLines() {
+        const selection = view.state.selection.main;
+        if (selection.empty) return undefined;
+        return [
+          view.state.doc.lineAt(selection.from).number - 1,
+          view.state.doc.lineAt(selection.to - 1).number - 1,
+        ];
+      },
       place: (position) => {
         const lines = view.state.field(bufferField).lines;
         const byId = position.id ? lines.findIndex((line) => line.id === position.id) : -1;
