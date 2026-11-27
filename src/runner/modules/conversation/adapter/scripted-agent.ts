@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as wait } from "node:timers/promises";
 import { ok } from "neverthrow";
 import { agentScriptSchema, type AgentScript } from "../../../../shared/agent-script";
 import { AsyncQueue } from "../../../../shared/async-queue";
@@ -57,21 +58,24 @@ export class ScriptedAgent implements AgentPort {
     let cancelled = false;
     let release: (() => void) | null = null;
     let running = Promise.resolve();
-    let shellAbort = new AbortController();
+    let turnAbort = new AbortController();
+    const emitText = (text: string) => {
+      output.push({ kind: "text_delta", text, parentToolUseId: null });
+      output.push({ kind: "assistant_text", uuid: this.uuid(), text, parentToolUseId: null });
+    };
     const play = async (text: string) => {
       const steps = this.script.rules.find((r) => new RegExp(r.match).test(text))?.steps ??
         this.script.fallback ?? [{ end: "success" }];
       let ended = false;
       for (const step of steps) {
         if (cancelled) break;
-        if ("text" in step) {
-          output.push({ kind: "text_delta", text: step.text, parentToolUseId: null });
-          output.push({
-            kind: "assistant_text",
-            uuid: this.uuid(),
-            text: step.text,
-            parentToolUseId: null,
-          });
+        if ("text" in step) emitText(step.text);
+        if ("stream" in step) {
+          const { prefix, count, interval_ms: interval } = step.stream;
+          for (let index = 1; index <= count; index++) {
+            await wait(interval, undefined, { signal: turnAbort.signal });
+            emitText(prefix + index);
+          }
         }
         if ("tool" in step || "shell" in step) {
           const id = this.uuid();
@@ -90,7 +94,7 @@ export class ScriptedAgent implements AgentPort {
           if ("shell" in step) {
             const result = await runCommand("/bin/sh", ["-c", step.shell], {
               cwd: params.cwd,
-              signal: shellAbort.signal,
+              signal: turnAbort.signal,
             });
             content = result.stdout + result.stderr;
             isError = result.exitCode !== 0;
@@ -159,21 +163,21 @@ export class ScriptedAgent implements AgentPort {
       send: ({ text }) => {
         this.sent.push({ sessionId: params.sessionId, text });
         cancelled = false;
-        shellAbort = new AbortController();
+        turnAbort = new AbortController();
         running = play(text).catch(() => {
           output.push(turnEnd("error_during_execution"));
         });
       },
       interrupt: async () => {
         cancelled = true;
-        shellAbort.abort();
+        turnAbort.abort();
         release?.();
         await running;
       },
       commands: () => Promise.resolve([]),
       close: () => {
         cancelled = true;
-        shellAbort.abort();
+        turnAbort.abort();
         release?.();
         output.close();
       },

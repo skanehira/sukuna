@@ -381,3 +381,33 @@ it("同じ会話を2か所が購読すると片方を閉じても残りへ配信
     vi.useRealTimers();
   }
 });
+
+it("最初のソケットが失敗しても次の成立時に確認し、閉じた接続の確認は停止する", () => {
+  vi.useFakeTimers();
+  const verify = vi.fn<(signal: AbortSignal) => Promise<boolean>>(() => new Promise(() => {}));
+  const s = setup(verify);
+  try {
+    s.realtime.start();
+    s.sockets[0]?.close();
+    expect(verify).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(500);
+    s.sockets[1]?.open();
+    expect(verify).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal));
+    const first = verify.mock.calls[0]![0];
+    expect(first.aborted).toBe(false);
+    s.sockets[1]?.close();
+    expect(first.aborted).toBe(true);
+    vi.advanceTimersByTime(1000);
+    s.sockets[1]?.open();
+    expect(verify).toHaveBeenCalledTimes(1);
+    s.sockets[2]?.open();
+    expect(verify).toHaveBeenCalledTimes(2);
+    const current = verify.mock.calls[1]![0];
+    expect(current.aborted).toBe(false);
+    s.realtime.stop();
+    expect(current.aborted).toBe(true);
+  } finally {
+    s.realtime.stop();
+    vi.useRealTimers();
+  }
+});

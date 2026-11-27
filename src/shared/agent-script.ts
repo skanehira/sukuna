@@ -3,6 +3,13 @@ import { hunkSchema, questionsSchema } from "./events";
 const stepSchema = z.union([
   z.object({ text: z.string() }),
   z.object({
+    stream: z.object({
+      prefix: z.string(),
+      count: z.number().int().positive(),
+      interval_ms: z.number().int().positive(),
+    }),
+  }),
+  z.object({
     tool: z.string(),
     input: z.unknown(),
     result: z.string().default(""),

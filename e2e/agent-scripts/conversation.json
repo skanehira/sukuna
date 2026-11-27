@@ -1,6 +1,13 @@
 {
   "rules": [
     {
+      "match": "^E2E performance [0-9]+$",
+      "steps": [
+        { "stream": { "prefix": "連続出力 ", "count": 300, "interval_ms": 100 } },
+        { "end": "success" }
+      ]
+    },
+    {
       "match": "^予約 API を作って$",
       "steps": [
         { "text": "確認したいことが2点あります。" },

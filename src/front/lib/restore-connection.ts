@@ -64,8 +64,15 @@ export function createRestoreConnection({
   return {
     readIdentity,
     request,
-    verify: async (signal?: AbortSignal) =>
-      (await readIdentity("/api/me", signal)).ok && !reloading && !signal?.aborted,
+    async verify(
+      signal?: AbortSignal,
+      onVerified?: (response: Response, signal?: AbortSignal) => Promise<void>,
+    ) {
+      const response = await readIdentity("/api/me", signal);
+      if (!response.ok || reloading || signal?.aborted) return false;
+      await onVerified?.(response, signal);
+      return !reloading && !signal?.aborted;
+    },
     reloading: () => reloading,
   };
 }
