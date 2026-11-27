@@ -16,6 +16,7 @@ import {
   getConversationDependencies,
   getPtySessions,
 } from "./runtime";
+import { createProjectDependencies } from "./modules/workspace/adapter/project-dependencies";
 import { createWorktreeDependencies } from "./modules/workspace/adapter/worktree-dependencies";
 import { createWorkspaceDependencies } from "./modules/workspace/adapter/dependencies";
 import { ulid } from "ulid";
@@ -54,6 +55,10 @@ export default createApp({
     (issueId, projectId) =>
       getWsHub().notice({ kind: "issue", issue_id: issueId, project_id: projectId, seq: 0 }),
   ),
+  projects: createProjectDependencies(getDatabase, {
+    runner: getRunnerLink,
+    changed: (id) => getWsHub().notice({ kind: "project", project_id: id }),
+  }),
   worktrees: createWorktreeDependencies(getDatabase, { terminals: getPtySessions() }),
   recap: createRecapDependencies(
     () => getDatabase().db,

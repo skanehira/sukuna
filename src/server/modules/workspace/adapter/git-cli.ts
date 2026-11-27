@@ -280,3 +280,62 @@ export function createPrGitCli(runner: GitRunner = createGitCli()): PrGitPort {
     },
   };
 }
+
+export function createProjectGit(git: GitRunner): import("../domain/project-settings").ProjectGit {
+  const read = async (cwd: string, ...args: string[]) => {
+    const result = await git.run(args, { cwd });
+    return result.exitCode === 0 ? result.stdout.replace(/\n$/, "") : null;
+  };
+  const symbolic = (cwd: string, ref: string) => read(cwd, "symbolic-ref", "--quiet", ref);
+  const refResolves = async (cwd: string, ref: string) =>
+    (await read(cwd, "show-ref", "--verify", "--quiet", ref)) !== null &&
+    (await read(cwd, "rev-parse", "--verify", "--quiet", `${ref}^{commit}`)) !== null;
+  return {
+    async locate(cwd) {
+      const path = await read(cwd, "rev-parse", "--show-toplevel");
+      if (!path)
+        return err({
+          code: "not_a_repository",
+          message: `Git のリポジトリではありません: ${cwd}。リポジトリのパスを指定してください`,
+        });
+      const [gitDir, commonDir] = await Promise.all([
+        read(path, "rev-parse", "--path-format=absolute", "--git-dir"),
+        read(path, "rev-parse", "--path-format=absolute", "--git-common-dir"),
+      ]);
+      if (!gitDir || !commonDir)
+        return err({ code: "invalid_input", message: "Git の作業場所を確認できませんでした。" });
+      if (gitDir === commonDir) return ok({ path, repositoryPath: path });
+      const listing = await read(path, "worktree", "list", "--porcelain", "-z");
+      const first = listing?.split("\0", 1)[0];
+      if (!first?.startsWith("worktree "))
+        return err({
+          code: "invalid_input",
+          message: "Git のリポジトリ本体を確認できませんでした。",
+        });
+      return ok({ path, repositoryPath: first.slice("worktree ".length) });
+    },
+    async defaultBranch(cwd, usesGithub) {
+      const remoteRoot = "refs/remotes/origin/";
+      if (usesGithub) {
+        const remote = await symbolic(cwd, `${remoteRoot}HEAD`);
+        if (remote?.startsWith(remoteRoot) && (await refResolves(cwd, remote)))
+          return ok(remote.slice(remoteRoot.length));
+      }
+      const head = await symbolic(cwd, "HEAD");
+      return head?.startsWith("refs/heads/")
+        ? ok(head.slice("refs/heads/".length))
+        : err({
+            code: "invalid_input",
+            message: "既定ブランチが見つかりません。リポジトリ本体でブランチを開いてください。",
+          });
+    },
+    async hasBranch(cwd, branch, usesGithub) {
+      if (branch === "HEAD") return false;
+      return (
+        (await refResolves(cwd, `refs/heads/${branch}`)) ||
+        (usesGithub && (await refResolves(cwd, `refs/remotes/origin/${branch}`)))
+      );
+    },
+    origin: (cwd) => read(cwd, "remote", "get-url", "origin"),
+  };
+}

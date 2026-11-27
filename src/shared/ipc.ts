@@ -48,6 +48,9 @@ export const workspaceSchema = z.object({
   worktree_id: z.string().min(1).nullable().optional(),
   attempt: workspaceSwitchAttemptSchema.optional(),
 });
+export const projectStopResponseSchema = z.object({
+  stopped_conversation_ids: z.array(z.string()),
+});
 export const flowNotifySchema = z.object({
   project_id: z.string().optional(),
   issue_id: z.string().optional(),

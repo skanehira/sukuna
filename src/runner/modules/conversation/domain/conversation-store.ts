@@ -41,10 +41,12 @@ export type QueuedInstruction = {
 export type SendResult =
   | { result: "delivered"; seq: number }
   | { result: "queued"; queuedId: string };
+export type ProjectRunReservation = { readonly projectId: string; release(): void };
 export interface ConversationStore {
   transaction<T>(operation: () => T): T;
   withWorktreeReservation<T>(operation: (reservation: WorktreeActivityReservation) => T): T;
   withWorkspace<T>(id: string, operation: (worktreeId: string | null) => T): T;
+  reserveProjectRun(projectId: string): ProjectRunReservation;
   withWorkspaceSwitch<T>(
     id: string,
     targetWorktreeId: string | null,
@@ -87,3 +89,11 @@ export class ConversationWorkspaceChanged extends Error {
     super("作業場所が変わりました。worktree の一覧を読み直してから、もう一度操作してください");
   }
 }
+
+export class ProjectRunBlocked extends Error {
+  constructor() {
+    super("プロジェクトの登録を解除しました。または解除中です。登録の状態を確認してください。");
+  }
+}
+
+export class ProjectRunBusy extends ProjectRunBlocked {}

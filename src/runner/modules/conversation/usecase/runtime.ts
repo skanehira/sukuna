@@ -1,6 +1,6 @@
 import { RunOptions } from "./run-options";
 import type { CommandCache } from "../domain/agent-port";
-import { ConversationWorkspaceChanged } from "../domain/conversation-store";
+import { ConversationWorkspaceChanged, ProjectRunBlocked } from "../domain/conversation-store";
 import { WorktreeActivityBusy } from "../../../../shared/workspace/worktree-activity";
 import { RUNNER_IPC_TIMEOUT_MS, STOCK_SEND_SETTLEMENT_TIMEOUT_MS } from "../../../../shared/ipc";
 import { deliverQueue } from "./deliver-queue";
@@ -24,7 +24,12 @@ import type {
 } from "../domain/agent-port";
 import type { ImagePort, LoadedImage } from "../domain/image-port";
 import type { Clock } from "../domain/clock";
-import type { Conversation, ConversationStore, SendResult } from "../domain/conversation-store";
+import type {
+  Conversation,
+  ConversationStore,
+  ProjectRunReservation,
+  SendResult,
+} from "../domain/conversation-store";
 import { classifyStop, type RateLimit } from "../domain/stop-reason";
 import { outputEvents } from "../domain/event-mapping";
 import type { ConversationEvent, StoredEvent, Origin, RunState } from "../../../../shared/events";
@@ -71,6 +76,15 @@ export type SendInput = {
   interrupt?: boolean;
   origin: Origin;
   timelineComments?: TimelineInputComment[];
+};
+type DeliveryOptions = {
+  includeQueued?: boolean;
+  interrupt?: boolean;
+  omitMissingImages?: boolean;
+  reopensAfterAcceptance?: boolean;
+  projectRun?: ProjectRunReservation;
+  newConversation?: Conversation;
+  recordOpeningFailure?: boolean;
 };
 export type InputAcceptance = {
   events: ConversationEvent[];
@@ -160,7 +174,11 @@ export class ConversationRuntime {
   ): Promise<Result<T, E | OperationError>> {
     const previous = this.operations.get(id) ?? Promise.resolve();
     const next = previous.then(operation).catch((error: unknown) => {
-      if (error instanceof WorktreeActivityBusy || error instanceof ConversationWorkspaceChanged)
+      if (
+        error instanceof WorktreeActivityBusy ||
+        error instanceof ConversationWorkspaceChanged ||
+        error instanceof ProjectRunBlocked
+      )
         return err<T, OperationError>(conflict(error.message));
       this.log(id, "会話の操作に失敗しました。", error);
       return err<T, OperationError>({
@@ -262,17 +280,29 @@ export class ConversationRuntime {
     id: string,
     input: SendInput,
     acceptance?: InputAcceptance,
-    options: {
-      includeQueued?: boolean;
-      interrupt?: boolean;
-      omitMissingImages?: boolean;
-      reopensAfterAcceptance?: boolean;
-      newConversation?: Conversation;
-      recordOpeningFailure?: boolean;
-    } = {},
+    options: DeliveryOptions = {},
+  ): Promise<Result<SendResult, OperationError>> {
+    const c = options.newConversation ?? this.store.get(id);
+    if (!c) throw new Error("会話がありません。");
+    if (options.projectRun) {
+      if (options.projectRun.projectId !== c.projectId)
+        throw new Error("プロジェクトが一致しません。");
+      return this.deliverWithProjectRun(id, input, acceptance, options);
+    }
+    const reservation = this.store.reserveProjectRun(c.projectId);
+    try {
+      return await this.deliverWithProjectRun(id, input, acceptance, options);
+    } finally {
+      reservation.release();
+    }
+  }
+  private async deliverWithProjectRun(
+    id: string,
+    input: SendInput,
+    acceptance: InputAcceptance | undefined,
+    options: DeliveryOptions,
   ): Promise<Result<SendResult, OperationError>> {
     const { newConversation } = options;
-    if (!newConversation && !this.store.get(id)) throw new Error("会話がありません。");
     const prepare = () => {
       const includeQueued = options.includeQueued ?? true;
       const queued = includeQueued ? this.store.queue(id) : [];
@@ -689,12 +719,21 @@ export class ConversationRuntime {
     const c = this.store.get(id);
     if (!c || c.runState !== "usage_limited") return;
     if (c.closedAt !== null && this.reopenWait(c, reopening ?? null) === 0) return;
-    const sameStop = () => !reopening || this.store.latestStopSeq(id) === reopening.stopSeq;
+    const stopSeq = reopening?.stopSeq ?? this.store.latestStopSeq(id);
+    const sameStop = () => this.store.latestStopSeq(id) === stopSeq;
     this.timers.schedule(
       id,
       c.resetsAt,
       async (current) => {
-        await this.resume(id, "usage_limit", { usageTimerCurrent: () => current() && sameStop() });
+        let projectBusy = false;
+        await this.resume(id, "usage_limit", {
+          usageTimerCurrent: () => current() && sameStop(),
+          onProjectBusy: () => {
+            projectBusy = true;
+          },
+        });
+        const latest = this.store.get(id);
+        if (projectBusy && latest?.runState === "usage_limited" && sameStop()) return 250;
       },
       reopening
         ? () => {

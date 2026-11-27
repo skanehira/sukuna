@@ -22,6 +22,7 @@ import {
 } from "../../stock/usecase/propose-thread-finish";
 import { cancelledStockSend } from "../../stock/usecase/stock-send-refused";
 import type { StockSendResponse } from "../../../../shared/stock";
+import { stopProject } from "../../flow/usecase/stop-project";
 import type { Logger } from "../../../../shared/log";
 import type { ConversationRuntime, DeliveryError, OperationError } from "../usecase/runtime";
 
@@ -222,6 +223,9 @@ export function createIpcRoutes(
   const rebuildRecap = extensions.rebuildRecap;
   if (rebuildRecap)
     route("/conversations/:id/recap/rebuild", empty, (id) => Promise.resolve(rebuildRecap(id)));
+  route("/flow/projects/:id/stop", empty, (id, _body, _params, callerCancelled) =>
+    stopProject(runtime, id, callerCancelled),
+  );
   if (extensions.flow) app.route("/flow", extensions.flow);
   app.get("/health", (c) => c.json(health));
   return app;
