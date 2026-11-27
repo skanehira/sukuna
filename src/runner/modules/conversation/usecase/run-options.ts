@@ -5,6 +5,7 @@ import type { OpenParams } from "../domain/agent-port";
 import type { DeliveryError, SendInput } from "./runtime";
 export class RunOptions {
   private providers: ((conversation: Conversation) => string)[] = [];
+  private directories: ((conversation: Conversation) => string[])[] = [];
   private guards: ((
     conversation: Conversation,
     input: SendInput,
@@ -18,6 +19,9 @@ export class RunOptions {
   registerInstructions(provider: (conversation: Conversation) => string): void {
     this.providers.push(provider);
   }
+  registerAdditionalDirectories(provider: (conversation: Conversation) => string[]): void {
+    this.directories.push(provider);
+  }
   registerDeliveryGuard(
     guard: (
       conversation: Conversation,
@@ -28,8 +32,15 @@ export class RunOptions {
   }
   build(
     conversation: Conversation,
-  ): Pick<OpenParams, "cwd" | "model" | "permissionMode" | "appendSystemPrompt" | "appTools"> {
+  ): Pick<
+    OpenParams,
+    "cwd" | "model" | "permissionMode" | "appendSystemPrompt" | "appTools" | "additionalDirectories"
+  > {
+    const directories = [
+      ...new Set(this.directories.flatMap((provider) => provider(conversation))),
+    ];
     return {
+      ...(directories.length ? { additionalDirectories: directories } : {}),
       cwd: conversation.cwd,
       appTools: this.tools.all(conversation.kind),
       ...this.store.projectOptions(conversation.projectId),

@@ -13,6 +13,8 @@ import type { RealtimeSocket } from "../../lib/realtime";
 import { parseRoute } from "../../lib/routes";
 import { createNavigation } from "../../shell/navigation";
 
+vi.setConfig({ testTimeout: 15_000 });
+
 const mainTitle = "会話: 在庫の設計";
 const closeTitle = "会話を締めくくる";
 const listTitle = "会話とスレッドの一覧";

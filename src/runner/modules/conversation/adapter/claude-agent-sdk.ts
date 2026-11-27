@@ -65,6 +65,9 @@ export class ClaudeAgentSdk implements AgentPort {
       prompt: input,
       options: {
         cwd: params.cwd,
+        ...(params.additionalDirectories
+          ? { additionalDirectories: params.additionalDirectories }
+          : {}),
         ...(params.resume ? { resume: params.sessionId } : { sessionId: params.sessionId }),
         ...(params.model === null ? {} : { model: params.model }),
         permissionMode: params.permissionMode,
@@ -171,7 +174,11 @@ export class ClaudeAgentSdk implements AgentPort {
     let text = "";
     let inputTokens = 0;
     let outputTokens = 0;
+    const controller = new AbortController();
+    const abort = () => controller.abort(params.signal?.reason);
+    params.signal?.addEventListener("abort", abort, { once: true });
     try {
+      params.signal?.throwIfAborted();
       run = this.sdk.query({
         prompt: params.prompt,
         options: {
@@ -184,6 +191,7 @@ export class ClaudeAgentSdk implements AgentPort {
           maxTurns: 1,
           effort: "low",
           sessionId: randomUUID(),
+          ...(params.signal ? { abortController: controller } : {}),
           spawnClaudeCodeProcess: this.spawnProcess,
         },
       });
@@ -208,6 +216,7 @@ export class ClaudeAgentSdk implements AgentPort {
     } catch (error) {
       return err({ message: error instanceof Error ? error.message : "AI の要約に失敗しました。" });
     } finally {
+      params.signal?.removeEventListener("abort", abort);
       run?.close();
     }
   }

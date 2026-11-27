@@ -17,7 +17,10 @@ export interface DecisionFileStore {
     projectPath: string,
     conversationId: string,
     title: string,
-    transform: (content: string) => string,
+    transform: (
+      content: string,
+      currentHash: string | null,
+    ) => string | { content: string; prepare(): void; cancel(): void },
     baseHash?: string | null,
   ): Result<DecisionSnapshot, RecapError>;
 }

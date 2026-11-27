@@ -28,6 +28,13 @@ import { createIssueDataUnitOfWork } from "../server/modules/issue/adapter/issue
 import { registerIssueTools, unavailableIssueReports } from "./modules/issue/adapter/app-tools";
 import type { IssueReportsPort } from "./modules/issue/domain/ports";
 import { createIssueOpsHandler } from "./modules/flow/adapter/issue-ops-handler";
+import { createDecisionFileStore } from "../shared/recap/decision-file-store";
+import { pendingRecapFiles } from "./modules/recap/adapter/pending-recap-files";
+import { createRunnerRecapRepository } from "./modules/recap/adapter/repository";
+import { createSummarizer } from "./modules/recap/adapter/summarizer";
+import { recapRead, registerRecapInstructions } from "./modules/recap/adapter/recap-tool";
+import type { SummarizerPort } from "./modules/recap/domain/summarizer-port";
+import { RecapUpdates } from "./modules/recap/usecase/update-recap";
 
 export async function startRunnerApp(options: {
   database: OpenedDatabase;
@@ -38,6 +45,7 @@ export async function startRunnerApp(options: {
   children?: ChildProcesses;
   ipc?: IpcExtensions;
   issueReports?: IssueReportsPort;
+  summarizer?: SummarizerPort;
 }) {
   const { environment: env, database, log } = options;
   const socket = await reserveRunnerSocket(env.socket);
@@ -93,7 +101,29 @@ export async function startRunnerApp(options: {
         });
       },
     });
+    const recapRepository = createRunnerRecapRepository(database.db);
+    const files = createDecisionFileStore();
+    const recap = new RecapUpdates({
+      repository: recapRepository,
+      files,
+      pending: pendingRecapFiles(env.home),
+      summarizer: options.summarizer ?? createSummarizer(agent),
+      clock,
+      id: ulid,
+      uuid: randomUUID,
+      changed: (id) =>
+        changes.publish({ kind: "conversation_parts", conversation_id: id, parts: ["recap"] }),
+      failure: (id, error) =>
+        log({
+          level: "warn",
+          component: "runner.recap",
+          conversation_id: id,
+          message: "会話の目次と決まったことを更新できませんでした。",
+          error,
+        }),
+    });
     runtime.runOptions.registerInstructions(issueInstructions);
+    registerRecapInstructions(runtime.runOptions, recapRepository);
     runtime.subscribe((signal) => {
       const conversation = runtime.store.get(signal.conversationId);
       if (signal.type === "parts")
@@ -102,6 +132,7 @@ export async function startRunnerApp(options: {
           conversation_id: signal.conversationId,
           parts: signal.parts,
         });
+      if (signal.type === "turnEnded") recap.enqueue(signal.conversationId, signal.endSeq);
       if (signal.type === "delta") changes.delta(signal.conversationId, signal.text);
       if (signal.type === "event" && conversation) {
         if (signal.event.type === "assistant_text" || signal.event.type === "turn_end")
@@ -143,6 +174,7 @@ export async function startRunnerApp(options: {
       flow: issueOps,
       reports: options.issueReports ?? unavailableIssueReports,
     });
+    runtime.tools.register(recapRead(recapRepository, files));
     recover(runtime);
     const routes = createIpcRoutes(
       runtime,
@@ -159,19 +191,21 @@ export async function startRunnerApp(options: {
           ),
         ...options.ipc,
         flow: createIssueOpsHandler(issueOps),
+        rebuildRecap: (id) => recap.rebuild(id),
         allowMerge: createRunnerAllowMerge(database.db, runtime, {
           publish: (notice) => changes.publish(notice),
         }),
       },
     );
     socket.activate(routes, changes);
+    recap.recover();
     return {
       runtime,
       changes,
       gh: createGhRunner(env.ghScript),
       shutdown: async () => {
         socket.stopAccepting();
-        await runtime.shutdown();
+        await Promise.all([runtime.shutdown(), recap.stop()]);
         changes.close();
         await socket.close();
       },

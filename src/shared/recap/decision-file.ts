@@ -34,6 +34,17 @@ export function parseDecisionLine(line: string): DecisionItem | null {
   return decisionItemSchema.safeParse(item).success ? item : null;
 }
 const versionMarker = "<!-- sukuna-decisions:v2 -->";
+const recapHeader =
+  /^<!-- sukuna-decisions:v3 recap=([1-9]\d*):([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}) -->$/;
+export type DecisionRecap = { endSeq: number; token: string };
+
+export function readDecisionRecap(content: string): DecisionRecap | undefined {
+  const [head] = content.split(/\r?\n/, 1);
+  const match = recapHeader.exec(head);
+  if (!match) return undefined;
+  const endSeq = Number(match[1]);
+  return Number.isSafeInteger(endSeq) ? { endSeq, token: match[2] } : undefined;
+}
 function parseQuotedDecisionLine(line: string): DecisionItem | null {
   const match =
     /^- \[(決定|棄却|保留)\] (D[1-9]\d*): ("(?:[^"\\\r\n]|\\[^\r\n])*")(?: — ("(?:[^"\\\r\n]|\\[^\r\n])*"))?(?: → (D[1-9]\d*))?(?: <!-- seq=(\d+) -->)?$/.exec(
@@ -98,7 +109,7 @@ function documentLines(content: string): DocumentLine[] {
     protected: false,
     item: null,
   }));
-  const quoted = lines[0]?.body === versionMarker;
+  const quoted = lines[0]?.body === versionMarker || readDecisionRecap(content) !== undefined;
   if (quoted) {
     lines[0].control = true;
     const entries = provenance(lines[1]?.body ?? "");
@@ -152,7 +163,11 @@ export function nextDecisionId(content: string): string {
   }, 0n);
   return `D${maximum + 1n}`;
 }
-export function replaceDecisionItems(content: string, items: DecisionItem[]): string {
+export function replaceDecisionItems(
+  content: string,
+  items: DecisionItem[],
+  recap = readDecisionRecap(content),
+): string {
   if (content === "" && items.length === 0) return "";
   const lines = documentLines(content);
   const newline = content.includes("\r\n") ? "\r\n" : "\n";
@@ -203,5 +218,8 @@ export function replaceDecisionItems(content: string, items: DecisionItem[]): st
         JSON.stringify(entries).replaceAll("<", "\\u003c").replaceAll(">", "\\u003e") +
         " -->" +
         newline;
-  return versionMarker + newline + metadata + updated;
+  const header = recap
+    ? `<!-- sukuna-decisions:v3 recap=${recap.endSeq}:${recap.token} -->`
+    : versionMarker;
+  return header + newline + metadata + updated;
 }

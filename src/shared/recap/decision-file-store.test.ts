@@ -50,6 +50,84 @@ describe("決まったことのファイルの保存", () => {
     expect(readFileSync(file, "utf8")).toBe(content);
     expect(readdirSync(dirname(file))).toEqual(["c.md"]);
   });
+  const token = "550e8400-e29b-41d4-a716-446655440000";
+  const updatedRecap = { endSeq: 6, token: "550e8400-e29b-41d4-a716-446655440001" };
+  const updatedHeader = "<!-- sukuna-decisions:v3 recap=6:550e8400-e29b-41d4-a716-446655440001 -->";
+  const nextItem = { ...item, id: "D2", text: "新しい方針", seq: 5 };
+  it.each([
+    ["seq が 0", `<!-- sukuna-decisions:v3 recap=0:${token} -->`],
+    ["seq が 0 で始まる", `<!-- sukuna-decisions:v3 recap=03:${token} -->`],
+    ["seq が安全な整数の範囲外", `<!-- sukuna-decisions:v3 recap=9007199254740992:${token} -->`],
+    [
+      "UUID に大文字がある",
+      "<!-- sukuna-decisions:v3 recap=3:550E8400-e29b-41d4-a716-446655440000 -->",
+    ],
+    ["UUID v5", "<!-- sukuna-decisions:v3 recap=3:550e8400-e29b-51d4-a716-446655440000 -->"],
+    [
+      "UUID の variant が異なる",
+      "<!-- sukuna-decisions:v3 recap=3:550e8400-e29b-41d4-7716-446655440000 -->",
+    ],
+    ["行末に空白がある", `<!-- sukuna-decisions:v3 recap=3:${token} --> `],
+  ])("先頭の印が %s なら、手書き行を残して決定を追加する", (_scenario, handwritten) => {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, handwritten + "\n- [決定] D1: 決めたこと <!-- seq=4 -->\n");
+    const store = createDecisionFileStore();
+
+    expect(store.read(root, "c")._unsafeUnwrap().items).toEqual([item]);
+    store
+      .update(root, "c", "予約 API", (content) =>
+        replaceDecisionItems(content, [...parseDecisionFile(content), nextItem], updatedRecap),
+      )
+      ._unsafeUnwrap();
+
+    expect(readFileSync(file, "utf8")).toBe(
+      [
+        updatedHeader,
+        handwritten,
+        '- [決定] D1: "決めたこと" <!-- seq=4 -->',
+        '- [決定] D2: "新しい方針" <!-- seq=5 -->',
+        "",
+      ].join("\n"),
+    );
+    expect(store.read(root, "c")._unsafeUnwrap().items).toEqual([item, nextItem]);
+  });
+  it("正規の先頭行は画面の保存で保ち、次の番の反映で置き換える", () => {
+    mkdirSync(dirname(file), { recursive: true });
+    const original = `<!-- sukuna-decisions:v3 recap=9007199254740991:${token} -->`;
+    writeFileSync(file, original + '\n- [決定] D1: "決めたこと" <!-- seq=4 -->\n');
+    const store = createDecisionFileStore();
+    const before = store.read(root, "c")._unsafeUnwrap();
+    const edited = { ...item, text: "手で直した方針" };
+    expect(before.items).toEqual([item]);
+
+    store
+      .update(
+        root,
+        "c",
+        "予約 API",
+        (content) => replaceDecisionItems(content, [edited]),
+        before.hash,
+      )
+      ._unsafeUnwrap();
+    expect(readFileSync(file, "utf8")).toBe(
+      original + '\n- [決定] D1: "手で直した方針" <!-- seq=4 -->\n',
+    );
+
+    store
+      .update(root, "c", "予約 API", (content) =>
+        replaceDecisionItems(content, [...parseDecisionFile(content), nextItem], updatedRecap),
+      )
+      ._unsafeUnwrap();
+    expect(readFileSync(file, "utf8")).toBe(
+      [
+        updatedHeader,
+        '- [決定] D1: "手で直した方針" <!-- seq=4 -->',
+        '- [決定] D2: "新しい方針" <!-- seq=5 -->',
+        "",
+      ].join("\n"),
+    );
+    expect(store.read(root, "c")._unsafeUnwrap().items).toEqual([edited, nextItem]);
+  });
   function racingStore(changes: number) {
     let writes = 0;
     return {
@@ -83,6 +161,26 @@ describe("決まったことのファイルの保存", () => {
     );
     expect(writes()).toBe(3);
     expect(readdirSync(dirname(file))).toEqual(["c.md"]);
+  });
+  it("置換前の記録中に外部編集があれば、その記録を取り消して最新の内容に当て直す", () => {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, "最初の手書き行\n");
+    const store = createDecisionFileStore();
+    let preparations = 0;
+    let cancellations = 0;
+    const saved = store.update(root, "c", "予約 API", (content) => ({
+      content: replaceDecisionItems(content, [item]),
+      prepare: () => {
+        preparations += 1;
+        if (preparations === 1) writeFileSync(file, "外部の修正\n");
+      },
+      cancel: () => {
+        cancellations += 1;
+      },
+    }));
+    expect(saved._unsafeUnwrap().items).toEqual([item]);
+    expect(readFileSync(file, "utf8")).toContain("外部の修正\n");
+    expect({ preparations, cancellations }).toEqual({ preparations: 2, cancellations: 1 });
   });
   it("3 回続けて変わると外部変更を残したまま競合で止め、一時ファイルを消す", () => {
     mkdirSync(dirname(file), { recursive: true });

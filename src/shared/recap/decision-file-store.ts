@@ -35,12 +35,14 @@ const nodeIO: FileIO = {
   remove: (path) => rmSync(path, { force: true }),
   temporary: (path) => `${path}.${randomUUID()}.tmp`,
 };
-const digest = (content: string) => createHash("sha256").update(content).digest("hex");
+export const decisionFilePath = (id: string) => `docs/decisions/${id}.md`;
+export const decisionFileHash = (content: string) =>
+  createHash("sha256").update(content).digest("hex");
 function snapshot(path: string, content: string | null): DecisionSnapshot {
   return {
     path,
     exists: content !== null,
-    hash: content === null ? null : digest(content),
+    hash: content === null ? null : decisionFileHash(content),
     content: content ?? "",
     items: parseDecisionFile(content ?? ""),
   };
@@ -55,7 +57,7 @@ export function createDecisionFileStore(
         io.directory(projectPath);
         if (!/^[^/\\]+$/.test(conversationId) || conversationId === "." || conversationId === "..")
           throw new Error("会話の番号が不正です");
-        const path = `docs/decisions/${conversationId}.md`;
+        const path = decisionFilePath(conversationId);
         return snapshot(path, io.read(join(projectPath, path)));
       },
       (): RecapError => ({
@@ -67,7 +69,7 @@ export function createDecisionFileStore(
   return {
     read,
     update: (projectPath, conversationId, title, transform, baseHash) =>
-      lock.run(projectPath, `docs/decisions/${conversationId}.md`, () => {
+      lock.run(projectPath, decisionFilePath(conversationId), () => {
         for (let attempt = 0; attempt < 3; attempt += 1) {
           const current = read(projectPath, conversationId);
           if (current.isErr()) return err(current.error);
@@ -81,7 +83,8 @@ export function createDecisionFileStore(
           const source = current.value.exists
             ? original
             : `# 決まったこと: ${title.replace(/[\r\n]/g, " ")}\n\n- 種別: 決定台帳\n- 会話: ${conversationId}\n\n`;
-          const content = transform(source);
+          const replacement = transform(source, current.value.hash);
+          const content = typeof replacement === "string" ? replacement : replacement.content;
           if (
             content === original ||
             (!current.value.exists && parseDecisionFile(content).length === 0)
@@ -92,9 +95,12 @@ export function createDecisionFileStore(
           const write = Result.fromThrowable(
             () => {
               io.write(temporary, content);
+              if (typeof replacement !== "string") replacement.prepare();
               const latest = read(projectPath, conversationId);
-              if (latest.isErr()) return err(latest.error);
-              if (latest.value.hash !== current.value.hash) return ok(false);
+              if (latest.isErr() || latest.value.hash !== current.value.hash) {
+                if (typeof replacement !== "string") replacement.cancel();
+                return latest.isErr() ? err(latest.error) : ok(false);
+              }
               io.rename(temporary, path);
               return ok(true);
             },
