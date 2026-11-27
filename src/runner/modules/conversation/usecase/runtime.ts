@@ -157,9 +157,15 @@ export class ConversationRuntime {
     });
     return next;
   }
-  record(id: string, events: ConversationEvent[], before: () => void = () => {}): StoredEvent[] {
+  record(
+    id: string,
+    events: ConversationEvent[],
+    before: () => void = () => {},
+    unchanged: () => boolean = () => true,
+  ): StoredEvent[] {
     const previous = this.store.get(id)?.runState;
     const recorded = this.store.transaction(() => {
+      if (!unchanged()) return [];
       before();
       return events.flatMap((e) => {
         const record = this.store.append(id, e, this.options.clock.now());
@@ -284,7 +290,7 @@ export class ConversationRuntime {
     for (;;) {
       const result = this.store.withWorkspace(
         id,
-        (worktreeId): Result<SendResult, OperationError> | Execution => {
+        (worktreeId): Result<SendResult, OperationError> | Execution | null => {
           if (this.closing) return err(conflict());
           const c = this.store.get(id);
           if (!c) throw new Error("会話がありません。");
@@ -293,21 +299,6 @@ export class ConversationRuntime {
           const prepared = prepare();
           if (prepared.isErr()) return reject(prepared.error);
           const { includeQueued, queued, inputs, text, images, missingImages } = prepared.value;
-          let execution: Execution;
-          try {
-            execution = this.execution(c, worktreeId);
-          } catch (error) {
-            this.record(id, [
-              {
-                type: "stopped",
-                payload: {
-                  reason: "error",
-                  detail: error instanceof Error ? error.message : "AI の実行に失敗しました。",
-                },
-              },
-            ]);
-            throw error;
-          }
           const hasStructuredComments = inputs.some(
             (entry) => entry.timelineComments !== undefined,
           );
@@ -356,27 +347,71 @@ export class ConversationRuntime {
               ],
             },
           };
-          const records = this.record(id, [...(acceptance?.events ?? []), event], () => {
-            acceptance?.before();
-            if (includeQueued)
-              this.store.dequeue(
-                id,
-                (this.store.get(id)?.lastSeq ?? 0) + (acceptance?.events.length ?? 0) + 1,
-              );
-          });
+          let execution: Execution | undefined;
+          let openingError: { cause: unknown } | undefined;
+          let records: StoredEvent[];
+          try {
+            records = this.record(
+              id,
+              [...(acceptance?.events ?? []), event],
+              () => {
+                try {
+                  execution = this.execution(c, worktreeId);
+                } catch (error) {
+                  openingError = { cause: error };
+                  throw error;
+                }
+                acceptance?.before();
+                if (includeQueued)
+                  this.store.dequeue(
+                    id,
+                    (this.store.get(id)?.lastSeq ?? 0) + (acceptance?.events.length ?? 0) + 1,
+                  );
+              },
+              () =>
+                this.store.withWorkspace(id, (actualWorktreeId) => {
+                  const current = this.store.get(id);
+                  return (
+                    !this.closing &&
+                    current?.cwd === c.cwd &&
+                    actualWorktreeId === worktreeId &&
+                    (!includeQueued ||
+                      JSON.stringify(this.store.queue(id)) === JSON.stringify(queued))
+                  );
+                }),
+            );
+          } catch (error) {
+            if (openingError)
+              this.record(id, [
+                {
+                  type: "stopped",
+                  payload: {
+                    reason: "error",
+                    detail:
+                      openingError.cause instanceof Error
+                        ? openingError.cause.message
+                        : "AI の実行に失敗しました。",
+                  },
+                },
+              ]);
+            throw error;
+          }
+          if (!records.length) return null;
+          if (!execution) throw new Error("実行がありません。");
+          const activeExecution = execution;
           if (queued.length) this.partsChanged(id, ["queue"]);
           const record = records.at(-1);
           if (!record) throw new Error("指示を記録できません。");
           this.timers.cancel(id);
-          execution.rate = null;
-          execution.assistantError = null;
-          execution.intent = null;
-          execution.startSeq = record.seq;
-          execution.inputOrigin = input.origin;
-          execution.ended = new Promise((resolve) => {
-            execution.end = resolve;
+          activeExecution.rate = null;
+          activeExecution.assistantError = null;
+          activeExecution.intent = null;
+          activeExecution.startSeq = record.seq;
+          activeExecution.inputOrigin = input.origin;
+          activeExecution.ended = new Promise((resolve) => {
+            activeExecution.end = resolve;
           });
-          execution.session.send({
+          activeExecution.session.send({
             text,
             images: images.map(({ data, mediaType }) => ({ data, mediaType })),
           });
@@ -389,6 +424,7 @@ export class ConversationRuntime {
           return ok({ result: "delivered", seq: record.seq });
         },
       );
+      if (result === null) continue;
       if (!("session" in result)) return result;
       result.session.close();
       await result.consuming;

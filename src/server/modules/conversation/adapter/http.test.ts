@@ -1,4 +1,9 @@
 import { createWorktreeActivity } from "../../../../shared/workspace/sqlite-worktree-activity";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
+import { createInterface } from "node:readline";
+import { fileURLToPath } from "node:url";
+import Database from "better-sqlite3";
 import type {
   ConversationSnapshot,
   ConversationEventsPage,
@@ -39,16 +44,21 @@ class RecordingAgent extends ScriptedAgent {
   messages: { text: string; images: { data: Buffer; mediaType: string }[] }[] = [];
   beforeInterrupt?: () => Promise<void>;
   beforeOutputEnd?: () => Promise<void>;
+  beforeTurnEnd?: () => Promise<void>;
   beforeSend?: (params: OpenParams) => void;
   override open(params: OpenParams): AgentSession {
     const index = this.opened.length;
     const session = super.open(params);
     const finishOutput = () => this.beforeOutputEnd?.();
+    const beforeTurnEnd = () => this.beforeTurnEnd?.();
     return {
       ...session,
       output: {
         async *[Symbol.asyncIterator]() {
-          for await (const output of session.output) yield output;
+          for await (const output of session.output) {
+            if (output.kind === "turn_end") await beforeTurnEnd();
+            yield output;
+          }
           if (index === 0) await finishOutput();
         },
       },
@@ -1808,3 +1818,498 @@ it.each(["edit", "cancel-all-draft", "cancel-all-stock", "cancel-one"])(
     }
   },
 );
+
+async function queueApiProcess(f: Awaited<ReturnType<typeof fixture>>) {
+  const code = `
+    import {createServer} from 'vite';
+    import {serve} from '@hono/node-server';
+    import {Hono} from 'hono';
+    import Database from 'better-sqlite3';
+    import {err} from 'neverthrow';
+    const loader = await createServer({configFile:false,root:process.cwd(),envDir:false,server:{middlewareMode:true,ws:false,watch:null},optimizeDeps:{entries:[]}});
+    const {createConversationRoutes} = await loader.ssrLoadModule('/src/server/modules/conversation/adapter/http.ts');
+    const {createConversationDependencies} = await loader.ssrLoadModule('/src/server/modules/conversation/adapter/dependencies.ts');
+    const sqlite = new Database(process.env.QUEUE_TEST_DATABASE);
+    const deps = createConversationDependencies({sqlite,home:process.env.QUEUE_TEST_HOME,runner:{call:async()=>err({code:'runner_unavailable',message:'unused'})},id:()=> 'unused',now:()=>1000,changed:()=>{},reopened:()=>{}});
+    const app = new Hono().route('/api',createConversationRoutes(deps));
+    const server = serve({fetch:app.fetch,port:0,hostname:'127.0.0.1'},info=>console.log(JSON.stringify({port:info.port})));
+    process.on('SIGTERM',()=>server.close(async()=>{sqlite.close();await loader.close();process.exit(0);}));
+  `;
+  const child = spawn(process.execPath, ["--input-type=module", "-e", code], {
+    cwd: fileURLToPath(new URL("../../../../../", import.meta.url)),
+    env: { ...process.env, QUEUE_TEST_DATABASE: f.database.sqlite.name, QUEUE_TEST_HOME: f.home },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  cleanups.unshift(async () => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    const exited = once(child, "exit");
+    child.kill("SIGTERM");
+    await exited;
+  });
+  let errors = "";
+  child.stderr.on("data", (data: Buffer) => (errors += data.toString()));
+  const lines = createInterface({ input: child.stdout });
+  const port = await new Promise<number>((resolve, reject) => {
+    lines.on("line", (line) => {
+      if (line.startsWith('{"port":')) resolve((JSON.parse(line) as { port: number }).port);
+    });
+    child.once("exit", () => {
+      lines.close();
+      reject(new Error(errors));
+    });
+  });
+  return (id: string, item: ConversationQueueItem, action: string, changedImage: string) => {
+    const edit = action === "edit";
+    const args = [
+      "-sS",
+      "--max-time",
+      "5",
+      "-X",
+      edit ? "PATCH" : "DELETE",
+      "-w",
+      "\n%{http_code}",
+      `http://127.0.0.1:${port}/api/conversations/${id}/queue/${item.id}`,
+    ];
+    if (edit)
+      args.push(
+        "-H",
+        "Content-Type: application/json",
+        "-d",
+        JSON.stringify({ text: "編集した本文", images: [changedImage] }),
+      );
+    const result = spawnSync("curl", args, { encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr);
+    const split = result.stdout.lastIndexOf("\n");
+    const body = result.stdout.slice(0, split);
+    return { status: Number(result.stdout.slice(split + 1)), body: body ? JSON.parse(body) : null };
+  };
+}
+
+it.each(
+  ["send", "queue", "interrupt", "automatic"].flatMap((delivery) =>
+    ["edit", "cancel-all-draft", "cancel-all-stock", "cancel-one"].flatMap((action) =>
+      ["before-images", "during-images", "after-delivery"].map((phase) => ({
+        delivery,
+        action,
+        phase,
+      })),
+    ),
+  ),
+)(
+  "別プロセスのキュー操作と配達は先に確定した方だけを反映する: $delivery / $action / $phase",
+  async ({ delivery, action, phase }) => {
+    const automatic = delivery === "automatic";
+    const f = await fixture(
+      automatic
+        ? {
+            rules: [{ match: "^最初$", steps: [{ end: "success" }] }],
+            fallback: [{ hold: true }],
+          }
+        : undefined,
+    );
+    const id = await f.start();
+    const entered = deferred();
+    const advance = deferred();
+    f.agent.beforeTurnEnd = async () => {
+      if (automatic) {
+        entered.resolve();
+        await advance.promise;
+      }
+    };
+    await f.send(id, "最初");
+    if (automatic) await entered.promise;
+    const image = (await f.upload(id)).body.image.id;
+    const gif = Buffer.from("GIF89a");
+    const changedImage = (await f.upload(id, gif, "image/gif")).body.image.id;
+    const queued = await f.send(id, "古い本文", "race-original", "send", [image]);
+    const item = queued.body.queueItem!;
+    const remaining =
+      action === "cancel-one"
+        ? (await f.send(id, "残る本文", "race-remaining", "send", [changedImage])).body.queueItem!
+        : null;
+    const items = [item, ...(remaining ? [remaining] : [])];
+    for (const [index, queuedItem] of items.entries()) {
+      f.database.sqlite
+        .prepare("UPDATE queued_instructions SET timeline_comments=? WHERE id=?")
+        .run(
+          JSON.stringify([{ task_id: String(index + 1), text: `相談${index + 1}` }]),
+          queuedItem.id,
+        );
+      if (action !== "cancel-all-draft") {
+        f.database.sqlite
+          .prepare(
+            "INSERT INTO stock_items (id,conversation_id,kind,text,state,sent_at) VALUES (?,?,'instruction',?,'sent',1000)",
+          )
+          .run(`race-stock-${index}`, id, queuedItem.text);
+        f.database.sqlite
+          .prepare("UPDATE queued_instructions SET stock_item_id=? WHERE id=?")
+          .run(`race-stock-${index}`, queuedItem.id);
+        queuedItem.stockItemId = `race-stock-${index}`;
+      }
+    }
+    const draft = { text: "書きかけ", images: [changedImage], updatedAt: 1000, updatedBy: "tab" };
+    await f.request(`/conversations/${id}/draft`, "PUT", {
+      text: draft.text,
+      images: draft.images,
+      editedAt: draft.updatedAt,
+      clientId: draft.updatedBy,
+    });
+    if (delivery === "send" || delivery === "queue") {
+      await f.request(`/conversations/${id}/stop`, "POST");
+      await f.restart();
+    }
+    const operate = await queueApiProcess(f);
+    let operation: { status: number; body: unknown } | undefined;
+    const change = () => {
+      operation = operate(id, item, action, changedImage);
+    };
+    const imageFiles = f.runner().runtime.options.images;
+    let reads = 0;
+    const ended = deferred();
+    f.runner().runtime.subscribe((signal) => {
+      if (signal.type === "turnEnded" && signal.conversationId === id) ended.resolve();
+    });
+    try {
+      if (phase === "before-images") change();
+      if (phase === "during-images")
+        f.runner().runtime.options.images = {
+          read(conversationId, imageId) {
+            if (++reads === items.length + 1) change();
+            return imageFiles.read(conversationId, imageId);
+          },
+        };
+      const suffix = delivery === "send" || delivery === "interrupt" ? "末尾" : "";
+      let result: { status: number; body: unknown } | undefined;
+      if (automatic) {
+        advance.resolve();
+        await ended.promise;
+        await f.runner().runtime.serial(id, async () => ok(undefined));
+      } else
+        result = await f.send(
+          id,
+          suffix,
+          "race-delivery",
+          delivery === "interrupt" ? "interrupt" : "send",
+        );
+      if (phase === "after-delivery") change();
+      const deliveredFirst = phase === "after-delivery";
+      const allCancelled = action.startsWith("cancel-all") && !deliveredFirst;
+      const retained = deliveredFirst
+        ? items
+        : action === "cancel-one"
+          ? [remaining!]
+          : allCancelled
+            ? []
+            : [item];
+      const expectedInputs = retained.map((queuedItem) => ({
+        text: action === "edit" && !deliveredFirst ? "編集した本文" : queuedItem.text,
+        images: [
+          {
+            data: queuedItem === item && (deliveredFirst || action !== "edit") ? png : gif,
+            mediaType:
+              queuedItem === item && (deliveredFirst || action !== "edit")
+                ? "image/png"
+                : "image/gif",
+          },
+        ],
+      }));
+      const noDelivery = allCancelled && !suffix;
+      const text = [...expectedInputs.map((input) => input.text), ...(suffix ? [suffix] : [])].join(
+        "\n\n",
+      );
+      const messages = f
+        .runner()
+        .runtime.store.events(id)
+        .filter((event) => event.type === "user_message");
+      const sent = messages.at(-1)!;
+      const expectedDraft =
+        !deliveredFirst && action === "cancel-all-draft"
+          ? { ...draft, text: "書きかけ\n\n古い本文", images: [changedImage, image] }
+          : draft;
+      const acceptedDraft =
+        suffix && !noDelivery && !(action === "cancel-all-draft" && phase === "during-images")
+          ? null
+          : expectedDraft;
+      expect({
+        operation,
+        result,
+        opened: f.agent.opened.length,
+        sent: f.agent.messages,
+        event: noDelivery ? null : sent.payload,
+        queue: (await f.snapshot(id)).body.queue,
+        draft: (await f.snapshot(id)).body.draft,
+        receipt: f.runner().runtime.store.duplicate(id, "race-delivery", 0),
+        stocks: f.database.sqlite
+          .prepare("SELECT id,state,sent_seq AS sentSeq FROM stock_items ORDER BY id")
+          .all(),
+      }).toEqual({
+        operation: deliveredFirst
+          ? { status: 404, body: { error: { code: "not_found", message: "すでに届きました" } } }
+          : action === "edit"
+            ? {
+                status: 200,
+                body: {
+                  queueItem: {
+                    ...item,
+                    text: "編集した本文",
+                    images: [changedImage],
+                    timeline_comments: [{ task_id: "1", text: "相談1" }],
+                  },
+                },
+              }
+            : { status: 204, body: null },
+        result: automatic ? undefined : noDelivery ? invalid : delivered,
+        opened: (delivery === "send" || delivery === "queue") && !noDelivery ? 2 : 1,
+        sent: [
+          { text: "最初", images: [] },
+          ...(noDelivery
+            ? []
+            : [{ text, images: expectedInputs.flatMap((input) => input.images) }]),
+        ],
+        event: noDelivery
+          ? null
+          : {
+              text,
+              images: retained.map((queuedItem) =>
+                queuedItem === item && (deliveredFirst || action !== "edit")
+                  ? { path: `images/${id}/${image}.png`, media_type: "image/png" }
+                  : { path: `images/${id}/${changedImage}.gif`, media_type: "image/gif" },
+              ),
+              origin: automatic ? "queued" : delivery === "interrupt" ? "interrupt" : "developer",
+              ...(retained.length
+                ? {
+                    timeline_comments: retained.map((queuedItem) => ({
+                      task_id: queuedItem === item ? "1" : "2",
+                      text: queuedItem === item ? "相談1" : "相談2",
+                    })),
+                    ...(suffix ? { timeline_legacy_texts: [suffix] } : {}),
+                  }
+                : {}),
+              client_ids: [
+                ...retained.map((queuedItem) => queuedItem.clientId),
+                ...(automatic ? [] : ["race-delivery"]),
+              ],
+              queued_ids: retained.map((queuedItem) => queuedItem.id),
+              client_receipts: [
+                ...retained.map((queuedItem) => ({
+                  client_id: queuedItem.clientId,
+                  result: "queued",
+                  queued_id: queuedItem.id,
+                  received_at: 1000,
+                })),
+                ...(automatic
+                  ? []
+                  : [{ client_id: "race-delivery", result: "delivered", received_at: 1000 }]),
+              ],
+            },
+        queue: [],
+        draft: acceptedDraft,
+        receipt: automatic || noDelivery ? null : { result: "delivered", seq: sent.seq },
+        stocks:
+          action === "cancel-all-draft"
+            ? []
+            : items.map((queuedItem, index) => ({
+                id: `race-stock-${index}`,
+                state: retained.includes(queuedItem) ? "sent" : "stocked",
+                sentSeq: retained.includes(queuedItem) ? sent.seq : null,
+              })),
+      });
+    } finally {
+      advance.resolve();
+      f.runner().runtime.options.images = imageFiles;
+    }
+  },
+  20000,
+);
+
+it.each(["id", "position", "client_id", "created_at", "timeline_comments", "stock_item_id"])(
+  "画像準備中に別接続で変わったキューの %s も照合し、最新の順序と受付情報を記録する",
+  async (column) => {
+    const f = await fixture();
+    const id = await f.start();
+    await f.send(id, "最初");
+    const image = (await f.upload(id)).body.image.id;
+    const first = (await f.send(id, "一つ目", "metadata-first", "send", [image])).body.queueItem!;
+    const second = (await f.send(id, "二つ目", "metadata-second", "send", [image])).body.queueItem!;
+    const comments = [{ task_id: "original", text: "元の相談" }];
+    f.database.sqlite
+      .prepare("UPDATE queued_instructions SET timeline_comments=? WHERE id=?")
+      .run(JSON.stringify(comments), first.id);
+    f.database.sqlite
+      .prepare(
+        "INSERT INTO stock_items (id,conversation_id,kind,text,state,sent_at) VALUES ('old-stock',?,'instruction','一つ目','sent',1000),('new-stock',?,'instruction','一つ目','sent',1000)",
+      )
+      .run(id, id);
+    f.database.sqlite
+      .prepare("UPDATE queued_instructions SET stock_item_id='old-stock' WHERE id=?")
+      .run(first.id);
+    await f.request(`/conversations/${id}/stop`, "POST");
+    await f.restart();
+    const sqlite = new Database(f.database.sqlite.name);
+    const updates = {
+      id: "updated-id",
+      position: 3,
+      client_id: "updated-client",
+      created_at: 2000,
+      timeline_comments: JSON.stringify([{ task_id: "updated", text: "新しい相談" }]),
+      stock_item_id: "new-stock",
+    };
+    const imageFiles = f.runner().runtime.options.images;
+    let reads = 0;
+    f.runner().runtime.options.images = {
+      read(conversationId, imageId) {
+        if (++reads === 3)
+          sqlite
+            .transaction(() =>
+              sqlite
+                .prepare(`UPDATE queued_instructions SET ${column}=? WHERE id=?`)
+                .run(updates[column as keyof typeof updates], first.id),
+            )
+            .immediate();
+        return imageFiles.read(conversationId, imageId);
+      },
+    };
+    f.clock.time = 3000;
+    try {
+      expect(await f.send(id, "", "metadata-delivery")).toEqual(delivered);
+      const sent = f
+        .runner()
+        .runtime.store.events(id)
+        .filter((event) => event.type === "user_message")
+        .at(-1)!;
+      const updatedFirst = {
+        ...first,
+        id: column === "id" ? "updated-id" : first.id,
+        clientId: column === "client_id" ? "updated-client" : first.clientId,
+        createdAt: column === "created_at" ? 2000 : first.createdAt,
+      };
+      const ordered = column === "position" ? [second, updatedFirst] : [updatedFirst, second];
+      expect({
+        sent: f.agent.messages,
+        payload: sent.payload,
+        queue: f.runner().runtime.store.queue(id),
+        stocks: sqlite.prepare("SELECT id,sent_seq AS sentSeq FROM stock_items ORDER BY id").all(),
+      }).toEqual({
+        sent: [
+          { text: "最初", images: [] },
+          {
+            text: ordered.map((item) => item.text).join("\n\n"),
+            images: ordered.map(() => ({ data: png, mediaType: "image/png" })),
+          },
+        ],
+        payload: {
+          text: ordered.map((item) => item.text).join("\n\n"),
+          images: ordered.map(() => ({
+            path: `images/${id}/${image}.png`,
+            media_type: "image/png",
+          })),
+          origin: "developer",
+          timeline_comments:
+            column === "timeline_comments"
+              ? [{ task_id: "updated", text: "新しい相談" }]
+              : comments,
+          timeline_legacy_texts: [second.text],
+          client_ids: [...ordered.map((item) => item.clientId), "metadata-delivery"],
+          queued_ids: ordered.map((item) => item.id),
+          client_receipts: [
+            ...ordered.map((item) => ({
+              client_id: item.clientId,
+              result: "queued",
+              queued_id: item.id,
+              received_at: item.createdAt,
+            })),
+            { client_id: "metadata-delivery", result: "delivered", received_at: 3000 },
+          ],
+        },
+        queue: [],
+        stocks: [
+          { id: "new-stock", sentSeq: column === "stock_item_id" ? sent.seq : null },
+          { id: "old-stock", sentSeq: column === "stock_item_id" ? null : sent.seq },
+        ],
+      });
+    } finally {
+      f.runner().runtime.options.images = imageFiles;
+      sqlite.close();
+    }
+  },
+);
+
+it("画像準備中のキュー編集で再試行しても、停止した質問への回答を一度だけ受理する", async () => {
+  const f = await fixture({
+    rules: [{ match: "^質問$", steps: [{ ask: [question("Q1")] }, { hold: true }] }],
+    fallback: [{ hold: true }],
+  });
+  const id = await f.start();
+  await f.send(id, "質問");
+  await settled(f, id, "waiting_answer");
+  const requested = f
+    .runner()
+    .runtime.store.events(id)
+    .find((event) => event.type === "question")!;
+  if (requested.type !== "question") throw new Error("質問がありません。");
+  const image = (await f.upload(id)).body.image.id;
+  const gif = Buffer.from("GIF89a");
+  const replacement = (await f.upload(id, gif, "image/gif")).body.image.id;
+  const item = (await f.send(id, "古い相談指示", "answer-queued", "send", [image])).body.queueItem!;
+  const answers = { "0": { choices: ["A"], text: null } };
+  await f.request(`/conversations/${id}/answers`, "PUT", { questionSeq: requested.seq, answers });
+  await f.request(`/conversations/${id}/stop`, "POST");
+  const sqlite = new Database(f.database.sqlite.name);
+  const imageFiles = f.runner().runtime.options.images;
+  let reads = 0;
+  f.runner().runtime.options.images = {
+    read(conversationId, imageId) {
+      if (++reads === 2)
+        sqlite
+          .transaction(() =>
+            sqlite
+              .prepare("UPDATE queued_instructions SET text=?,images=? WHERE id=?")
+              .run("最新の相談指示", JSON.stringify([replacement]), item.id),
+          )
+          .immediate();
+      return imageFiles.read(conversationId, imageId);
+    },
+  };
+  try {
+    expect(
+      await f.request(`/conversations/${id}/answers/send`, "POST", { confirmUnanswered: false }),
+    ).toEqual({ status: 202, body: { result: "delivered" } });
+    expect(
+      await f.request(`/conversations/${id}/answers/send`, "POST", { confirmUnanswered: false }),
+    ).toEqual({
+      status: 409,
+      body: {
+        error: { code: "conflict", message: "回答する質問が変わりました。読み直してください。" },
+      },
+    });
+    const events = f.runner().runtime.store.events(id);
+    expect({
+      messages: f.agent.messages,
+      answers: events.filter((event) => event.type === "answer").map((event) => event.payload),
+      delivered: events.filter((event) => event.type === "user_message").at(-1)!.payload,
+      pending: (await f.snapshot(id)).body.pendingAnswers,
+      questions: sqlite.prepare("SELECT answered FROM questions WHERE conversation_id=?").all(id),
+    }).toEqual({
+      messages: [
+        { text: "質問", images: [] },
+        { text: "最新の相談指示\n\nQ: Q1\nA: A", images: [{ data: gif, mediaType: "image/gif" }] },
+      ],
+      answers: [{ request_id: requested.payload.request_id, answers, as_message: true }],
+      delivered: {
+        text: "最新の相談指示\n\nQ: Q1\nA: A",
+        images: [{ path: `images/${id}/${replacement}.gif`, media_type: "image/gif" }],
+        origin: "answer_text",
+        client_ids: ["answer-queued"],
+        queued_ids: [item.id],
+        client_receipts: [
+          { client_id: "answer-queued", result: "queued", queued_id: item.id, received_at: 1000 },
+        ],
+      },
+      pending: null,
+      questions: [{ answered: 1 }],
+    });
+  } finally {
+    f.runner().runtime.options.images = imageFiles;
+    sqlite.close();
+  }
+});

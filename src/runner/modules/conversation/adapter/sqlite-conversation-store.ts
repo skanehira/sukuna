@@ -243,14 +243,16 @@ export class SqliteConversationStore implements ConversationStore {
   queue(id: string): QueuedInstruction[] {
     const rows = this.sqlite
       .prepare(
-        "SELECT id, conversation_id AS conversationId, text, images, position, client_id AS clientId, created_at AS createdAt, timeline_comments AS timelineComments FROM queued_instructions WHERE conversation_id = ? ORDER BY position, rowid",
+        "SELECT id, conversation_id AS conversationId, text, images, position, client_id AS clientId, created_at AS createdAt, timeline_comments AS timelineComments, stock_item_id AS stockItemId FROM queued_instructions WHERE conversation_id = ? ORDER BY position, rowid",
       )
-      .all(id) as (Omit<QueuedInstruction, "images" | "timelineComments"> & {
+      .all(id) as (Omit<QueuedInstruction, "images" | "timelineComments" | "stockItemId"> & {
       images: string;
       timelineComments: string | null;
+      stockItemId: string | null;
     })[];
-    return rows.map(({ timelineComments, ...r }) => ({
+    return rows.map(({ timelineComments, stockItemId, ...r }) => ({
       ...r,
+      ...(stockItemId === null ? {} : { stockItemId }),
       images: JSON.parse(r.images) as string[],
       ...(timelineComments === null
         ? {}
@@ -264,7 +266,7 @@ export class SqliteConversationStore implements ConversationStore {
   enqueue(q: QueuedInstruction): void {
     this.sqlite
       .prepare(
-        "INSERT INTO queued_instructions (id, conversation_id, text, images, position, client_id, created_at, timeline_comments) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO queued_instructions (id, conversation_id, text, images, position, client_id, created_at, timeline_comments, stock_item_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
       )
       .run(
         q.id,
@@ -277,6 +279,7 @@ export class SqliteConversationStore implements ConversationStore {
         q.timelineComments === undefined
           ? null
           : JSON.stringify(timelineInputCommentSchema.array().parse(q.timelineComments)),
+        q.stockItemId ?? null,
       );
   }
   dequeue(id: string, deliveredSeq: number): void {

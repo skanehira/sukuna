@@ -33,6 +33,7 @@ export type QueuedInstruction = {
   position: number;
   clientId: string | null;
   createdAt: number;
+  stockItemId?: string;
 };
 export type SendResult =
   | { result: "delivered"; seq: number }
