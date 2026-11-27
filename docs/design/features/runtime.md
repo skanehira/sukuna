@@ -105,6 +105,7 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 | `pending_answers` の削除、`questions` の `answered` | ランナー | 回答を送ったときに書く。待ちの消えた選択式の質問は、回答以外の指示 (`origin` が `answer_text` 以外) を届けて AI が次の応答を始めたときに書く (BR-090、`features/conversation.md`) |
 | `drafts` の通常の保存と貼り付けた画像のファイル | 画面のサーバー | 画面から受け取る (`features/conversation.md`「書きかけの入力と未送信」) |
 | 差し戻しを受理したときの `drafts` の初期化 | ランナー | 受理と同時に、送った版だけを空にする (`features/design-review.md`「差し戻し」) |
+| 取り消した指示を復帰させたときの `drafts` の更新 | ランナー | 指示の受付と同じ取引で書く (`features/conversation.md`「書きかけの入力と未送信」) |
 | `stock_items` の行の追加、`text`、`state` (`stocked` と `cancelled` の行き来、届く前の指示の取り消しで `sent` から `stocked`)、`github_comment_url` | 画面のサーバー | 開発者の操作 (`features/stock-thread.md`、`features/pr-review.md`) |
 | `stock_items` の `state` (`stocked` から `sent`)、`sent_at`、`sent_seq`、`thread_conversation_id` (送ったとき) | ランナー | 送ると届けるは、ランナーが会話ごとに 1 列で行う (`features/stock-thread.md`) |
 | `issues` と `issue_dependencies` の、下書きの行 | 画面のサーバー | 下書きは開発者だけが書く (`features/issue.md`) |
@@ -133,7 +134,7 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 - `stock_items` の `state` と `thread_conversation_id` (`features/stock-thread.md`)
 - `settings` の `runner-stock-send:` で始まるキー。ランナーが受付結果を、画面のサーバーが残りの受付の取消しを書く
 - 下書きから精査待ちへ移す `issues` (`features/issue.md`)
-- `drafts` の `text`、`images`、`updated_at`。ランナーは、本文と更新時刻、更新元が送った版と一致し、送った版と保存した版の両方に画像がない下書きだけを空にする
+- `drafts` の `text`、`images`、`updated_at`、`updated_by`、`timeline_anchors`。ランナーは、差し戻しの受付では、本文・更新時刻・更新元が送った版と一致し、送った版と保存した版の両方に画像がない下書きだけを空にする。取り消した指示の復帰では、画面から送られた版と保存済みの版が一致する下書きだけを更新する
 - `toc_entries` の `title` と `start_seq`。ランナーが行を足し、画面のサーバーが開発者の修正を書く (`features/recap.md`)
 - `conversations` の `cwd` と `worktree_id`。worktree の削除では、画面のサーバーが `cwd` が消した worktree のパスのときだけ書く。merge のあとの直しなど、自動フローが worktree を用意したときと、開発者が作業場所を切り替えたときはランナーが書く。切り替えでは、読んだときの `cwd` を条件に付ける (`features/worktree-terminal.md`、`features/implementation-flow.md`)
 - `settings` の `runner-workspace-switch:` で始まるキー。ランナーは確定結果を、画面のサーバーは未確定の要求の取消しを書く。どちらも SQLite の書き込みロック内で同じ要求の行が無いことを確かめてから追加する。この名前で始まる期限切れの行だけを掃除する
@@ -154,7 +155,7 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 | メソッド | パス | 用途 | 主な入力 | 主な出力 |
 | --- | --- | --- | --- | --- |
 | POST | `/conversations` | 会話を始める | `project_id`、`kind`、`cwd`、`worktree_id?`、`issue_id?`、`parent_conversation_id?`、`title`、`message?` | `conversation_id` |
-| POST | `/conversations/:id/messages` | 指示を送る | `text`、`images`、`interrupt`、`client_id`、`origin` | `result` (`delivered` / `queued`)、`queued_id?`、`seq?` |
+| POST | `/conversations/:id/messages` | 指示を送る | `text`、`images`、`interrupt`、`client_id`、`origin`、`restore_draft?` | `result` (`delivered` / `queued`)、`queued_id?`、`seq?` |
 | POST | `/conversations/:id/queue/deliver` | 残った届く前の指示をいま届ける (BR-088) | なし | `seq` |
 | POST | `/conversations/:id/stop` | AI を止める | なし | `run_state` |
 | POST | `/conversations/:id/resume` | 止まった作業を再開する | なし | `seq` |
@@ -427,7 +428,7 @@ type ClientMessage =
 | --- | --- | --- |
 | `queue` | 届く前の指示 | ランナー、画面のサーバー (編集と取り消し) |
 | `answers` | 送る前の回答 | ランナー、画面のサーバー (保存) |
-| `draft` | 書きかけの入力 (`features/conversation.md`) | 画面のサーバー |
+| `draft` | 書きかけの入力 (`features/conversation.md`) | 画面のサーバー、復帰の書き換えを確定したランナー |
 | `recap` | 直近・目次・決まったこと・質問の一覧 (`features/recap.md`) | ランナー、画面のサーバー (手で直したとき) |
 | `stock` / `threads` | ストック、スレッド (`features/stock-thread.md`) | ランナー、画面のサーバー |
 | `timeline` | タイムラインのファイル (`features/work-monitor.md`) | 画面のサーバー |
