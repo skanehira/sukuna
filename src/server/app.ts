@@ -1,5 +1,7 @@
 import { createProjectRoutes } from "./modules/workspace/adapter/project-routes";
 import type { ProjectDependencies } from "./modules/workspace/domain/project-settings";
+import { createDesignRoutes } from "./modules/flow/adapter/design-routes";
+import type { DesignDependencies } from "./modules/flow/domain/design-ports";
 import { createInboxRoutes } from "./modules/inbox/adapter/routes";
 import type { InboxDependencies } from "./modules/inbox/domain/ports";
 import { createConversationWorktrees } from "./modules/conversation/adapter/worktrees";
@@ -54,6 +56,7 @@ export type AppOptions = {
   stock?: StockDependencies;
 
   issues?: IssueServerDeps;
+  design?: DesignDependencies;
   inbox?: InboxDependencies;
   worktrees?: WorktreeDependencies;
   recap?: RecapDependencies;
@@ -93,6 +96,7 @@ export function createApp(options: AppOptions): Hono<IdentityEnv> {
   if (options.projects) app.route("/api", createProjectRoutes(options.projects));
 
   if (options.pr) app.route("/api", createPrRoutes(options.pr));
+  if (options.design) app.route("/api", createDesignRoutes(options.design));
   if (options.issues) app.route("/api", createIssueRoutes(options.issues));
   if (options.recap) app.route("/api/conversations", createRecapRoutes(options.recap));
 

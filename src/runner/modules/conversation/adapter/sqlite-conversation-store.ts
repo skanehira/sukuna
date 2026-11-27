@@ -1,6 +1,7 @@
 import { statSync } from "node:fs";
 import {
   ConversationWorkspaceChanged,
+  ConversationWriteBusy,
   ProjectRunBlocked,
   ProjectRunBusy,
 } from "../domain/conversation-store";
@@ -23,6 +24,7 @@ import { eventSchema, type ConversationEvent, type StoredEvent } from "../../../
 import { nextRunState } from "../domain/run-state";
 import { timelineInputCommentSchema } from "../../../../shared/progress/schema";
 import type {
+  AcceptedInstruction,
   Conversation,
   ConversationStore,
   ConversationWorkspace,
@@ -30,6 +32,7 @@ import type {
   ProjectRunReservation,
   SendResult,
 } from "../domain/conversation-store";
+const acceptedInputPrefix = "runner-accepted-input:";
 const selectConversation = `SELECT id, project_id AS projectId, kind, issue_id AS issueId, parent_conversation_id AS parentConversationId, COALESCE(title, '') AS title, session_id AS sessionId, cwd, worktree_id AS worktreeId, run_state AS runState, stop_reason AS stopReason, resets_at AS resetsAt, last_seq AS lastSeq, last_activity_at AS lastActivityAt, closed_at AS closedAt FROM conversations`;
 export class SqliteConversationStore implements ConversationStore {
   private sqlite: Database.Database;
@@ -38,7 +41,18 @@ export class SqliteConversationStore implements ConversationStore {
     this.sqlite = sqlite;
   }
   transaction<T>(operation: () => T): T {
-    return this.withReservations([], () => this.sqlite.transaction(operation).immediate());
+    try {
+      return this.withReservations([], () => this.sqlite.transaction(operation).immediate());
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        typeof error.code === "string" &&
+        (error.code === "SQLITE_BUSY" || error.code.startsWith("SQLITE_BUSY_"))
+      )
+        throw new ConversationWriteBusy(error);
+      throw error;
+    }
   }
   withWorktreeReservation<T>(operation: (reservation: WorktreeActivityReservation) => T): T {
     return this.withReservations([], () => operation(this.reservation!));
@@ -343,6 +357,41 @@ export class SqliteConversationStore implements ConversationStore {
             )
             .run(`${id}:${seq}:${index}`, id, seq, q.question);
       return { ...event, conversationId: id, seq, createdAt: now };
+    });
+  }
+  stageAccepted(instruction: AcceptedInstruction): void {
+    this.sqlite
+      .prepare("INSERT INTO settings (key,value) VALUES (?,?)")
+      .run(acceptedInputPrefix + instruction.id, JSON.stringify(instruction));
+  }
+  removeAccepted(id: string): boolean {
+    return (
+      this.sqlite.prepare("DELETE FROM settings WHERE key=?").run(acceptedInputPrefix + id)
+        .changes === 1
+    );
+  }
+  recoverAccepted(id?: string): boolean {
+    return this.transaction(() => {
+      const rows = (
+        id === undefined
+          ? this.sqlite
+              .prepare("SELECT value FROM settings WHERE key GLOB ?")
+              .all(acceptedInputPrefix + "*")
+          : this.sqlite
+              .prepare("SELECT value FROM settings WHERE key=?")
+              .all(acceptedInputPrefix + id)
+      ) as { value: string }[];
+      let restored = false;
+      for (const { value } of rows) {
+        const instruction = JSON.parse(value) as AcceptedInstruction;
+        if (this.get(instruction.conversationId)) {
+          const last = this.queue(instruction.conversationId).at(-1)?.position ?? 0;
+          this.enqueue({ ...instruction, position: last + 1 });
+          restored = true;
+        }
+        this.removeAccepted(instruction.id);
+      }
+      return restored;
     });
   }
   queue(id: string): QueuedInstruction[] {

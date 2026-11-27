@@ -10,7 +10,7 @@ import {
   reserveReleaseSchema,
   sendStockIpcSchema,
   type StockSendIpcInput,
-  RUNNER_IPC_DEADLINE_HEADER,
+  runnerCallerCancelled,
   sendMessageSchema,
   startConversationSchema,
   workspaceSchema,
@@ -108,16 +108,11 @@ export function createIpcRoutes(
           { error: { code: "invalid_input", message: "入力を確認してください。" } },
           400,
         );
-      const deadline = Number(c.req.header(RUNNER_IPC_DEADLINE_HEADER) ?? NaN);
-      const signal = c.req.raw.signal;
-      const callerCancelled = () =>
-        signal.aborted ||
-        (Number.isSafeInteger(deadline) && runtime.options.clock.now() >= deadline);
       const result = await operation(
         c.req.param("id") ?? "",
         parsed.data,
         c.req.param(),
-        callerCancelled,
+        runnerCallerCancelled(c.req.raw, () => runtime.options.clock.now()),
       );
       return result.isErr()
         ? c.json(
@@ -156,7 +151,7 @@ export function createIpcRoutes(
   route("/conversations/:id/finish/propose", empty, (id, _p, _params, cancelled) =>
     proposeThreadFinish(runtime, id, cancelled),
   );
-  route("/conversations/:id/messages", sendMessageSchema, async (id, p) => {
+  route("/conversations/:id/messages", sendMessageSchema, async (id, p, _params, cancelled) => {
     let duplicate = false;
     const result = await runtime.send(
       id,
@@ -171,34 +166,44 @@ export function createIpcRoutes(
       (fresh) => {
         duplicate = !fresh;
       },
+      undefined,
+      cancelled,
     );
     return p.receipt_metadata ? result.map((value) => ({ ...value, duplicate })) : result;
   });
-  route("/conversations/:id/queue/deliver", empty, (id) => runtime.deliverQueue(id));
-  route("/conversations/:id/stop", empty, (id) => runtime.stop(id));
-  route("/conversations/:id/resume", empty, (id, _p, _params, callerCancelled) =>
-    runtime.resume(id, "developer", { callerCancelled }),
+  route("/conversations/:id/queue/deliver", empty, (id, _p, _params, cancelled) =>
+    runtime.deliverQueue(id, cancelled),
+  );
+  route("/conversations/:id/stop", empty, (id, _p, _params, cancelled) =>
+    runtime.stop(id, undefined, undefined, cancelled),
+  );
+  route("/conversations/:id/resume", empty, (id, _p, _params, cancelled) =>
+    runtime.resume(id, "developer", { callerCancelled: cancelled }),
   );
   route("/conversations/:id/fork", forkConversationSchema, (id, p) => runtime.fork(id, p));
-  route("/conversations/:id/answers", answerSchema, (id, p) =>
-    runtime.answer(id, p.request_id, p.answers),
+  route("/conversations/:id/answers", answerSchema, (id, p, _params, cancelled) =>
+    runtime.answer(id, p.request_id, p.answers, cancelled),
   );
-  route("/conversations/:id/permissions/:requestId", permissionSchema, (id, p, params) =>
+  route("/conversations/:id/permissions/:requestId", permissionSchema, (id, p, params, cancelled) =>
     runtime.permission(
       id,
       params.requestId ?? "",
       p.behavior === "allow"
         ? { behavior: "allow" }
         : { behavior: "deny", message: p.message ?? "" },
+      cancelled,
     ),
   );
-  route("/conversations/:id/release", empty, (id) => runtime.release(id));
+  route("/conversations/:id/release", empty, (id, _p, _params, cancelled) =>
+    runtime.release(id, cancelled),
+  );
   route("/conversations/:id/release/reserve", reserveReleaseSchema, (id, input, _p, cancelled) =>
     runtime.releases.reserve(
       id,
       input.idle_only
         ? () => (cancelled() ? cancelledStockSend : threadFinishRefusal(runtime, id))
         : undefined,
+      input.idle_only ? undefined : cancelled,
     ),
   );
   route("/conversations/:id/release/complete", completeReleaseSchema, (id, p) =>

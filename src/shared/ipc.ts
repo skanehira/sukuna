@@ -1,4 +1,5 @@
 import { stockSendSchema } from "./stock";
+import { designCommitSchema } from "./api/design";
 import { z } from "zod";
 import { recapStateSchema } from "./recap/api";
 import { answersSchema, originSchema, runStateSchema } from "./events";
@@ -7,6 +8,24 @@ import type { PublicConversation } from "./conversation/api";
 
 export const RUNNER_IPC_TIMEOUT_MS = 10_000;
 export const RUNNER_IPC_DEADLINE_HEADER = "x-sukuna-ipc-deadline";
+
+export const unavailableRunnerError = {
+  code: "runner_unavailable",
+  message: "AI を動かすプロセスにつながりません。少し待ってから、もう一度操作してください。",
+} as const;
+
+export function runnerCallerCancelled(request: Request, now: () => number) {
+  const deadline = Number(request.headers.get(RUNNER_IPC_DEADLINE_HEADER) ?? NaN);
+  return () => request.signal.aborted || (Number.isSafeInteger(deadline) && now() >= deadline);
+}
+
+export const designRejectionDraftSchema = z.strictObject({
+  text: z.string(),
+  images: z.array(z.string()),
+  updatedAt: z.number().int(),
+  updatedBy: z.string(),
+});
+export type DesignRejectionDraft = z.infer<typeof designRejectionDraftSchema>;
 
 export const startConversationSchema = z.object({
   project_id: z.string().min(1),
@@ -110,4 +129,10 @@ export const rebuildRecapResponseSchema = z.strictObject({ state: recapStateSche
 
 export const allowMergeIpcSchema = z.strictObject({
   head_sha: z.string().regex(/^[a-f0-9]{40}$/i),
+});
+export const approveDesignIpcSchema = z.strictObject({ head_commit: designCommitSchema });
+export const rejectDesignIpcSchema = z.strictObject({
+  text: z.string().max(20_000),
+  attachment: z.string().optional(),
+  draft: designRejectionDraftSchema.optional(),
 });

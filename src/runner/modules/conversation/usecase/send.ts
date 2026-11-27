@@ -2,13 +2,14 @@ import { err, ok, type Result } from "neverthrow";
 import type { ConversationRuntime, DeliveryError, InputAcceptance } from "./runtime";
 import type { ProjectRunReservation, SendResult } from "../domain/conversation-store";
 import type { SendInput } from "./runtime";
-import { activeStates, conflict } from "./runtime";
+import { activeStates, callerInputAcceptance, conflict, InputRefused } from "./runtime";
 export function send(
   this: ConversationRuntime,
   id: string,
   input: SendInput,
   accepted?: (fresh: boolean) => void,
   projectRun?: ProjectRunReservation,
+  callerCancelled?: () => boolean,
 ): Promise<Result<SendResult, DeliveryError>> {
   if (this.releases.has(id)) {
     if (input.clientId) {
@@ -20,7 +21,19 @@ export function send(
     }
     return Promise.resolve(err(conflict()));
   }
-  return this.serial(id, () => sendUnlocked.call(this, id, input, undefined, accepted, projectRun));
+  return this.serial(
+    id,
+    () =>
+      sendUnlocked.call(
+        this,
+        id,
+        input,
+        callerInputAcceptance(callerCancelled),
+        accepted,
+        projectRun,
+      ),
+    callerCancelled,
+  );
 }
 export async function sendUnlocked(
   this: ConversationRuntime,
@@ -41,6 +54,8 @@ export async function sendUnlocked(
     }
   }
   const allowed = await this.runOptions.allowDelivery(c, input);
+  const refused = acceptance?.check?.();
+  if (refused) return err(refused);
   if (allowed.isErr()) return err(allowed.error);
   c = this.store.get(id);
   if (!c) return err({ code: "not_found", message: "会話が見つかりません。" });
@@ -54,21 +69,32 @@ export async function sendUnlocked(
     }
     const queue = this.store.queue(id);
     const queuedId = this.options.id();
-    this.record(id, acceptance?.events ?? [], () => {
-      acceptance?.before?.();
-      this.store.enqueue({
-        id: queuedId,
-        conversationId: id,
-        text: input.text,
-        images: input.images,
-        ...(input.timelineComments === undefined
-          ? {}
-          : { timelineComments: input.timelineComments }),
-        position: (queue.at(-1)?.position ?? 0) + 1,
-        clientId: input.clientId ?? null,
-        createdAt: this.options.clock.now(),
-      });
-    });
+    this.record(
+      id,
+      acceptance?.events ?? [],
+      () => {
+        const refused = acceptance?.check?.();
+        if (refused) throw new InputRefused(refused);
+        acceptance?.before?.();
+        this.store.enqueue({
+          id: queuedId,
+          conversationId: id,
+          text: input.text,
+          images: input.images,
+          ...(input.timelineComments === undefined
+            ? {}
+            : { timelineComments: input.timelineComments }),
+          position: (queue.at(-1)?.position ?? 0) + 1,
+          clientId: input.clientId ?? null,
+          createdAt: this.options.clock.now(),
+        });
+      },
+      undefined,
+      () => {
+        const refused = acceptance?.checkBeforeCommit?.();
+        if (refused) throw new InputRefused(refused);
+      },
+    );
     this.partsChanged(id, ["queue"]);
     accepted?.(true);
     return ok({ result: "queued", queuedId });

@@ -1,13 +1,23 @@
 import { spawn } from "node:child_process";
 export type CommandResult = { stdout: string; stderr: string; exitCode: number };
-export type CommandOptions = { cwd: string; stdin?: string; signal?: AbortSignal };
+export type CommandOptions = {
+  cwd: string;
+  stdin?: string;
+  signal?: AbortSignal;
+  env?: NodeJS.ProcessEnv;
+};
 export function runCommand(
   command: string,
   args: string[],
   opts: CommandOptions,
 ): Promise<CommandResult> {
   return new Promise((resolve) => {
-    const child = spawn(command, args, { cwd: opts.cwd, stdio: "pipe", signal: opts.signal });
+    const child = spawn(command, args, {
+      cwd: opts.cwd,
+      stdio: "pipe",
+      signal: opts.signal,
+      env: opts.env && { ...process.env, ...opts.env },
+    });
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8").on("data", (chunk: string) => {

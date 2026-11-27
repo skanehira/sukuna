@@ -4,16 +4,14 @@ import {
   RUNNER_IPC_DEADLINE_HEADER,
   RUNNER_IPC_TIMEOUT_MS,
   runnerNoticeSchema,
+  unavailableRunnerError,
   type RunnerNotice,
 } from "../shared/ipc";
 import type { Logger } from "../shared/log";
 type Clock = { setTimeout(callback: () => void, ms: number): () => void };
 
 export type RunnerUnavailable = { code: "runner_unavailable"; message: string };
-export const runnerUnavailable: RunnerUnavailable = {
-  code: "runner_unavailable",
-  message: "AI を動かすプロセスにつながりません。少し待ってから、もう一度操作してください。",
-};
+export const runnerUnavailable: RunnerUnavailable = unavailableRunnerError;
 export type IpcResponse = { status: number; body: unknown };
 type Options = {
   socket: string;

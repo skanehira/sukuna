@@ -14,6 +14,7 @@ export class ReleaseReservations {
   reserve(
     id: string,
     beforeRelease?: () => OperationError | null,
+    callerCancelled?: () => boolean,
   ): Promise<Result<{ token: string }, OperationError>> {
     if (this.pending.has(id)) return Promise.resolve(err(conflict()));
     const runtime = this.runtime;
@@ -48,27 +49,26 @@ export class ReleaseReservations {
       },
     };
     this.pending.set(id, reservation);
-    void runtime
-      .serial(id, async () => {
-        const refused = beforeRelease?.();
-        if (refused) return err(refused);
-        const released = await releaseUnlocked.call(runtime, id);
-        if (released.isErr()) return err(released.error);
-        if (runtime.closing) return err(conflict());
-        runtime.store.reserveRelease(id, token, 10_000);
-        cancel = runtime.options.clock.setTimeout(() => {
-          const removed = reservation.finish();
-          if (removed.isErr())
-            runtime.options.log({ conversationId: id, issueId: null }, removed.error.message);
-        }, 10_000);
-        ready(ok({ token }));
-        await finished;
-        return ok(undefined);
-      })
-      .then((done) => {
-        if (done.isErr()) ready(err(done.error));
-        if (this.pending.get(id) === reservation) reservation.finish();
-      });
+    const reserve = async () => {
+      const refused = beforeRelease?.();
+      if (refused) return err(refused);
+      const released = await releaseUnlocked.call(runtime, id);
+      if (released.isErr()) return err(released.error);
+      if (runtime.closing) return err(conflict());
+      runtime.store.reserveRelease(id, token, 10_000);
+      cancel = runtime.options.clock.setTimeout(() => {
+        const removed = reservation.finish();
+        if (removed.isErr())
+          runtime.options.log({ conversationId: id, issueId: null }, removed.error.message);
+      }, 10_000);
+      ready(ok({ token }));
+      await finished;
+      return ok(undefined);
+    };
+    void runtime.serial(id, reserve, callerCancelled).then((done) => {
+      if (done.isErr()) ready(err(done.error));
+      if (this.pending.get(id) === reservation) reservation.finish();
+    });
     return result;
   }
   complete(id: string, token: string): Result<void, OperationError> {

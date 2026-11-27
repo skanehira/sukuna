@@ -103,7 +103,8 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 | `queued_instructions` の編集と取り消し | 画面のサーバー | 開発者の操作。届けた行は残っていないので、409 になる |
 | `pending_answers` の保存 | 画面のサーバー | 開発者の操作 |
 | `pending_answers` の削除、`questions` の `answered` | ランナー | 回答を送ったときに書く。待ちの消えた選択式の質問は、回答以外の指示 (`origin` が `answer_text` 以外) を届けて AI が次の応答を始めたときに書く (BR-090、`features/conversation.md`) |
-| `drafts` と貼り付けた画像のファイル | 画面のサーバー | 画面から受け取る |
+| `drafts` の通常の保存と貼り付けた画像のファイル | 画面のサーバー | 画面から受け取る (`features/conversation.md`「書きかけの入力と未送信」) |
+| 差し戻しを受理したときの `drafts` の初期化 | ランナー | 受理と同時に、送った版だけを空にする (`features/design-review.md`「差し戻し」) |
 | `stock_items` の行の追加、`text`、`state` (`stocked` と `cancelled` の行き来、届く前の指示の取り消しで `sent` から `stocked`)、`github_comment_url` | 画面のサーバー | 開発者の操作 (`features/stock-thread.md`、`features/pr-review.md`) |
 | `stock_items` の `state` (`stocked` から `sent`)、`sent_at`、`sent_seq`、`thread_conversation_id` (送ったとき) | ランナー | 送ると届けるは、ランナーが会話ごとに 1 列で行う (`features/stock-thread.md`) |
 | `issues` と `issue_dependencies` の、下書きの行 | 画面のサーバー | 下書きは開発者だけが書く (`features/issue.md`) |
@@ -112,6 +113,7 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 | `settings` のキー `runner-release:<会話の id>` | ランナー | 終了保存までの実行の予約 (`features/stock-thread.md`「終了の予約に使う内部の口」) |
 | `settings` のキー `runner-workspace-switch:<要求の UUID>` | ランナー、画面のサーバー | ランナーが切り替え結果を、画面のサーバーが取消しを書く (`features/worktree-terminal.md` の作業場所の切り替え API) |
 | `settings` の `runner-stock-send:` で始まるキー | ランナー、画面のサーバー | ストック送信の受付結果と取消し (`features/stock-thread.md`「POST /api/conversations/:id/stock/send」) |
+| `settings` のキー `runner-accepted-input:<指摘の id>` | ランナー | 受理から発言の記録までの指摘を保存する (`features/design-review.md`「差し戻し」) |
 | `settings` のキー `backup_status` | ランナー | バックアップはランナーがとる (`features/operations.md`) |
 | `settings` のキー `last_restore` と、復元のときの `flow_paused` | 復元の処理と、起動時の後始末 (`db.lock` の中) | 2 つのプロセスを止めてから書く (`features/operations.md`) |
 | `settings` のほかのキー、`projects` | 画面のサーバー | 開発者の操作 |
@@ -126,6 +128,7 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 - `stock_items` の `state` と `thread_conversation_id` (`features/stock-thread.md`)
 - `settings` の `runner-stock-send:` で始まるキー。ランナーが受付結果を、画面のサーバーが残りの受付の取消しを書く
 - 下書きから精査待ちへ移す `issues` (`features/issue.md`)
+- `drafts` の `text`、`images`、`updated_at`。ランナーは、本文と更新時刻、更新元が送った版と一致し、送った版と保存した版の両方に画像がない下書きだけを空にする
 - `toc_entries` の `title` と `start_seq`。ランナーが行を足し、画面のサーバーが開発者の修正を書く (`features/recap.md`)
 - `conversations` の `cwd` と `worktree_id`。worktree の削除では、画面のサーバーが `cwd` が消した worktree のパスのときだけ書く。merge のあとの直しなど、自動フローが worktree を用意したときと、開発者が作業場所を切り替えたときはランナーが書く。切り替えでは、読んだときの `cwd` を条件に付ける (`features/worktree-terminal.md`、`features/implementation-flow.md`)
 - `settings` の `runner-workspace-switch:` で始まるキー。ランナーは確定結果を、画面のサーバーは未確定の要求の取消しを書く。どちらも SQLite の書き込みロック内で同じ要求の行が無いことを確かめてから追加する。この名前で始まる期限切れの行だけを掃除する
@@ -334,7 +337,8 @@ SDK のメッセージは、まず Port の出力 (「Agent SDK を包む Port�
 | 条件 | `stopped.reason` | `run_state` |
 | --- | --- | --- |
 | 開発者の停止の操作のあとの `result` | `user` | `stopped` |
-| 割り込みのあとの `result` | 書かない (`turn_end` だけを書く) | 続けて書く `user_message` で `working` |
+| 割り込みで番が終わり、続く指示を受理した | 書かない | 続けて書く `user_message` で `working` |
+| 割り込みで番が終わり、続く指示を受理できず、会話に作業中の状態が残る | `error` | `failed` |
 | 最後の `rate_limit` が `status: "rejected"` で、`overageStatus` が `allowed` / `allowed_warning` でなく、`errorCode` が `credits_required` | `credits_required` | `failed` |
 | 最後の `rate_limit` が `status: "rejected"` で、`overageStatus` が `allowed` / `allowed_warning` でない | `usage_limit` (`resets_at` は `resetsAt` の 1000 倍) | `usage_limited` |
 | `result` の `terminal_reason` が `api_error`、または `assistant_error` が `overloaded` / `server_error` などの API の失敗 | `api_error` | `failed` |
@@ -344,7 +348,9 @@ SDK のメッセージは、まず Port の出力 (「Agent SDK を包む Port�
 
 `stopped.reason` と `run_state` の組は、`features/conversation.md`「状態と止まった理由」の表と同じである。
 
-割り込みで止めた番は、止まったとは扱わない。`stopped` の記録も、ランナーの中の合図 `stopped` も出さず、届く前の指示と新しい指示をまとめた `user_message` をすぐに書く。
+割り込みでは、前の番の終了か SDK の出力の終了を確かめてから、次の指示を扱う。出力を閉じた実行を、新しい指示には使わない。
+
+次の指示を受理したときは、届く前の指示と新しい指示をまとめた `user_message` を書く。割り込んだ番の停止の合図は出さない。受理できなかったときは表に従い、会話に残った作業中の状態を確定して配信する。
 
 `assistant` の `error` が `rate_limit` であることだけでは、利用枠切れと判定しない (DESIGN.md「既知の制約」)。
 

@@ -14,6 +14,7 @@ export function createIssueOperations(
   clock: IssueClock,
   notices: IssueNoticePort,
   conversations: StopConversationPort,
+  hasDesignWorktree?: (id: string) => boolean,
 ) {
   const { db } = database;
   const dependency = createDependencyWithdrawn({
@@ -28,6 +29,7 @@ export function createIssueOperations(
     notices,
     withdraw: dependency.withdraw,
     clear: dependency.clear,
+    hasDesignWorktree,
     run: (action) =>
       createWorktreeActivity(database.sqlite.name).run((reservation) =>
         db.transaction(

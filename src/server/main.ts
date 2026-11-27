@@ -1,4 +1,5 @@
 import { createSettingsDependencies } from "./modules/settings/adapter/dependencies";
+import { createDesignDependencies } from "./modules/flow/adapter/design-dependencies";
 import { createInboxRepository, formatResetTime } from "./modules/inbox/adapter/inbox-repository";
 import { createRecapDependencies } from "./modules/recap/adapter/dependencies";
 import { serve } from "@hono/node-server";
@@ -83,6 +84,7 @@ const server = serve(
         now: () => Date.now(),
       }),
 
+      design: createDesignDependencies(() => getDatabase().db, getRunnerLink, log),
       issues: createIssueDependencies(
         () => getDatabase().db,
         getRunnerLink,

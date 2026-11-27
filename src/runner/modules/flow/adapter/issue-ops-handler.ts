@@ -1,8 +1,13 @@
 import { Hono, type Context } from "hono";
+import type { FinishWithdrawal } from "../domain/ports";
 import type { IssueOps } from "../usecase/issue-ops";
 import type { IssueOperationResult } from "../../../../shared/issue/ports";
-import { issuePatchIpcSchema } from "../../../../shared/ipc";
-export function createIssueOpsHandler(ops: IssueOps): Hono {
+import { issuePatchIpcSchema, runnerCallerCancelled } from "../../../../shared/ipc";
+export function createIssueOpsHandler(
+  ops: IssueOps,
+  finishWithdrawal?: FinishWithdrawal,
+  now = Date.now,
+): Hono {
   const app = new Hono();
   const respond = (c: Context, result: IssueOperationResult) => {
     const status = {
@@ -24,9 +29,14 @@ export function createIssueOpsHandler(ops: IssueOps): Hono {
     });
   };
   for (const operation of ["confirm", "withdraw", "reopen"] as const)
-    app.post(`/issues/:id/${operation}`, async (c) =>
-      respond(c, await ops[operation](c.req.param("id"))),
-    );
+    app.post(`/issues/:id/${operation}`, async (c) => {
+      const id = c.req.param("id");
+      const result =
+        operation === "withdraw"
+          ? await ops.withdraw(id, runnerCallerCancelled(c.req.raw, now), finishWithdrawal)
+          : ops[operation](id);
+      return respond(c, result);
+    });
   app.patch("/issues/:id", async (c) => {
     const parsed = issuePatchIpcSchema.safeParse(await c.req.json().catch(() => undefined));
     if (!parsed.success)

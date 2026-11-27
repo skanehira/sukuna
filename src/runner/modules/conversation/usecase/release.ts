@@ -5,8 +5,9 @@ import { activeStates } from "./runtime";
 export function release(
   this: ConversationRuntime,
   id: string,
+  callerCancelled?: () => boolean,
 ): Promise<Result<{ runState: RunState }, OperationError>> {
-  return this.serial(id, () => releaseUnlocked.call(this, id));
+  return this.serial(id, () => releaseUnlocked.call(this, id), callerCancelled);
 }
 export async function releaseUnlocked(
   this: ConversationRuntime,

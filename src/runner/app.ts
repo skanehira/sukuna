@@ -1,4 +1,7 @@
 import { createStockSender } from "./modules/stock/adapter/dependencies";
+import type { GitRunner } from "./modules/workspace/adapter/git-cli";
+import { createDesignFlow } from "./modules/flow/adapter/design-dependencies";
+import { createDesignIpc } from "./modules/flow/adapter/design-ipc";
 import { CommandCache } from "./modules/conversation/adapter/command-cache";
 import { issueInstructions } from "./modules/issue/domain/issue-instructions";
 import { createRunnerAllowMerge } from "./modules/flow/adapter/allow-merge-dependencies";
@@ -47,6 +50,7 @@ export async function startRunnerApp(options: {
   ipc?: IpcExtensions;
   issueReports?: IssueReportsPort;
   summarizer?: SummarizerPort;
+  designGit?: GitRunner;
 }) {
   const { environment: env, database, log } = options;
   const socket = await reserveRunnerSocket(env.socket);
@@ -170,17 +174,42 @@ export async function startRunnerApp(options: {
           message: `会話が止まりました: ${signal.reason}`,
         });
     });
+    const gh = createGhRunner(env.ghScript);
+    const design = createDesignFlow(
+      database,
+      runtime,
+      gh,
+      {
+        clock: { now: () => clock.now(), id: ulid },
+        notices: { publish: (notice) => changes.publish(notice) },
+        alert: (issue_id, message) =>
+          changes.publish({ kind: "notice", level: "error", issue_id, message }),
+        log: (error) =>
+          log({
+            level: "error",
+            component: "runner.design",
+            message: "設計の反映に失敗しました。",
+            error,
+          }),
+      },
+      options.designGit,
+    );
+    const checkStop = async (stop: ReturnType<typeof runtime.prepareStop>) => {
+      const result = await stop();
+      if (result.isErr() && result.error.code !== "conflict") throw new Error(result.error.message);
+    };
     const issueOps = createIssueOperations(
       database,
       { now: () => clock.now(), id: ulid },
       { publish: (notice) => changes.publish(notice) },
       {
-        stop: async (id) => {
-          const result = await runtime.stop(id);
-          if (result.isErr() && result.error.code !== "conflict")
-            throw new Error(result.error.message);
+        stop: (id) => checkStop(() => runtime.stop(id)),
+        prepareStop: (id) => {
+          const stop = runtime.prepareStop(id);
+          return () => checkStop(stop);
         },
       },
+      (id) => design.hasWorktree(id),
     );
     registerIssueTools(runtime.tools, {
       data: createIssueDataUnitOfWork(database.db),
@@ -204,7 +233,14 @@ export async function startRunnerApp(options: {
           ),
         sendStock: createStockSender(database.db, runtime),
         ...options.ipc,
-        flow: createIssueOpsHandler(issueOps),
+        flow: createIssueOpsHandler(
+          issueOps,
+          (id, stop) => design.finishWithdrawal(id, stop),
+          () => clock.now(),
+        ).route(
+          "/",
+          createDesignIpc(design, () => clock.now()),
+        ),
         rebuildRecap: (id) => recap.rebuild(id),
         allowMerge: createRunnerAllowMerge(database.db, runtime, {
           publish: (notice) => changes.publish(notice),
@@ -216,9 +252,11 @@ export async function startRunnerApp(options: {
     return {
       runtime,
       changes,
-      gh: createGhRunner(env.ghScript),
+      gh,
+      design,
       shutdown: async () => {
         socket.stopAccepting();
+        await design.drain();
         await Promise.all([runtime.shutdown(), recap.stop()]);
         changes.close();
         await socket.close();

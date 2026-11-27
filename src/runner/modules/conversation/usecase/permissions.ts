@@ -7,8 +7,9 @@ export function permission(
   id: string,
   requestId: string,
   decision: PermissionDecision,
+  callerCancelled?: () => boolean,
 ): Promise<Result<{ seq: number }, OperationError>> {
-  return this.serial(id, () => {
+  const resolvePermission = () => {
     const execution = this.executions.get(id);
     const pending = execution?.permission;
     if (!pending || pending.request.requestId !== requestId)
@@ -25,5 +26,6 @@ export function permission(
     delete execution.permission;
     pending.resolve(decision);
     return Promise.resolve(ok({ seq: record?.seq ?? 0 }));
-  });
+  };
+  return this.serial(id, resolvePermission, callerCancelled);
 }

@@ -274,7 +274,7 @@ AI が `report_implementation_done` を呼ぶと、`flow` は merge を確かめ
 
 ### worktree の片付け
 
-完了した issue と、取り下げの issue の worktree (`origin = flow`) を片付ける。設計の worktree も同じ規則で片付ける (`features/design-review.md`「設計の作業場所」)。開発者が作った worktree (`origin = user`) は片付けない (BR-050)。
+完了した issue と、取り下げの issue の worktree (`origin = flow`) を片付ける。設計の worktree とブランチの扱いは `features/design-review.md`「設計の作業場所」に従う。開発者が作った worktree (`origin = user`) は片付けない (BR-050)。
 
 消してよいかは、`features/worktree-terminal.md`「消す」の表の 3〜6 で決める。どれかに当てはまれば消さない (BR-051)。表の 1 と 2 は、自動フローの片付けでは当てはまらない。判定は、同書の `src/shared` の関数を画面のサーバーと同じに使う。未 push のコミットの数え方と、`HEAD` が merge を確かめた PR の先頭と同じときの例外も、同書に従う。
 
