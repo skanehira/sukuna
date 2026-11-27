@@ -12,6 +12,7 @@ import { startRunnerApp } from "../../app";
 import { createWorkspaceAgent } from "../../../server/modules/workspace/adapter/worktree-conversation-test-support";
 import { createApp } from "../../../server/app";
 import { RunnerLink } from "../../../server/runner-link";
+import { createIssueDependencies } from "../../../server/modules/issue/adapter/dependencies";
 import { createPrDependencies } from "../../../server/modules/flow/adapter/pr-dependencies";
 import { createTailscaleFake, incomingWith } from "../../../server/modules/identity/test-support";
 import type { AgentPort } from "../conversation/domain/agent-port";
@@ -28,7 +29,7 @@ function deferred() {
 }
 const sha = "a".repeat(40);
 export const flowText = "merge を許可されました。merge の手順で CI を待って merge してください";
-export async function fixture() {
+export async function fixture(options: { failSdkOpen?: boolean } = {}) {
   const home = createTempHome();
   const database = openMigratedDatabase(home);
   const sql = database.sqlite;
@@ -61,6 +62,7 @@ export async function fixture() {
     ...observed.agent,
     open(params) {
       const index = n++;
+      if (index > 0 && options.failSdkOpen) throw new Error("SDK open failed");
       const session = observed.agent.open(params);
       let first = true;
       return {
@@ -119,6 +121,12 @@ export async function fixture() {
   const app = createApp({
     build: "test",
     pr: deps,
+    issues: createIssueDependencies(
+      () => database.db,
+      () => link,
+      () => {},
+      { now: () => 1000, id: () => "unused" },
+    ),
     identity: {
       login: "dev",
       devIdentity: "1",
@@ -179,6 +187,14 @@ export async function fixture() {
     runner,
     observed,
     permit,
+    async withdraw() {
+      const response = await app.request(
+        "/api/issues/i/withdraw",
+        { method: "POST" },
+        incomingWith("127.0.0.1", 1),
+      );
+      expect(response.status).toBe(200);
+    },
     finishFlow,
     queued,
     rawMessages,

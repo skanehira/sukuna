@@ -200,3 +200,80 @@ it("別flow worktreeのlease拒否でsaveStateChangeがnullでも全体を戻し
     },
   ]);
 });
+
+it.each(scenarios)(
+  "公開withdrawが古いSDKの$boundary待ち中に成功すると$modeの許可は新SDKを開かず409",
+  async ({ mode, boundary }) => {
+    const f = await fixture();
+    f.change(mode);
+    const paused = pauseOld(f, boundary);
+    const pending = f.permit();
+    let withdrawal: Promise<void> | undefined;
+    try {
+      await Promise.race([
+        paused.entered,
+        pending.then(() => {
+          throw new Error("旧SDKの終了待ちに入りませんでした");
+        }),
+      ]);
+      withdrawal = f.withdraw();
+      await expect
+        .poll(() => f.state().issue)
+        .toEqual({ state: "withdrawn", stop_reason: null, updated_at: 1000 });
+      const withdrawn = f.state();
+      paused.release();
+      expect(await pending).toEqual({
+        status: 409,
+        body: {
+          error: {
+            code: "conflict",
+            message: "issue の状態が変わりました。読み直してから操作してください。",
+          },
+        },
+      });
+      await withdrawal;
+      expect({
+        state: f.state(),
+        opened: f.observed.opened.length,
+        delivered: f.observed.delivered.map((x) => x.text),
+        receipt: f.runner.runtime.store.duplicate("c", "queued-client", 0),
+      }).toEqual({
+        state: withdrawn,
+        opened: 1,
+        delivered: ["initial"],
+        receipt: { result: "queued", queuedId: "q" },
+      });
+    } finally {
+      paused.release();
+      f.finishFlow.resolve();
+      await pending;
+      await withdrawal;
+    }
+  },
+);
+it.each(["database", "sdk"])(
+  "状態競合と異なる %s の障害は許可の保存を戻し500のまま返す",
+  async (failure) => {
+    const f = await fixture({ failSdkOpen: failure === "sdk" });
+    f.change("move");
+    if (failure === "database")
+      f.sql.exec(
+        "CREATE TRIGGER reject_ci BEFORE INSERT ON issue_events WHEN NEW.type='stage_changed' BEGIN SELECT RAISE(ABORT,'database failed'); END",
+      );
+    const before = f.state();
+    expect(await f.permit()).toEqual({
+      status: 500,
+      body: {
+        error: {
+          code: "internal",
+          message: "会話の操作に失敗しました。もう一度操作してください。",
+        },
+      },
+    });
+    expect({
+      state: f.state(),
+      opened: f.observed.opened.length,
+      delivered: f.observed.delivered.map((x) => x.text),
+    }).toEqual({ state: before, opened: 1, delivered: ["initial"] });
+  },
+);

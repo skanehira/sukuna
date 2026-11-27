@@ -25,3 +25,9 @@ export type AllowMergeDependencies = {
   now(): number;
   changed(issue: MergeIssue): void;
 };
+
+export class MergeStateConflict extends Error {
+  constructor() {
+    super("issue の状態が変わりました。読み直してから操作してください。");
+  }
+}

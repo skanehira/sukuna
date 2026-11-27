@@ -1,3 +1,4 @@
+import { MergeStateConflict } from "../domain/merge-ports";
 import { WorktreeActivityBusy } from "../../../../shared/workspace/worktree-activity";
 import { and, desc, eq, isNull, max } from "drizzle-orm";
 import { err } from "neverthrow";
@@ -50,7 +51,7 @@ export function createRunnerAllowMerge(
         const flow = createIssueRepository(db, reservation);
         const issue = flow.getIssue(id);
         if (!issue || issue.state !== "stopped" || issue.stopReason !== "merge_confirm")
-          throw new Error("issue の状態が変わりました。");
+          throw new MergeStateConflict();
         const data = createIssueDataRepository(db);
         data.append(id, "merge_allowed", { headSha }, now);
         const saved = flow.saveStateChange(
@@ -99,18 +100,21 @@ export function createRunnerAllowMerge(
           activeStates.includes(runtime.store.get(id)?.runState ?? "idle") ||
           runtime.releases.has(id)
         )
-          return err({
-            code: "conflict",
-            message: "issue の状態が変わりました。読み直してから操作してください。",
-          });
-        return (
-          await runtime.deliver(
-            id,
-            { text, images: [], origin: "flow" },
-            { events: [], before: accept },
-            { includeQueued: false },
-          )
-        ).map(() => undefined);
+          return err({ code: "conflict", message: new MergeStateConflict().message });
+        try {
+          return (
+            await runtime.deliver(
+              id,
+              { text, images: [], origin: "flow" },
+              { events: [], before: accept },
+              { includeQueued: false },
+            )
+          ).map(() => undefined);
+        } catch (error) {
+          if (error instanceof MergeStateConflict)
+            return err({ code: "conflict", message: error.message });
+          throw error;
+        }
       }),
   });
 }
