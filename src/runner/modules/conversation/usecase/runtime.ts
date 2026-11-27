@@ -1088,7 +1088,8 @@ export class ConversationRuntime {
   }
   scheduleUsageResume(id: string, reopening?: Reopening & { stopSeq: number }): void {
     const c = this.store.get(id);
-    if (!c || c.runState !== "usage_limited") return;
+    if (!c || c.runState !== "usage_limited" || this.store.isUsageTimerRetired(id, c.lastSeq))
+      return;
     if (c.closedAt !== null && this.reopenWait(c, reopening ?? null) === 0) return;
     const stopSeq = reopening?.stopSeq ?? this.store.latestStopSeq(id);
     const sameStop = () => this.store.latestStopSeq(id) === stopSeq;

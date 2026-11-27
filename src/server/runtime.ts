@@ -5,6 +5,9 @@ import {
   type ResolveIdentity,
 } from "./modules/identity/usecase/resolve-identity";
 import { deniedMessage, type DeniedReason } from "../shared/denied";
+import { createLifecycleDependencies } from "./modules/conversation/adapter/lifecycle-dependencies";
+import type { LifecycleDependencies } from "./modules/conversation/domain/lifecycle";
+import { createWorkspaceDependencies } from "./modules/workspace/adapter/dependencies";
 import { ulid } from "ulid";
 import { createConversationDependencies } from "./modules/conversation/adapter/dependencies";
 import type { ConversationDependencies } from "./modules/conversation/domain/ports";
@@ -296,4 +299,25 @@ export function getPrDependencies(): PrDependencies {
       getWsHub().notice({ kind: "conversation_parts", conversation_id: id, parts: ["stock"] }),
   });
   return prDependencies;
+}
+
+let lifecycleDependencies: LifecycleDependencies | undefined;
+
+export function getLifecycleDependencies(): LifecycleDependencies {
+  lifecycleDependencies ??= createLifecycleDependencies({
+    database: getDatabase,
+    home: dirname(getDatabase().sqlite.name),
+    runner: getRunnerLink(),
+    workspace: createWorkspaceDependencies(() => getDatabase().db),
+    gh: createGhRunner(process.env.SUKUNA_GH ?? null),
+    log: writeRuntimeLog,
+    now,
+    withdraw: async () => {},
+    changed: (projectId, ids, parentId) => {
+      const hub = getWsHub();
+      const parent = parentId ? hub.conversationParts(parentId, ["stock", "threads"]) : undefined;
+      hub.inbox(ids, parent?.issue_id ? [parent.issue_id] : [], [projectId]);
+    },
+  });
+  return lifecycleDependencies;
 }

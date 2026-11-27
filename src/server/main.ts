@@ -17,6 +17,7 @@ import {
   getRuntimeIdentity,
   getProgressDependencies,
   getConversationDependencies,
+  getLifecycleDependencies,
   getRunnerLink,
   getWsHub,
   initializeRuntime,
@@ -74,6 +75,7 @@ const server = serve(
       pr: getPrDependencies(),
       progress: getProgressDependencies(),
       conversations: getConversationDependencies(),
+      lifecycle: getLifecycleDependencies(),
       stock: createStockDependencies({
         database: getDatabase,
         workspace,

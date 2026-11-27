@@ -1,3 +1,4 @@
+import { withThreadParent } from "../usecase/start";
 import { Hono } from "hono";
 import type { Result } from "neverthrow";
 import { z } from "zod";
@@ -20,7 +21,6 @@ import {
   proposeThreadFinish,
   threadFinishRefusal,
 } from "../../stock/usecase/propose-thread-finish";
-import { cancelledStockSend } from "../../stock/usecase/stock-send-refused";
 import type { StockSendResponse } from "../../../../shared/stock";
 import { stopProject } from "../../flow/usecase/stop-project";
 import type { Logger } from "../../../../shared/log";
@@ -131,8 +131,8 @@ export function createIpcRoutes(
     });
   };
   const empty = z.preprocess((input) => (input === undefined ? {} : input), z.object({}));
-  route("/conversations", startConversationSchema, (_id, p) =>
-    runtime.start({
+  route("/conversations", startConversationSchema, (_id, p, _params, callerCancelled) => {
+    const input = {
       projectId: p.project_id,
       kind: p.kind,
       cwd: p.cwd,
@@ -141,8 +141,13 @@ export function createIpcRoutes(
       worktreeId: p.worktree_id,
       issueId: p.issue_id,
       parentConversationId: p.parent_conversation_id,
-    }),
-  );
+    };
+    return input.kind === "thread" && input.parentConversationId
+      ? withThreadParent(runtime, input.parentConversationId, callerCancelled, () =>
+          runtime.start({ ...input, callerCancelled }),
+        )
+      : runtime.start(input);
+  });
   const sendStock = extensions.sendStock;
   if (sendStock)
     route("/conversations/:id/stock/send", sendStockIpcSchema, (id, input, _p, cancelled) =>
@@ -180,7 +185,9 @@ export function createIpcRoutes(
   route("/conversations/:id/resume", empty, (id, _p, _params, cancelled) =>
     runtime.resume(id, "developer", { callerCancelled: cancelled }),
   );
-  route("/conversations/:id/fork", forkConversationSchema, (id, p) => runtime.fork(id, p));
+  route("/conversations/:id/fork", forkConversationSchema, (id, p, _params, callerCancelled) =>
+    runtime.fork(id, p, callerCancelled),
+  );
   route("/conversations/:id/answers", answerSchema, (id, p, _params, cancelled) =>
     runtime.answer(id, p.request_id, p.answers, cancelled),
   );
@@ -197,14 +204,15 @@ export function createIpcRoutes(
   route("/conversations/:id/release", empty, (id, _p, _params, cancelled) =>
     runtime.release(id, cancelled),
   );
-  route("/conversations/:id/release/reserve", reserveReleaseSchema, (id, input, _p, cancelled) =>
-    runtime.releases.reserve(
-      id,
-      input.idle_only
-        ? () => (cancelled() ? cancelledStockSend : threadFinishRefusal(runtime, id))
-        : undefined,
-      input.idle_only ? undefined : cancelled,
-    ),
+  route(
+    "/conversations/:id/release/reserve",
+    reserveReleaseSchema,
+    (id, input, _p, callerCancelled) =>
+      runtime.releases.reserve(id, {
+        callerCancelled,
+        onlyIdle: input.only_idle,
+        beforeRelease: input.idle_only ? () => threadFinishRefusal(runtime, id) : undefined,
+      }),
   );
   route("/conversations/:id/release/complete", completeReleaseSchema, (id, p) =>
     Promise.resolve(runtime.releases.complete(id, p.token).map(() => ({}))),
