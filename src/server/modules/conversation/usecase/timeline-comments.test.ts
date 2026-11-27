@@ -7,6 +7,14 @@ const taskCases = [
   { taskId: "task 1", title: "題名" },
   { taskId: "task[1].*", title: "題名" },
   { taskId: "t1", title: "空白の ある題名" },
+  { taskId: "t1", title: "CSV」形式" },
+  { taskId: "task\n1", title: "題名" },
+  { taskId: "t1", title: "CSV\nBOMの扱い" },
+  { taskId: "t1", title: "「完了」について: 表示を直す" },
+  { taskId: "task「copy", title: "題名" },
+  { taskId: "task", title: "copy「本当の題名" },
+  { taskId: "", title: "題名" },
+  { taskId: "t1", title: "前半\nタイムラインのタスク other「別」について: 後半" },
 ];
 
 describe("タスクの相談コメント", () => {
@@ -33,13 +41,22 @@ describe("タスクの相談コメント", () => {
           createdAt: 10,
           payload: {
             origin,
-            text: `タイムラインのタスク ${taskId}「${title}」について: 確認してください`,
+            text: `タイムラインのタスク ${taskId}「${title}」について:   確認してください\n本文の続き  \n`,
           },
         },
       ];
-      expect(buildTimelineComments(taskId, [], events)).toEqual(
-        accepted ? [{ at: 10, taskId, text: "確認してください" }] : [],
-      );
+      expect(
+        buildTimelineComments(
+          [
+            { id: taskId, title },
+            { id: taskId === "task" ? "task「copy" : "task", title: "元タスク" },
+            { id: "other", title: "別" },
+            { id: taskId, title: "「完了" },
+          ],
+          [],
+          events,
+        ),
+      ).toEqual(accepted ? [{ at: 10, taskId, text: "  確認してください\n本文の続き  \n" }] : []);
     },
   );
 
@@ -68,8 +85,23 @@ describe("タスクの相談コメント", () => {
           },
         },
       ];
-      expect(buildTimelineComments(taskId, [], events)).toEqual([
+      expect(
+        buildTimelineComments(
+          [
+            { id: taskId, title },
+            { id: taskId, title: `変更前の${title}` },
+            { id: "other task", title: "前「題名」" },
+            { id: `${taskId}-other`, title: "後「題名」" },
+            { id: "other", title: "別" },
+            { id: taskId, title: "「完了" },
+          ],
+          [],
+          events,
+        ),
+      ).toEqual([
+        { at: 10, taskId: "other task", text: "前の相談\n前の続き" },
         { at: 10, taskId, text: "対象の相談\n対象の続き" },
+        { at: 10, taskId: `${taskId}-other`, text: "後の相談\n後の続き" },
         { at: 10, taskId, text: "最後の相談\n最後の続き" },
       ]);
     },
@@ -122,19 +154,51 @@ describe("タスクの相談コメント", () => {
     ];
     expect(
       buildTimelineComments(
-        "t1",
+        [
+          { id: "t1", title: "題名" },
+          { id: "t1", title: "古い題名" },
+          { id: "t2", title: "別" },
+        ],
         [
           { at: 20, taskId: "t1", text: "重複" },
           { at: 5, taskId: "t1", text: "ファイルの相談" },
           { at: 1, taskId: "t2", text: "別" },
+          { at: 20, taskId: "t2", text: "重複" },
         ],
         events,
       ),
     ).toEqual([
+      { at: 1, taskId: "t2", text: "別" },
       { at: 5, taskId: "t1", text: "ファイルの相談" },
       { at: 10, taskId: "t1", text: "先の相談\n続き" },
       { at: 20, taskId: "t1", text: "重複" },
+      { at: 20, taskId: "t2", text: "重複" },
+      { at: 30, taskId: "t2", text: "別の相談" },
       { at: 60, taskId: "t1", text: "会話だけの相談" },
     ]);
+  });
+
+  it("本文内の前置きに似た行と行途中の前置きを本文のまま保つ", () => {
+    const text =
+      "本文の途中の タイムラインのタスク other「別」について: 引用\nタイムラインのタスク の説明も見直す\n末尾  \n";
+    expect(
+      buildTimelineComments(
+        [
+          { id: "t1", title: "題名" },
+          { id: "other", title: "別" },
+        ],
+        [],
+        [
+          {
+            type: "user_message",
+            createdAt: 10,
+            payload: {
+              origin: "developer",
+              text: `タイムラインのタスク t1「題名」について: ${text}`,
+            },
+          },
+        ],
+      ),
+    ).toEqual([{ at: 10, taskId: "t1", text }]);
   });
 });

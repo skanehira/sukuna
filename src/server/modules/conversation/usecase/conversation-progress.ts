@@ -42,13 +42,11 @@ export async function assembleProgress(
       : await deps.timeline.read(conversation.sessionId);
   const timeline = read.file === null ? null : replayTimeline(read.file);
   if (timeline !== null) {
-    const ids = new Set([
-      ...timeline.tasks.map((task) => task.id),
-      ...timeline.comments.map((comment) => comment.taskId),
-    ]);
-    timeline.comments = [...ids]
-      .flatMap((taskId) => buildTimelineComments(taskId, timeline.comments, events))
-      .toSorted((a, b) => a.at - b.at);
+    timeline.comments = buildTimelineComments(
+      [...timeline.tasks, ...timeline.history.map(({ taskId, title }) => ({ id: taskId, title }))],
+      timeline.comments,
+      events,
+    );
   }
   return {
     conversationId: conversation.id,

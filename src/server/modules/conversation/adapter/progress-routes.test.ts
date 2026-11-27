@@ -326,7 +326,10 @@ describe("進捗の API と SQLite・タイムラインファイル", () => {
       JSON.stringify({
         ...file,
         comments: [{ at: 300, taskId, text: "確認" }],
-        journal: [{ at: 1, toolUseId: "t", ops: [{ op: "add", id: taskId, title }] }],
+        journal: [
+          { at: 1, toolUseId: "t", ops: [{ op: "add", id: taskId, title: `変更前の${title}` }] },
+          { at: 2, toolUseId: "rename", ops: [{ op: "update", id: taskId, title }] },
+        ],
       }),
     );
     const response = await app().request(
@@ -372,9 +375,22 @@ describe("進捗の API と SQLite・タイムラインファイル", () => {
           ],
           history: [
             {
-              at: 1,
+              at: 2,
               taskId,
               title,
+              from: "pending",
+              to: "pending",
+              weight: 1,
+              completedBefore: 0,
+              completedAfter: 0,
+              description: null,
+              note: null,
+              agentId: null,
+            },
+            {
+              at: 1,
+              taskId,
+              title: `変更前の${title}`,
               from: null,
               to: "pending",
               weight: 1,
@@ -392,6 +408,147 @@ describe("進捗の API と SQLite・タイムラインファイル", () => {
           ],
         },
         readError: null,
+      },
+    });
+  });
+
+  it.each([
+    { id: "t1", title: "題名" },
+    { id: "t1", title: "CSV「BOM」の扱い" },
+    { id: "task 1", title: "題名" },
+    { id: "task[1].*", title: "題名" },
+    { id: "t1", title: "空白の ある題名" },
+    { id: "t1", title: "CSV」形式" },
+    { id: "task\n1", title: "題名" },
+    { id: "t1", title: "CSV\nBOMの扱い" },
+    { id: "t1", title: "「完了」について: 表示を直す" },
+    { id: "task「copy", title: "題名" },
+    { id: "task", title: "copy「本当の題名" },
+    { id: "", title: "題名" },
+    { id: "t1", title: "前半\nタイムラインのタスク other「別」について: 後半" },
+  ])("既知の ID $id と現旧題名 $title から相談を混ぜずに返す", async ({ id, title }) => {
+    seedConversation();
+    database.db
+      .update(conversations)
+      .set({ runState: "idle" })
+      .where(eq(conversations.id, "chat"))
+      .run();
+    const others = [
+      { id: "other", title: "別" },
+      { id: id === "task" ? "task「copy" : "task", title: "元タスク" },
+    ];
+    const tasks = [{ id, title }, ...others];
+    const oldTitle = title === "「完了」について: 表示を直す" ? "「完了" : `変更前の${title}`;
+    const text = "  確認してください\nタイムラインのタスク の説明も見直す\n本文の続き  ";
+    const origins = [
+      "developer",
+      "queued",
+      "interrupt",
+      "stock",
+      "answer_text",
+      "flow",
+      "resume",
+      "finish_proposal",
+    ];
+    database.db
+      .insert(conversationEvents)
+      .values(
+        origins.map((origin, index) => ({
+          conversationId: "chat",
+          seq: index + 3,
+          type: "user_message",
+          createdAt: 300 + index,
+          payload: {
+            origin,
+            text: `下書き\n\nタイムラインのタスク other「別」について: 別の相談\n別の続き\n\nタイムラインのタスク ${id}「${index === 0 ? oldTitle : title}」について: ${text}\n\nタイムラインのタスク ${others[1]!.id}「元タスク」について: もう一方の相談`,
+          },
+        })),
+      )
+      .run();
+    writeFileSync(
+      join(home, "timeline/sessions/chat.json"),
+      JSON.stringify({
+        ...file,
+        journal: [
+          {
+            at: 1,
+            toolUseId: "add",
+            ops: tasks.map((task) => ({
+              op: "add",
+              ...task,
+              title: task.id === id ? oldTitle : task.title,
+            })),
+          },
+          { at: 2, toolUseId: "rename", ops: [{ op: "update", id, title }] },
+        ],
+        comments: [
+          { at: 300, taskId: id, text },
+          { at: 50, taskId: id, text: "ファイルの相談" },
+        ],
+      }),
+    );
+    const response = await app().request(
+      "/api/conversations/chat/progress",
+      {},
+      incomingWith("127.0.0.1", 1234),
+    );
+    const body = progressResponseSchema.parse(await response.json());
+    const history = (at: number, taskId: string, taskTitle: string, from: "pending" | null) => ({
+      at,
+      taskId,
+      title: taskTitle,
+      from,
+      to: "pending",
+      weight: 1,
+      completedBefore: 0,
+      completedAfter: 0,
+      description: null,
+      note: null,
+      agentId: null,
+    });
+    expect({ status: response.status, body }).toEqual({
+      status: 200,
+      body: {
+        conversationId: "chat",
+        activity: null,
+        readError: null,
+        timeline: {
+          defaultTreeId: others[1]!.id,
+          trees: tasks.map((task) => ({
+            ...task,
+            status: "pending",
+            completed: 0,
+            parts: { pending: 1, in_progress: 0, completed: 0, blocked: 0 },
+            leaves: { total: 1, pending: 1, in_progress: 0, completed: 0, blocked: 0 },
+            startedAt: 1,
+          })),
+          tasks: tasks.map((task) => ({
+            ...task,
+            parent: null,
+            status: "pending",
+            weight: 1,
+            completed: 0,
+            units: "0 / 1",
+          })),
+          history: [
+            history(2, id, title, "pending"),
+            ...tasks
+              .toReversed()
+              .map((task) => history(1, task.id, task.id === id ? oldTitle : task.title, null)),
+          ],
+          reports: [],
+          comments: [
+            { at: 50, taskId: id, text: "ファイルの相談" },
+            { at: 300, taskId: id, text },
+            { at: 300, taskId: "other", text: "別の相談\n別の続き" },
+            { at: 300, taskId: others[1]!.id, text: "もう一方の相談" },
+            ...[301, 302, 303, 304].flatMap((at) => [
+              { at, taskId: "other", text: "別の相談\n別の続き" },
+              { at, taskId: id, text },
+              { at, taskId: others[1]!.id, text: "もう一方の相談" },
+            ]),
+          ],
+        },
       },
     });
   });
