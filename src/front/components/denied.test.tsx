@@ -10,7 +10,7 @@ const UNAVAILABLE_MESSAGE =
 
 describe("Denied", () => {
   it("本人として確認できないときは、その理由と再読み込みを出す", () => {
-    render(<Denied reason="identity" />);
+    render(<Denied reason="identity" onReload={() => undefined} />);
 
     expect(screen.getByText(TITLE)).toBeInTheDocument();
     expect(screen.getByText(IDENTITY_MESSAGE)).toBeInTheDocument();
@@ -19,7 +19,7 @@ describe("Denied", () => {
   });
 
   it("Tailscale に問い合わせできないときは、その理由と再読み込みを出す", () => {
-    render(<Denied reason="unavailable" />);
+    render(<Denied reason="unavailable" onReload={() => undefined} />);
 
     expect(screen.getByText(TITLE)).toBeInTheDocument();
     expect(screen.getByText(UNAVAILABLE_MESSAGE)).toBeInTheDocument();
