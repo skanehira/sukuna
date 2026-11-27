@@ -58,7 +58,7 @@
 
 - 記録の `stopped` の理由も、`stop_reason` と同じ値で書く (DESIGN.md「データスキーマ」)
 - 閉じると利用枠の戻りを待つタイマーが外れるので、閉じた会話は枠が戻っても自動では再開しない (`features/conversation-lifecycle.md`)
-- 割り込みで止めた番には `stopped` を書かず、「止めました」の区切りの行も出さない。続けて届く指示で `working` に移る (`features/runtime.md`)
+- 割り込みで続く指示を受理した場合は、その指示で `working` に移る。受理できなかった場合の停止記録と表示は、`features/runtime.md`「Agent SDK のメッセージからの写し方」の番の終わりの表に従う
 - 利用枠切れの判定は DESIGN.md「既知の制約」の規則に従う。戻る時刻は `conversations.resets_at` に Unix ミリ秒で持つ。時刻が無いときは、末尾の行の時刻の代わりに「15 分ごとに再開を試みます」と出す
 - `failed` の説明には、エラーの種類を日本語にした 1 文を出す (例: 「API が混み合っています」「認証に失敗しました。この Mac の Claude Code にログインし直してください」)
 

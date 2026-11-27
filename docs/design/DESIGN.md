@@ -409,6 +409,8 @@ issue の状態の移り変わりは `features/issue-flow.md` の表が正本で
 
 - rg は `RIPGREP_CONFIG_PATH` の設定でリンクの追跡や無視の対象を変えられる。一覧と中身の検索では、子プロセスの環境からこの変数だけを除く ([公式ガイド](https://github.com/BurntSushi/ripgrep/blob/master/GUIDE.md#configuration-file))
 - ファイル名には改行も含まれる。rg の一覧は `--null`、Git の一覧は `-z` で NUL 区切りにし、改行で分けない
+- Git はファイルの種類が変わると、同じパスの削除と追加を別々のパッチとして出す。設計の差分 API は、両方を 1 ファイルにまとめる。行の役割を示す先頭の空白が省略されないように、`diff.suppressBlankEmpty=false` を指定する
+- 直接の設計反映は、Git 2.43 以降の `git merge-tree --merge-base` で、承認した差分の起点を指定する。標準の merge を使うため、合成に使う Git の設定と属性は専用の Git ディレクトリに置く。既定ブランチを開いている作業場所では、Git の切り替え操作が `HEAD` より先にインデックスを変えるため、両方をロックする
 - macOS では `/var` と `/private/var` のように同じディレクトリに別の絶対表記がある。記録の差分を相対パスへ直すときは、作業ディレクトリの表記と実体の表記をともに照合する
 - `realpath` の不存在エラーは、参照先が消えたシンボリックリンクにも返る。削除済みの差分の検査では、残るリンクを `lstat` で見分け、`readlink` の参照先と未解決の末尾も含めて作業ディレクトリ内かを判定する
 - `rg --files` は、既定ではシンボリックリンクの名前も返さない。`git ls-files --cached --others --exclude-standard -z` の一覧から、実体をたどらず `lstat` でリンクを選ぶ。`git check-ignore --no-index -z --stdin` で無視の対象を除き、ファイルツリーと名前の検索の一覧に補う
