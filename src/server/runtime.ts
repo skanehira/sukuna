@@ -1,6 +1,9 @@
 import { WebSocketServer } from "ws";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
+import { err, ok, type Result } from "neverthrow";
+import type { OpenedDatabase } from "../shared/db/open";
+import { startDatabase, type StartupError, type StartupOptions } from "../shared/db/startup";
 
 export type UpgradeHandler = (request: IncomingMessage, socket: Duplex, head: Buffer) => void;
 
@@ -23,4 +26,21 @@ export const handleUpgrade: UpgradeHandler = (request, socket, head) => {
 
 export function attachUpgradeHandler(server: UpgradeCapableServer): void {
   server.on("upgrade", handleUpgrade);
+}
+
+let database: OpenedDatabase | undefined;
+
+export async function initializeRuntime(
+  options?: StartupOptions,
+): Promise<Result<void, StartupError>> {
+  if (database !== undefined) return ok(undefined);
+  const result = await startDatabase(options);
+  if (result.isErr()) return err(result.error);
+  database = result.value;
+  return ok(undefined);
+}
+
+export function getDatabase(): OpenedDatabase {
+  if (database === undefined) throw new Error("データベースがまだ開かれていません");
+  return database;
 }

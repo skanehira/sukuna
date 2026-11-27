@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import WebSocket from "ws";
-import { attachUpgradeHandler } from "./runtime";
+import type { OpenedDatabase } from "../shared/db/open";
+import { createTempHome, removeTempHome } from "../shared/db/test-helpers";
+import { attachUpgradeHandler, getDatabase, initializeRuntime } from "./runtime";
 
 function settle(socket: WebSocket): Promise<"open" | "error"> {
   return new Promise((resolve) => {
@@ -47,5 +49,26 @@ describe("attachUpgradeHandler", () => {
     const rejected = new WebSocket(`ws://127.0.0.1:${port}/other`, { handshakeTimeout: 500 });
     clients.push(rejected);
     expect(await settle(rejected)).toBe("error");
+  });
+});
+
+describe("initializeRuntime", () => {
+  it("2 回初期化しても、データベースの接続は 1 つのまま", async () => {
+    const home = createTempHome();
+    let database: OpenedDatabase | undefined;
+
+    try {
+      const first = await initializeRuntime({ homeDir: home });
+      expect(first.isOk()).toBe(true);
+      if (!first.isOk()) throw new Error("初期化に失敗しました");
+      database = getDatabase();
+
+      const second = await initializeRuntime({ homeDir: home });
+      expect(second.isOk()).toBe(true);
+      expect(getDatabase()).toBe(database);
+    } finally {
+      database?.close();
+      removeTempHome(home);
+    }
   });
 });

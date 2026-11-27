@@ -109,6 +109,7 @@ flowchart LR
 | テスト (画面とサーバーとランナー) | `CI=1 vp test --run` |
 | 型・lint・フォーマットの検査 | `vp check` |
 | ビルド | `vp build` |
+| マイグレーションの生成 | `vp exec drizzle-kit generate --dialect sqlite --schema ./src/shared/db/schema.ts --out ./src/shared/db/migrations --breakpoints` |
 | E2E | `vp run e2e` |
 | 本番の起動 | `PORT=<port> node dist/server/main.js` と `node dist/runner/main.js` |
 
@@ -405,6 +406,7 @@ issue の状態の移り変わりは `features/issue-flow.md` の表が正本で
 - `vp dev` で API のファイルを編集しても、データベースの接続・配信・WebSocket の受け口は作り直さない。プロセスに 1 つのモジュールに置く
 - `vp dev` では Vite が `/api` 以外のパスを配るため、本人の判定を受けるのは API だけになる。本番の起動では画面のサーバーが静的ファイルと SPA の HTML も判定し、本人でなければ拒否の HTML を返す
 - `vp dev` の `localhost` は `::1` で待ち受けることがあるため、開発用の本人の値は `127.0.0.1` と `::1` の両方を手元として扱う
+- SQLite の `PRAGMA journal_mode = WAL` はファイルに残るが、`busy_timeout` と `foreign_keys` は接続ごとの設定である。`journal_mode` と `foreign_keys` はトランザクションの中では変えられない。接続を開いた直後に 3 つとも設定する
 - `node-pty` は、導入のあとに補助の実行ファイルへ実行権限を付けないと動かない。`postinstall` で付ける
 - Tailscale のローカル API のポートとトークンは、Tailscale の再起動で変わる。起動時に固定せず、認証か接続に失敗したら読み直す (PoC `tailscale-identity`)
 - 目次などの更新の実行には、題名を必ず渡す。渡さないと、題名を作る別の呼び出しが毎回走る (PoC `summary-ai-cost`)
