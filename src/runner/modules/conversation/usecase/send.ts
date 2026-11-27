@@ -7,29 +7,42 @@ export function send(
   this: ConversationRuntime,
   id: string,
   input: SendInput,
+  accepted?: (fresh: boolean) => void,
 ): Promise<Result<SendResult, OperationError>> {
   if (this.releases.has(id)) {
     if (input.clientId) {
       const prior = this.store.duplicate(id, input.clientId, this.options.clock.now() - 600000);
-      if (prior) return Promise.resolve(ok(prior));
+      if (prior) {
+        accepted?.(false);
+        return Promise.resolve(ok(prior));
+      }
     }
     return Promise.resolve(err(conflict()));
   }
-  return this.serial(id, () => sendUnlocked.call(this, id, input));
+  return this.serial(id, () => sendUnlocked.call(this, id, input, undefined, accepted));
 }
 export async function sendUnlocked(
   this: ConversationRuntime,
   id: string,
   input: SendInput,
   acceptance?: InputAcceptance,
+  accepted?: (fresh: boolean) => void,
 ): Promise<Result<SendResult, OperationError>> {
-  const c = this.store.get(id);
+  let c = this.store.get(id);
   if (!c) return err({ code: "not_found", message: "会話が見つかりません。" });
   if (this.closing) return err(conflict());
   if (input.clientId) {
     const prior = this.store.duplicate(id, input.clientId, this.options.clock.now() - 600000);
-    if (prior) return ok(prior);
+    if (prior) {
+      accepted?.(false);
+      return ok(prior);
+    }
   }
+  const allowed = await this.runOptions.allowDelivery(c, input);
+  if (allowed.isErr()) return err(allowed.error);
+  c = this.store.get(id);
+  if (!c) return err({ code: "not_found", message: "会話が見つかりません。" });
+  if (this.closing) return err(conflict());
   if (input.text.length === 0 && input.images.length === 0 && this.store.queue(id).length === 0)
     return err({ code: "invalid_input", message: "入力を確認してください。" });
   if (activeStates.includes(c.runState) && !input.interrupt) {
@@ -55,9 +68,10 @@ export async function sendUnlocked(
       });
     });
     this.partsChanged(id, ["queue"]);
+    accepted?.(true);
     return ok({ result: "queued", queuedId });
   }
-  return this.deliver(
+  const delivered = await this.deliver(
     id,
     {
       ...input,
@@ -66,4 +80,6 @@ export async function sendUnlocked(
     acceptance,
     { interrupt: activeStates.includes(c.runState) },
   );
+  if (delivered.isOk()) accepted?.(true);
+  return delivered;
 }

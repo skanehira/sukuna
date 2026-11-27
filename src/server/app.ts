@@ -1,5 +1,7 @@
 import { createInboxRoutes } from "./modules/inbox/adapter/routes";
 import type { InboxDependencies } from "./modules/inbox/domain/ports";
+import { createConversationRoutes } from "./modules/conversation/adapter/http";
+import type { ConversationDependencies } from "./modules/conversation/domain/ports";
 import { createConversationProgressHandler } from "./modules/conversation/adapter/progress-routes";
 import { createIssueProgressHandler } from "./modules/flow/adapter/progress-routes";
 import type { ProgressDependencies } from "./modules/conversation/domain/progress-port";
@@ -40,6 +42,7 @@ export type AppOptions = {
   workspace?: WorkspaceDependencies;
   progress?: ProgressDependencies;
   messages?: MessageDependencies;
+  conversations?: ConversationDependencies;
   stock?: StockDependencies;
 
   issues?: IssueServerDeps;
@@ -54,6 +57,7 @@ export function createApp(options: AppOptions): Hono<IdentityEnv> {
   const app = new Hono<IdentityEnv>();
 
   app.use("*", createIdentityMiddleware({ resolve: resolveIdentity }));
+  if (options.conversations) app.route("/api", createConversationRoutes(options.conversations));
   if (options.messages)
     app.post("/api/conversations/:id/messages", createMessageHandler(options.messages));
 

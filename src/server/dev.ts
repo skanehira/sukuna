@@ -9,7 +9,7 @@ import {
   getWsHub,
   writeRuntimeLog,
   getProgressDependencies,
-  getMessageDependencies,
+  getConversationDependencies,
 } from "./runtime";
 import { createWorktreeDependencies } from "./modules/workspace/adapter/worktree-dependencies";
 import { createWorkspaceDependencies } from "./modules/workspace/adapter/dependencies";
@@ -23,7 +23,7 @@ export default createApp({
   workspace,
   inbox: { repository: createInboxRepository(() => getDatabase().db), resetTime: formatResetTime },
   progress: getProgressDependencies(),
-  messages: getMessageDependencies(),
+  conversations: getConversationDependencies(),
   stock: createStockDependencies({
     database: () => getDatabase().db,
     workspace,

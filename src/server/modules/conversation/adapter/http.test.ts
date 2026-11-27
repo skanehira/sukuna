@@ -1,0 +1,1810 @@
+import { createWorktreeActivity } from "../../../../shared/workspace/sqlite-worktree-activity";
+import type {
+  ConversationSnapshot,
+  ConversationEventsPage,
+  ConversationQueueItem,
+} from "../../../../shared/conversation/api";
+import { afterEach, expect, it } from "vite-plus/test";
+import { join } from "node:path";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { err, ok } from "neverthrow";
+import { issueInstructions } from "../../../../runner/modules/issue/domain/issue-instructions";
+import {
+  createTempHome,
+  openMigratedDatabase,
+  removeTempHome,
+} from "../../../../shared/db/test-helpers";
+import { readEnvironment } from "../../../../shared/env";
+import type { AgentScript } from "../../../../shared/agent-script";
+import type {
+  AgentSession,
+  OpenParams,
+} from "../../../../runner/modules/conversation/domain/agent-port";
+import { ScriptedAgent } from "../../../../runner/modules/conversation/adapter/scripted-agent";
+import { startRunnerApp } from "../../../../runner/app";
+import { createApp } from "../../../app";
+import { RunnerLink, runnerUnavailable } from "../../../runner-link";
+import { WsHub } from "../../../ws-hub";
+import { createClockFake, createTailscaleFake, incomingWith } from "../../identity/test-support";
+import { createConversationDependencies } from "./dependencies";
+
+function deferred() {
+  let resolve = () => {};
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+class RecordingAgent extends ScriptedAgent {
+  messages: { text: string; images: { data: Buffer; mediaType: string }[] }[] = [];
+  beforeInterrupt?: () => Promise<void>;
+  beforeOutputEnd?: () => Promise<void>;
+  beforeSend?: (params: OpenParams) => void;
+  override open(params: OpenParams): AgentSession {
+    const index = this.opened.length;
+    const session = super.open(params);
+    const finishOutput = () => this.beforeOutputEnd?.();
+    return {
+      ...session,
+      output: {
+        async *[Symbol.asyncIterator]() {
+          for await (const output of session.output) yield output;
+          if (index === 0) await finishOutput();
+        },
+      },
+      send: (message) => {
+        this.beforeSend?.(params);
+        this.messages.push(message);
+        session.send(message);
+      },
+      interrupt: async () => {
+        await this.beforeInterrupt?.();
+        await session.interrupt();
+      },
+      commands: async () => [{ name: "/dev-spec", description: "設計ループ。手順を進める" }],
+    };
+  }
+}
+const cleanups: (() => Promise<void>)[] = [];
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0)) await cleanup();
+});
+const png = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1cAAAAASUVORK5CYII=",
+  "base64",
+);
+async function fixture(
+  script: AgentScript = { rules: [], fallback: [{ text: "受け取りました" }, { hold: true }] },
+) {
+  const home = createTempHome();
+  const database = openMigratedDatabase(home);
+  database.sqlite
+    .prepare("INSERT INTO projects (id,name,path,default_branch) VALUES ('p','project',?,'main')")
+    .run(home);
+  const scriptPath = join(home, "agent.json");
+  writeFileSync(scriptPath, JSON.stringify(script));
+  const environment = readEnvironment(
+    "runner",
+    { SUKUNA_HOME: home, SUKUNA_AGENT: "fake", SUKUNA_AGENT_SCRIPT: scriptPath },
+    home,
+    () => true,
+  )._unsafeUnwrap();
+  const agent = new RecordingAgent(script);
+  const clock = { time: 1000, now: () => clock.time, setTimeout: () => () => {} };
+  let runner = await startRunnerApp({ database, agent, environment, clock, log: () => {} });
+  const hub = new WsHub(database.sqlite);
+  const notices: unknown[] = [];
+  const link = new RunnerLink({
+    socket: environment.socket,
+    log: () => {},
+    notice: (notice) => {
+      notices.push(notice);
+      hub.notice(notice);
+    },
+    connection: () => {},
+  });
+  const deps = createConversationDependencies({
+    sqlite: database.sqlite,
+    home,
+    runner: link,
+    id: (() => {
+      let n = 0;
+      return () => `01J0000000000000000000${String(++n).padStart(5, "0")}`;
+    })(),
+    now: clock.now,
+    changed: (id, parts) => hub.notice({ kind: "conversation_parts", conversation_id: id, parts }),
+    reopened: (ids) =>
+      ids.forEach((id) =>
+        hub.notice({ kind: "conversation_parts", conversation_id: id, parts: [] }),
+      ),
+  });
+  const app = createApp({
+    build: "test",
+    identity: {
+      login: "test@example.com",
+      devIdentity: "1",
+      tailscale: createTailscaleFake().api,
+      clock: createClockFake(),
+    },
+    conversations: deps,
+  });
+  const request = async <T = unknown>(path: string, method = "GET", input?: unknown) => {
+    const response = await app.request(
+      `/api${path}`,
+      {
+        method,
+        ...(input === undefined
+          ? {}
+          : { headers: { "content-type": "application/json" }, body: JSON.stringify(input) }),
+      },
+      incomingWith("127.0.0.1", 1),
+    );
+    return {
+      status: response.status,
+      body: (response.status === 204 ? null : await response.json()) as T,
+    };
+  };
+  const start = async () => {
+    const response = await request("/conversations", "POST", {
+      projectId: "p",
+      workspace: { kind: "project" },
+    });
+    expect(response.status).toBe(201);
+    return (response.body as { conversation: { id: string } }).conversation.id;
+  };
+  const send = (
+    id: string,
+    text: string,
+    clientMessageId = text,
+    mode = "send",
+    images: string[] = [],
+  ) =>
+    request<{ result: "delivered" | "queued"; queueItem: ConversationQueueItem | null }>(
+      `/conversations/${id}/messages`,
+      "POST",
+      { text, images, clientMessageId, mode },
+    );
+  const upload = async (id: string, data = png, mediaType = "image/png") => {
+    const response = await app.request(
+      `/api/conversations/${id}/images`,
+      { method: "POST", headers: { "content-type": mediaType }, body: data },
+      incomingWith("127.0.0.1", 1),
+    );
+    return {
+      status: response.status,
+      body: (await response.json()) as { image: { id: string; mediaType: string; bytes: number } },
+    };
+  };
+  cleanups.push(async () => {
+    link.stop();
+    await runner.shutdown();
+    database.close();
+    removeTempHome(home);
+  });
+  return {
+    home,
+    database,
+    agent,
+    clock,
+    hub,
+    link,
+    notices,
+    request,
+    snapshot: (id: string) => request<ConversationSnapshot>(`/conversations/${id}`),
+    start,
+    send,
+    upload,
+    deps,
+    runner: () => runner,
+    restart: async () => {
+      await runner.shutdown();
+      runner = await startRunnerApp({ database, agent, environment, clock, log: () => {} });
+    },
+  };
+}
+const delivered = { status: 202, body: { result: "delivered", queueItem: null } };
+const invalid = {
+  status: 400,
+  body: { error: { code: "invalid_input", message: "入力を確認してください。" } },
+};
+async function settled(f: Awaited<ReturnType<typeof fixture>>, id: string, state: string) {
+  await expect.poll(() => f.runner().runtime.store.get(id)?.runState).toBe(state);
+}
+
+it("プロジェクトの空の会話を開始し、初回指示で題名・発言・実行設定を保存してスキルをそのまま届ける", async () => {
+  const f = await fixture();
+  f.database.sqlite
+    .prepare("UPDATE projects SET model='sonnet', permission_mode='acceptEdits' WHERE id='p'")
+    .run();
+  f.runner().runtime.runOptions.registerInstructions(() => "追加の指示");
+  const id = await f.start();
+  expect(await f.snapshot(id)).toEqual({
+    status: 200,
+    body: {
+      conversation: {
+        id,
+        projectId: "p",
+        projectName: "project",
+        kind: "chat",
+        issueId: null,
+        parentConversationId: null,
+        title: "新しい会話",
+        cwd: f.home,
+        worktree: null,
+        runState: "idle",
+        stopReason: null,
+        resetsAt: null,
+        lastSeq: 0,
+        lastReadSeq: 0,
+        lastPosition: null,
+        closedAt: null,
+      },
+      draft: null,
+      queue: [],
+      pendingAnswers: null,
+      pendingPermission: null,
+      commands: [],
+    },
+  });
+  expect(f.database.sqlite.prepare("SELECT * FROM worktrees").all()).toEqual([]);
+  expect(await f.send(id, "/dev-spec 要件を整理\n次の行")).toEqual(delivered);
+  await settled(f, id, "working");
+  const opened = f.agent.opened[0]!;
+  expect({
+    cwd: opened.cwd,
+    model: opened.model,
+    permissionMode: opened.permissionMode,
+    instructions: opened.appendSystemPrompt,
+    tools: opened.appTools.map((tool) => tool.name),
+    resume: opened.resume,
+    sent: f.agent.sent.map((message) => message.text),
+  }).toEqual({
+    cwd: f.home,
+    model: "sonnet",
+    permissionMode: "acceptEdits",
+    instructions: `${issueInstructions()}\n\n追加の指示`,
+    tools: ["issue_get", "issue_list", "issue_create", "issue_update", "issue_comment"],
+    resume: false,
+    sent: ["/dev-spec 要件を整理\n次の行"],
+  });
+  const page = await f.request<ConversationEventsPage>(`/conversations/${id}/events?limit=1`);
+  expect(page).toEqual({
+    status: 200,
+    body: {
+      events: [
+        {
+          seq: 1,
+          type: "user_message",
+          payload: {
+            text: "/dev-spec 要件を整理\n次の行",
+            images: [],
+            origin: "developer",
+            client_ids: ["/dev-spec 要件を整理\n次の行"],
+            queued_ids: [],
+            client_receipts: [
+              { client_id: "/dev-spec 要件を整理\n次の行", result: "delivered", received_at: 1000 },
+            ],
+          },
+          createdAt: 1000,
+          missingImages: 0,
+        },
+      ],
+      lastSeq: 2,
+      hasMore: true,
+    },
+  });
+  expect((await f.snapshot(id)).body.conversation.title).toBe("/dev-spec 要件を整理");
+  expect((await f.snapshot(id)).body.commands).toEqual([
+    { name: "/dev-spec", description: "設計ループ。手順を進める" },
+  ]);
+  const sessionId = f.runner().runtime.store.get(id)!.sessionId;
+  await f.restart();
+  f.runner().runtime.runOptions.registerInstructions(() => "追加の指示");
+  expect(await f.send(id, "続き")).toEqual(delivered);
+  const reopened = f.agent.opened.at(-1)!;
+  expect({
+    sessionId: reopened.sessionId,
+    resume: reopened.resume,
+    cwd: reopened.cwd,
+    model: reopened.model,
+    permissionMode: reopened.permissionMode,
+    instructions: reopened.appendSystemPrompt,
+  }).toEqual({
+    sessionId,
+    resume: true,
+    cwd: f.home,
+    model: "sonnet",
+    permissionMode: "acceptEdits",
+    instructions: opened.appendSystemPrompt,
+  });
+});
+
+it("2つのタブの下書きは新しい編集を残し、別会話から戻っても読み出せて変更が配信される", async () => {
+  const f = await fixture();
+  const id = await f.start();
+  const events: unknown[] = [];
+  const client = {
+    bufferedAmount: 0,
+    send: (text: string) => events.push(JSON.parse(text)),
+    close: () => {},
+  };
+  f.hub.add(client);
+  f.hub.receive(client, { op: "subscribe", topic: `conversation:${id}` });
+  const save = (text: string, editedAt: number, clientId: string) =>
+    f.request(`/conversations/${id}/draft`, "PUT", { text, images: [], editedAt, clientId });
+  expect(await save("先", 10, "tab-a")).toEqual({
+    status: 200,
+    body: { applied: true, draft: { text: "先", images: [], updatedAt: 10, updatedBy: "tab-a" } },
+  });
+  expect(await save("後", 20, "tab-b")).toEqual({
+    status: 200,
+    body: { applied: true, draft: { text: "後", images: [], updatedAt: 20, updatedBy: "tab-b" } },
+  });
+  for (const editedAt of [19, 20])
+    expect(await save("古", editedAt, "tab-a")).toEqual({
+      status: 200,
+      body: {
+        applied: false,
+        draft: { text: "後", images: [], updatedAt: 20, updatedBy: "tab-b" },
+      },
+    });
+  await f.request(`/conversations/${await f.start()}`);
+  expect((await f.snapshot(id)).body.draft).toEqual({
+    text: "後",
+    images: [],
+    updatedAt: 20,
+    updatedBy: "tab-b",
+  });
+  expect(events).toEqual(
+    [1, 2].map(() => ({
+      topic: `conversation:${id}`,
+      seq: 0,
+      type: "changed",
+      payload: { parts: ["draft"] },
+    })),
+  );
+  expect(await save("", 30, "tab-a")).toEqual({
+    status: 200,
+    body: { applied: true, draft: null },
+  });
+  expect(await save("古", 20, "tab-b")).toEqual({
+    status: 200,
+    body: { applied: false, draft: null },
+  });
+});
+
+it("画像を保存して順番どおり実データを届け、欠落した画像数をイベントへ返す", async () => {
+  const f = await fixture();
+  const id = await f.start();
+  const first = await f.upload(id);
+  const second = await f.upload(id, Buffer.from("GIF89a"), "image/gif");
+  expect(first).toEqual({
+    status: 201,
+    body: { image: { id: first.body.image.id, mediaType: "image/png", bytes: png.length } },
+  });
+  const images = [first.body.image.id, second.body.image.id];
+  expect(await f.send(id, "画像", "images", "send", images)).toEqual(delivered);
+  expect(f.agent.messages).toEqual([
+    {
+      text: "画像",
+      images: [
+        { data: png, mediaType: "image/png" },
+        { data: Buffer.from("GIF89a"), mediaType: "image/gif" },
+      ],
+    },
+  ]);
+  rmSync(join(f.home, "images", id, `${images[0]}.png`));
+  const page = await f.request<ConversationEventsPage>(`/conversations/${id}/events?limit=1`);
+  expect(page.body.events[0]).toEqual({
+    seq: 1,
+    type: "user_message",
+    payload: {
+      text: "画像",
+      images: [
+        { path: `images/${id}/${images[0]}.png`, media_type: "image/png" },
+        { path: `images/${id}/${images[1]}.gif`, media_type: "image/gif" },
+      ],
+      origin: "developer",
+      client_ids: ["images"],
+      queued_ids: [],
+      client_receipts: [{ client_id: "images", result: "delivered", received_at: 1000 }],
+    },
+    createdAt: 1000,
+    missingImages: 1,
+  });
+  expect(await f.send(id, "欠落", "missing", "send", [images[0]])).toEqual({
+    status: 400,
+    body: { error: { code: "invalid_input", message: "画像が見つかりません。貼り直してください" } },
+  });
+});
+
+it("キューの編集・取消しは書きかけとストックへ戻り、停止後も自動配達されず、送信したstockのseqを保存する", async () => {
+  const f = await fixture();
+  const id = await f.start();
+  await f.send(id, "最初");
+  const a = await f.send(id, "預ける", "queue-a");
+  const item = a.body.queueItem!;
+  expect(
+    await f.request(`/conversations/${id}/queue/${item.id}`, "PATCH", {
+      text: "直した内容",
+      images: [],
+    }),
+  ).toEqual({ status: 200, body: { queueItem: { ...item, text: "直した内容" } } });
+  await f.request(`/conversations/${id}/draft`, "PUT", {
+    text: "書きかけ",
+    images: [],
+    editedAt: 20,
+    clientId: "tab-a",
+  });
+  expect(await f.request(`/conversations/${id}/queue/${item.id}`, "DELETE")).toEqual({
+    status: 204,
+    body: null,
+  });
+  expect((await f.snapshot(id)).body.draft).toEqual({
+    text: "書きかけ\n\n直した内容",
+    images: [],
+    updatedAt: 1000,
+    updatedBy: "tab-a",
+  });
+  f.database.sqlite
+    .prepare(
+      "INSERT INTO stock_items (id,conversation_id,kind,text,state,sent_at) VALUES ('s',?,'instruction','元の本文','sent',1000)",
+    )
+    .run(id);
+  f.database.sqlite
+    .prepare(
+      "INSERT INTO queued_instructions (id,conversation_id,text,images,position,stock_item_id,created_at) VALUES ('stock-q',?,'ストック','[]',1,'s',1000)",
+    )
+    .run(id);
+  expect(await f.request(`/conversations/${id}/queue/stock-q`, "DELETE")).toEqual({
+    status: 204,
+    body: null,
+  });
+  expect(
+    f.database.sqlite
+      .prepare("SELECT state,sent_at,sent_seq,text FROM stock_items WHERE id='s'")
+      .get(),
+  ).toEqual({ state: "stocked", sent_at: null, sent_seq: null, text: "元の本文" });
+  await f.send(id, "残す", "queue-b");
+  expect(await f.request(`/conversations/${id}/stop`, "POST")).toEqual({
+    status: 202,
+    body: { runState: "stopped" },
+  });
+  expect({
+    sent: f.agent.sent.map((m) => m.text),
+    queue: f
+      .runner()
+      .runtime.store.queue(id)
+      .map((q) => q.text),
+  }).toEqual({ sent: ["最初"], queue: ["残す"] });
+  f.database.sqlite.prepare("UPDATE stock_items SET state='sent',sent_at=1000 WHERE id='s'").run();
+  f.database.sqlite
+    .prepare(
+      "INSERT INTO queued_instructions (id,conversation_id,text,images,position,stock_item_id,created_at) VALUES ('stock-q',?,'ストック','[]',2,'s',1000)",
+    )
+    .run(id);
+  expect(await f.send(id, "", "deliver")).toEqual(delivered);
+  expect(f.agent.sent.map((m) => m.text)).toEqual(["最初", "残す\n\nストック"]);
+  const seq = f
+    .runner()
+    .runtime.store.events(id)
+    .filter((e) => e.type === "user_message")
+    .at(-1)!.seq;
+  expect(
+    f.database.sqlite.prepare("SELECT state,sent_seq FROM stock_items WHERE id='s'").get(),
+  ).toEqual({ state: "sent", sent_seq: seq });
+  expect(await f.request(`/conversations/${id}/queue/stock-q`, "DELETE")).toEqual({
+    status: 404,
+    body: { error: { code: "not_found", message: "すでに届きました" } },
+  });
+});
+
+it.each(["edit", "cancel"])(
+  "割り込み停止待ちの間に%sが成功したキューの古い内容を送らない",
+  async (operation) => {
+    const f = await fixture();
+    const id = await f.start();
+    await f.send(id, "最初");
+    const queued = await f.send(id, "古い指示", "queued");
+    const entered = deferred();
+    const release = deferred();
+    f.agent.beforeInterrupt = async () => {
+      entered.resolve();
+      await release.promise;
+    };
+    const interrupted = f.send(id, "割り込み", "interrupt", "interrupt");
+    await entered.promise;
+    const path = `/conversations/${id}/queue/${queued.body.queueItem!.id}`;
+    const edited =
+      operation === "edit"
+        ? await f.request(path, "PATCH", { text: "新しい指示", images: [] })
+        : await f.request(path, "DELETE");
+    expect(edited.status).toBe(operation === "edit" ? 200 : 204);
+    release.resolve();
+    expect(await interrupted).toEqual(delivered);
+    expect(f.agent.sent.map((m) => m.text)).toEqual([
+      "最初",
+      operation === "edit" ? "新しい指示\n\n割り込み" : "割り込み",
+    ]);
+    expect(f.runner().runtime.store.queue(id)).toEqual([]);
+  },
+);
+
+const question = (text: string, multi_select = false) => ({
+  question: text,
+  header: text,
+  options: [
+    { label: "A", description: "方針A" },
+    { label: "B", description: "方針B" },
+  ],
+  multi_select,
+});
+it("回答を全問まとめて一度だけAIに返し、確認が必要な未回答は送らない", async () => {
+  const f = await fixture({
+    rules: [],
+    fallback: [{ ask: [question("Q1", true), question("Q2")] }, { text: "続き" }, { hold: true }],
+  });
+  const id = await f.start();
+  await f.send(id, "質問");
+  await settled(f, id, "waiting_answer");
+  const q = f
+    .runner()
+    .runtime.store.events(id)
+    .find((e) => e.type === "question")!;
+  const path = `/conversations/${id}/answers`;
+  expect(await f.request(path, "PUT", { questionSeq: q.seq + 1, answers: {} })).toEqual({
+    status: 409,
+    body: {
+      error: { code: "conflict", message: "回答する質問が変わりました。読み直してください。" },
+    },
+  });
+  const partial = { "0": { choices: ["A", "B"], text: "補足" } };
+  expect(await f.request(path, "PUT", { questionSeq: q.seq, answers: partial })).toEqual({
+    status: 200,
+    body: { pendingAnswers: { questionSeq: q.seq, answers: partial } },
+  });
+  expect(await f.request(`${path}/send`, "POST", { confirmUnanswered: false })).toEqual({
+    status: 409,
+    body: {
+      error: {
+        code: "unanswered_questions",
+        message: "答えていない質問があります。確認してから送ってください。",
+      },
+    },
+  });
+  expect(f.agent.receivedAnswers).toEqual([]);
+  const answers = { ...partial, "1": { choices: [], text: "自由回答" } };
+  await f.request(path, "PUT", { questionSeq: q.seq, answers });
+  expect(await f.request(`${path}/send`, "POST", { confirmUnanswered: false })).toEqual({
+    status: 202,
+    body: { result: "answered" },
+  });
+  await expect.poll(() => f.agent.receivedAnswers.length).toBe(1);
+  expect(f.agent.receivedAnswers).toEqual([
+    {
+      requestId: q.type === "question" ? q.payload.request_id : "",
+      answers: { Q1: "A、B: 補足", Q2: "自由回答" },
+    },
+  ]);
+  expect({
+    pending: (await f.snapshot(id)).body.pendingAnswers,
+    questions: f.database.sqlite
+      .prepare("SELECT answered FROM questions WHERE conversation_id=? ORDER BY id")
+      .all(id),
+  }).toEqual({ pending: null, questions: [{ answered: 1 }, { answered: 1 }] });
+});
+it("停止した質問への保存済み回答は通常の指示として届けて閉じた会話も開き直す", async () => {
+  const f = await fixture({
+    rules: [
+      { match: "^質問$", steps: [{ ask: [question("Q1"), question("Q2")] }, { hold: true }] },
+    ],
+    fallback: [{ hold: true }],
+  });
+  const id = await f.start();
+  await f.send(id, "質問");
+  await settled(f, id, "waiting_answer");
+  const q = f
+    .runner()
+    .runtime.store.events(id)
+    .find((e) => e.type === "question")!;
+  await f.request(`/conversations/${id}/answers`, "PUT", {
+    questionSeq: q.seq,
+    answers: { "0": { choices: ["A"], text: null } },
+  });
+  await f.request(`/conversations/${id}/stop`, "POST");
+  f.database.sqlite.prepare("UPDATE conversations SET closed_at=500 WHERE id=?").run(id);
+  expect(
+    await f.request(`/conversations/${id}/answers/send`, "POST", { confirmUnanswered: true }),
+  ).toEqual({ status: 202, body: { result: "delivered" } });
+  expect(f.agent.sent.map((m) => m.text)).toEqual([
+    "質問",
+    "Q: Q1\nA: A\n\nQ: Q2\nA: (開発者は答えなかった)",
+  ]);
+  expect((await f.snapshot(id)).body.conversation.closedAt).toBe(null);
+});
+it.each(["allow", "deny"])("許可の確認に%sを一度返す", async (decision) => {
+  const f = await fixture({
+    rules: [],
+    fallback: [{ permission: { tool_name: "Bash", input: { command: "pwd" } } }, { hold: true }],
+  });
+  const id = await f.start();
+  await f.send(id, "許可");
+  await settled(f, id, "waiting_permission");
+  const snapshot = (await f.snapshot(id)).body;
+  const pending = snapshot.pendingPermission!;
+  expect(pending).toEqual({
+    requestId: pending.requestId,
+    seq: 2,
+    toolName: "Bash",
+    summary: "pwd",
+  });
+  const path = `/conversations/${id}/permissions/${pending.requestId}`;
+  expect(await f.request(path, "POST", { decision })).toEqual({
+    status: 202,
+    body: { runState: "working" },
+  });
+  expect(f.agent.permissionDecisions).toEqual([
+    {
+      requestId: pending.requestId,
+      decision: decision === "allow" ? { behavior: "allow" } : { behavior: "deny", message: "" },
+    },
+  ]);
+  expect((await f.request(path, "POST", { decision })).status).toBe(409);
+});
+it("閉じたスレッドと親は受理後だけ開き、ランナー不通やflow拒否では下書きと閉じた状態を保つ", async () => {
+  const f = await fixture();
+  const parent = await f.start();
+  const id = await f.start();
+  f.database.sqlite.prepare("UPDATE conversations SET closed_at=50").run();
+  f.database.sqlite
+    .prepare("UPDATE conversations SET kind='thread',parent_conversation_id=? WHERE id=?")
+    .run(parent, id);
+  await f.request(`/conversations/${id}/draft`, "PUT", {
+    text: "残す",
+    images: [],
+    editedAt: 20,
+    clientId: "tab",
+  });
+  f.runner().runtime.runOptions.registerDeliveryGuard(() =>
+    err({ code: "conflict", message: "担当の会話ではありません" }),
+  );
+  expect(await f.send(id, "拒否")).toEqual({
+    status: 409,
+    body: { error: { code: "conflict", message: "担当の会話ではありません" } },
+  });
+  await f.restart();
+  const acceptedStates: (number | null)[] = [];
+  f.runner().runtime.runOptions.registerDeliveryGuard((conversation) => {
+    acceptedStates.push(conversation.closedAt);
+    return ok(undefined);
+  });
+  expect(await f.send(id, "残す")).toEqual(delivered);
+  expect({
+    acceptedStates,
+    closed: f.database.sqlite.prepare("SELECT closed_at FROM conversations ORDER BY id").all(),
+    draft: (await f.snapshot(id)).body.draft,
+  }).toEqual({
+    acceptedStates: [50],
+    closed: [{ closed_at: null }, { closed_at: null }],
+    draft: null,
+  });
+  f.database.sqlite.prepare("UPDATE conversations SET closed_at=70 WHERE id=?").run(id);
+  await f.request(`/conversations/${id}/draft`, "PUT", {
+    text: "失わない",
+    images: [],
+    editedAt: 2000,
+    clientId: "tab",
+  });
+  await f.runner().shutdown();
+  expect(await f.send(id, "接続失敗")).toEqual({ status: 503, body: { error: runnerUnavailable } });
+  const snapshot = (await f.snapshot(id)).body;
+  expect({
+    closedAt: snapshot.conversation.closedAt,
+    draft: snapshot.draft,
+    sent: f.agent.sent.map((m) => m.text),
+  }).toEqual({
+    closedAt: 70,
+    draft: { text: "失わない", images: [], updatedAt: 2000, updatedBy: "tab" },
+    sent: ["残す"],
+  });
+});
+
+it("重複したclientMessageIdは最初の受付を返し、リトライで新しい書きかけを消さない", async () => {
+  const f = await fixture();
+  const id = await f.start();
+  expect(await f.send(id, "一度", "same")).toEqual(delivered);
+  await f.request(`/conversations/${id}/draft`, "PUT", {
+    text: "次の入力",
+    images: [],
+    editedAt: 2000,
+    clientId: "tab",
+  });
+  expect(await f.send(id, "一度", "same")).toEqual(delivered);
+  expect({
+    sent: f.agent.sent.map((m) => m.text),
+    draft: (await f.snapshot(id)).body.draft,
+  }).toEqual({
+    sent: ["一度"],
+    draft: { text: "次の入力", images: [], updatedAt: 2000, updatedBy: "tab" },
+  });
+});
+
+it("空・上限・未知の会話・削除済みプロジェクトを入口で検査する", async () => {
+  const f = await fixture();
+  const id = await f.start();
+  expect(await f.send(id, "")).toEqual(invalid);
+  expect(await f.send(id, "a".repeat(100001))).toEqual(invalid);
+  expect(
+    await f.request(`/conversations/${id}/draft`, "PUT", {
+      text: "a".repeat(100001),
+      images: [],
+      editedAt: 1,
+      clientId: "t",
+    }),
+  ).toEqual(invalid);
+  expect(await f.upload(id, Buffer.alloc(5 * 1024 * 1024 + 1))).toEqual(invalid);
+  expect(await f.upload(id, png, "text/plain")).toEqual(invalid);
+  expect((await f.request("/conversations/missing")).status).toBe(404);
+  f.database.sqlite.prepare("UPDATE projects SET removed_at=1 WHERE id='p'").run();
+  expect(
+    await f.request("/conversations", "POST", { projectId: "p", workspace: { kind: "project" } }),
+  ).toEqual({
+    status: 404,
+    body: { error: { code: "not_found", message: "プロジェクトが見つかりません。" } },
+  });
+});
+
+it("正常終了した番だけが預かった画像付き指示を順に届け、画面が無くても記録と配信が進む", async () => {
+  const f = await fixture({
+    rules: [
+      {
+        match: "^初回$",
+        steps: [{ tool: "mcp__sukuna__gate", input: {}, result: "ignored" }, { end: "success" }],
+      },
+    ],
+    fallback: [{ text: "配達後の応答" }, { hold: true }],
+  });
+  const entered = deferred();
+  const release = deferred();
+  f.runner().runtime.tools.register({
+    name: "gate",
+    description: "番の完了を待つ",
+    input: {},
+    alwaysLoad: true,
+    handler: async () => {
+      entered.resolve();
+      await release.promise;
+      return { text: "終了", isError: false };
+    },
+  });
+  const id = await f.start();
+  const a = await f.upload(id);
+  const b = await f.upload(id);
+  const frames: unknown[] = [];
+  const client = {
+    bufferedAmount: 0,
+    send: (text: string) => frames.push(JSON.parse(text)),
+    close: () => {},
+  };
+  f.hub.add(client);
+  f.hub.receive(client, { op: "subscribe", topic: `conversation:${id}` });
+  f.link.start();
+  expect(await f.send(id, "初回")).toEqual(delivered);
+  await entered.promise;
+  const first = await f.send(id, "先の指示", "auto-a", "send", [a.body.image.id]);
+  const second = await f.send(id, "後の指示", "auto-b", "send", [b.body.image.id]);
+  expect([first.body.result, second.body.result]).toEqual(["queued", "queued"]);
+  expect(f.agent.messages).toEqual([{ text: "初回", images: [] }]);
+  release.resolve();
+  await expect.poll(() => f.agent.messages.length).toBe(2);
+  expect(f.agent.messages).toEqual([
+    { text: "初回", images: [] },
+    {
+      text: "先の指示\n\n後の指示",
+      images: [
+        { data: png, mediaType: "image/png" },
+        { data: png, mediaType: "image/png" },
+      ],
+    },
+  ]);
+  await expect
+    .poll(
+      () =>
+        f
+          .runner()
+          .runtime.store.events(id)
+          .filter((e) => e.type === "assistant_text").length,
+    )
+    .toBe(1);
+  const page = await f.request<ConversationEventsPage>(`/conversations/${id}/events?after=1`);
+  expect(page.body.events.map((e) => e.type)).toEqual([
+    "tool_use",
+    "tool_result",
+    "turn_end",
+    "user_message",
+    "assistant_text",
+  ]);
+  expect((await f.snapshot(id)).body.queue).toEqual([]);
+  const replay: unknown[] = [];
+  const reopenedClient = {
+    bufferedAmount: 0,
+    send: (text: string) => replay.push(JSON.parse(text)),
+    close: () => {},
+  };
+  f.hub.add(reopenedClient);
+  f.hub.receive(reopenedClient, { op: "subscribe", topic: `conversation:${id}`, after: 4 });
+  expect(replay).toEqual(
+    f
+      .runner()
+      .runtime.store.events(id)
+      .filter((event) => event.seq > 4)
+      .map((event) => ({
+        topic: `conversation:${id}`,
+        seq: event.seq,
+        type: "event",
+        payload: {
+          conversation_id: id,
+          seq: event.seq,
+          type: event.type,
+          payload: event.payload,
+          sdk_uuid: event.sdkUuid ?? null,
+          created_at: 1000,
+        },
+      })),
+  );
+  expect({
+    permissionMode: f.agent.opened[0]!.permissionMode,
+    decisions: f.agent.permissionDecisions,
+  }).toEqual({ permissionMode: "bypassPermissions", decisions: [] });
+  await f.snapshot(id);
+  expect((await f.snapshot(await f.start())).body.commands).toEqual([
+    { name: "/dev-spec", description: "設計ループ。手順を進める" },
+  ]);
+});
+
+it("自動配達で消えた画像は外して届け、info通知を配信する", async () => {
+  const f = await fixture({
+    rules: [
+      {
+        match: "^初回$",
+        steps: [{ tool: "mcp__sukuna__gate", input: {}, result: "ignored" }, { end: "success" }],
+      },
+    ],
+    fallback: [{ hold: true }],
+  });
+  const entered = deferred();
+  const release = deferred();
+  f.runner().runtime.tools.register({
+    name: "gate",
+    description: "待つ",
+    input: {},
+    alwaysLoad: true,
+    handler: async () => {
+      entered.resolve();
+      await release.promise;
+      return { text: "完了", isError: false };
+    },
+  });
+  const id = await f.start();
+  const uploaded = await f.upload(id);
+  await f.send(id, "初回");
+  await entered.promise;
+  await f.send(id, "画像が無くなる指示", "missing-auto", "send", [uploaded.body.image.id]);
+  rmSync(join(f.home, "images", id, `${uploaded.body.image.id}.png`));
+  const info = deferred();
+  f.runner().changes.subscribe((notice) => {
+    if (notice.kind === "notice") {
+      f.notices.push(notice);
+      info.resolve();
+    }
+  });
+  release.resolve();
+  await info.promise;
+  expect({ messages: f.agent.messages, notice: f.notices }).toEqual({
+    messages: [
+      { text: "初回", images: [] },
+      { text: "画像が無くなる指示", images: [] },
+    ],
+    notice: [
+      {
+        kind: "notice",
+        level: "info",
+        conversation_id: id,
+        message: "画像 1 件が見つからないため、外して届けました",
+      },
+    ],
+  });
+});
+
+it("指示の受理待ちに別タブが保存した下書きは成功後も消さない", async () => {
+  const f = await fixture();
+  const id = await f.start();
+  await f.send(id, "最初");
+  await f.request(`/conversations/${id}/draft`, "PUT", {
+    text: "送る",
+    images: [],
+    clientId: "tab-a",
+    editedAt: 2000,
+  });
+  const entered = deferred();
+  const release = deferred();
+  f.agent.beforeInterrupt = async () => {
+    entered.resolve();
+    await release.promise;
+  };
+  const pending = f.send(id, "送る", "race", "interrupt");
+  await entered.promise;
+  await f.request(`/conversations/${id}/draft`, "PUT", {
+    text: "別タブの入力",
+    images: [],
+    clientId: "tab-b",
+    editedAt: 3000,
+  });
+  release.resolve();
+  expect(await pending).toEqual(delivered);
+  expect((await f.snapshot(id)).body.draft).toEqual({
+    text: "別タブの入力",
+    images: [],
+    updatedBy: "tab-b",
+    updatedAt: 3000,
+  });
+});
+
+it("同時に届く回答の送信は一回だけ受け付け、同じ回答を指示として送り直さない", async () => {
+  const f = await fixture({ rules: [], fallback: [{ ask: [question("Q1")] }, { hold: true }] });
+  const id = await f.start();
+  await f.send(id, "質問");
+  await settled(f, id, "waiting_answer");
+  const q = f
+    .runner()
+    .runtime.store.events(id)
+    .find((event) => event.type === "question")!;
+  await f.request(`/conversations/${id}/answers`, "PUT", {
+    questionSeq: q.seq,
+    answers: { "0": { choices: ["A"], text: null } },
+  });
+  const results = await Promise.all([
+    f.request(`/conversations/${id}/answers/send`, "POST", { confirmUnanswered: false }),
+    f.request(`/conversations/${id}/answers/send`, "POST", { confirmUnanswered: false }),
+  ]);
+  expect(results).toEqual([
+    { status: 202, body: { result: "answered" } },
+    {
+      status: 409,
+      body: {
+        error: {
+          code: "conflict",
+          message: "会話の状態が変わりました。もう一度操作してください。",
+        },
+      },
+    },
+  ]);
+  expect({
+    answers: f.agent.receivedAnswers,
+    sent: f.agent.sent.map((message) => message.text),
+  }).toEqual({
+    answers: [
+      { requestId: q.type === "question" ? q.payload.request_id : "", answers: { Q1: "A" } },
+    ],
+    sent: ["質問"],
+  });
+});
+
+it("保存前に編集して送った初回の指示も、受理したら古い下書きを消す", async () => {
+  const f = await fixture();
+  const id = await f.start();
+  await f.request(`/conversations/${id}/draft`, "PUT", {
+    text: "書きかけ",
+    images: [],
+    clientId: "tab",
+    editedAt: 20,
+  });
+  expect(await f.send(id, "書きかけを完成させた指示", "fresh")).toEqual(delivered);
+  expect({
+    draft: (await f.snapshot(id)).body.draft,
+    sent: f.agent.sent.map((message) => message.text),
+  }).toEqual({ draft: null, sent: ["書きかけを完成させた指示"] });
+});
+
+it("キューだけを配達して閉じた会話を開き直しても、未送信の本文と画像の下書きは残る", async () => {
+  const f = await fixture();
+  const id = await f.start();
+  await f.send(id, "最初");
+  await f.send(id, "預ける", "queue-only");
+  const image = (await f.upload(id)).body.image.id;
+  const draft = {
+    text: "まだ送らない書きかけ",
+    images: [image],
+    updatedAt: 4000,
+    updatedBy: "tab-a",
+  };
+  await f.request(`/conversations/${id}/draft`, "PUT", {
+    text: draft.text,
+    images: draft.images,
+    editedAt: draft.updatedAt,
+    clientId: draft.updatedBy,
+  });
+  await f.request(`/conversations/${id}/stop`, "POST");
+  f.database.sqlite.prepare("UPDATE conversations SET closed_at=500 WHERE id=?").run(id);
+  expect(await f.send(id, "", "deliver-only")).toEqual(delivered);
+  const snapshot = (await f.snapshot(id)).body;
+  expect({
+    draft: snapshot.draft,
+    closedAt: snapshot.conversation.closedAt,
+    messages: f.agent.messages,
+  }).toEqual({
+    draft,
+    closedAt: null,
+    messages: [
+      { text: "最初", images: [] },
+      { text: "預ける", images: [] },
+    ],
+  });
+});
+
+it.each(["text", "image"])(
+  "割り込み待ちの同じミリ秒に%sを取り消した場合も戻した下書きは消さない",
+  async (kind) => {
+    const f = await fixture();
+    const id = await f.start();
+    f.clock.time = 4000;
+    await f.send(id, "最初");
+    const image = (await f.upload(id)).body.image.id;
+    const queued = await f.send(
+      id,
+      kind === "text" ? "取り消して残す内容" : "",
+      "returned",
+      "send",
+      kind === "image" ? [image] : [],
+    );
+    await f.request(`/conversations/${id}/draft`, "PUT", {
+      text: "送る本文",
+      images: [],
+      clientId: "tab-a",
+      editedAt: 4000,
+    });
+    const entered = deferred();
+    const release = deferred();
+    f.agent.beforeInterrupt = async () => {
+      entered.resolve();
+      await release.promise;
+    };
+    const pending = f.send(id, "送る本文", "same-ms", "interrupt");
+    await entered.promise;
+    expect(
+      await f.request(`/conversations/${id}/queue/${queued.body.queueItem!.id}`, "DELETE"),
+    ).toEqual({ status: 204, body: null });
+    const returned = (await f.snapshot(id)).body.draft;
+    const expected = {
+      text: kind === "text" ? "送る本文\n\n取り消して残す内容" : "送る本文",
+      images: kind === "image" ? [image] : [],
+      updatedAt: 4000,
+      updatedBy: "tab-a",
+    };
+    expect(returned).toEqual(expected);
+    release.resolve();
+    expect(await pending).toEqual(delivered);
+    expect({ draft: (await f.snapshot(id)).body.draft, messages: f.agent.messages }).toEqual({
+      draft: expected,
+      messages: [
+        { text: "最初", images: [] },
+        { text: "送る本文", images: [] },
+      ],
+    });
+  },
+);
+
+it.each(["send", "interrupt"])(
+  "配達判定の待機中に番が正常終了した%sは、最新の状態で直接届ける",
+  async (mode) => {
+    const f = await fixture({
+      rules: [
+        {
+          match: "^最初$",
+          steps: [{ tool: "mcp__sukuna__gate", input: {}, result: "ignored" }, { end: "success" }],
+        },
+      ],
+      fallback: [{ hold: true }],
+    });
+    const turnEntered = deferred();
+    const finishTurn = deferred();
+    f.runner().runtime.tools.register({
+      name: "gate",
+      description: "番を終える時点を決める",
+      input: {},
+      alwaysLoad: true,
+      handler: async () => {
+        turnEntered.resolve();
+        await finishTurn.promise;
+        return { text: "完了", isError: false };
+      },
+    });
+    const id = await f.start();
+    await f.send(id, "最初");
+    await turnEntered.promise;
+    const guardEntered = deferred();
+    const releaseGuard = deferred();
+    let guards = 0;
+    let interrupts = 0;
+    f.agent.beforeInterrupt = async () => {
+      interrupts += 1;
+    };
+    f.runner().runtime.runOptions.registerDeliveryGuard(async () => {
+      guards += 1;
+      guardEntered.resolve();
+      await releaseGuard.promise;
+      return ok(undefined);
+    });
+    const pending = f.send(id, "次の指示", "guard-race", mode);
+    await guardEntered.promise;
+    finishTurn.resolve();
+    await settled(f, id, "idle");
+    releaseGuard.resolve();
+    expect(await pending).toEqual(delivered);
+    expect({
+      state: f.runner().runtime.store.get(id)!.runState,
+      queue: f.runner().runtime.store.queue(id),
+      sent: f.agent.sent.map((message) => message.text),
+      origins: f
+        .runner()
+        .runtime.store.events(id)
+        .flatMap((event) => (event.type === "user_message" ? [event.payload.origin] : [])),
+      guards,
+      interrupts,
+    }).toEqual({
+      state: "working",
+      queue: [],
+      sent: ["最初", "次の指示"],
+      origins: ["developer", "developer"],
+      guards: 1,
+      interrupts: 0,
+    });
+  },
+);
+
+it.each(["draft", "stock"])(
+  "空の割り込みを待つ間に最後の%sキューを取り消すと、空文を配達せず戻した内容を保つ",
+  async (source) => {
+    const f = await fixture();
+    const id = await f.start();
+    await f.send(id, "最初");
+    const queued = await f.send(id, "取り消す内容", "cancel-all");
+    const itemId = queued.body.queueItem!.id;
+    if (source === "stock") {
+      f.database.sqlite
+        .prepare(
+          "INSERT INTO stock_items (id,conversation_id,kind,text,state,sent_at) VALUES ('return-stock',?,'instruction','取り消す内容','sent',1000)",
+        )
+        .run(id);
+      f.database.sqlite
+        .prepare("UPDATE queued_instructions SET stock_item_id='return-stock' WHERE id=?")
+        .run(itemId);
+    }
+    const entered = deferred();
+    const release = deferred();
+    f.agent.beforeInterrupt = async () => {
+      entered.resolve();
+      await release.promise;
+    };
+    const pending = f.send(id, "", "empty-interrupt", "interrupt");
+    await entered.promise;
+    expect(await f.request(`/conversations/${id}/queue/${itemId}`, "DELETE")).toEqual({
+      status: 204,
+      body: null,
+    });
+    release.resolve();
+    expect(await pending).toEqual(invalid);
+    const state = (await f.snapshot(id)).body;
+    expect({
+      state: state.conversation.runState,
+      reason: state.conversation.stopReason,
+      queue: state.queue,
+      draft: state.draft,
+      messages: f.agent.messages,
+      events: f
+        .runner()
+        .runtime.store.events(id)
+        .map((event) => event.type),
+      stock:
+        f.database.sqlite
+          .prepare("SELECT state,sent_seq FROM stock_items WHERE id='return-stock'")
+          .get() ?? null,
+    }).toEqual({
+      state: "failed",
+      reason: "error",
+      queue: [],
+      draft:
+        source === "draft"
+          ? { text: "取り消す内容", images: [], updatedAt: 1000, updatedBy: "cancel-all" }
+          : null,
+      messages: [{ text: "最初", images: [] }],
+      events: ["user_message", "assistant_text", "turn_end", "stopped"],
+      stock: source === "stock" ? { state: "stocked", sent_seq: null } : null,
+    });
+    f.agent.beforeInterrupt = undefined;
+    expect(await f.send(id, "次の指示", "empty-interrupt")).toEqual(delivered);
+    expect(f.agent.sent.map((message) => message.text)).toEqual(["最初", "次の指示"]);
+  },
+);
+
+it("明示キュー配達の判定待ちに最後の項目を取り消すと、実IPCは空文の受付を作らない", async () => {
+  const f = await fixture();
+  const id = await f.start();
+  await f.send(id, "最初");
+  const queued = await f.send(id, "戻す内容", "manual-cancel");
+  await f.request(`/conversations/${id}/stop`, "POST");
+  const before = f.runner().runtime.store.events(id);
+  const entered = deferred();
+  const release = deferred();
+  f.runner().runtime.runOptions.registerDeliveryGuard(async () => {
+    entered.resolve();
+    await release.promise;
+    return ok(undefined);
+  });
+  const pending = f.link.call("POST", `/conversations/${id}/queue/deliver`);
+  await entered.promise;
+  expect(
+    await f.request(`/conversations/${id}/queue/${queued.body.queueItem!.id}`, "DELETE"),
+  ).toEqual({ status: 204, body: null });
+  release.resolve();
+  expect((await pending)._unsafeUnwrap()).toEqual({ status: 400, body: invalid.body });
+  const snapshot = (await f.snapshot(id)).body;
+  expect({
+    state: snapshot.conversation.runState,
+    draft: snapshot.draft,
+    queue: snapshot.queue,
+    messages: f.agent.messages,
+    events: f.runner().runtime.store.events(id),
+  }).toEqual({
+    state: "stopped",
+    draft: { text: "戻す内容", images: [], updatedAt: 1000, updatedBy: "manual-cancel" },
+    queue: [],
+    messages: [{ text: "最初", images: [] }],
+    events: before,
+  });
+});
+
+it.each(["invalid_input", "internal"])(
+  "割り込み停止後の画像%sでも未配達の内容を保ち、修正して通常送信すると続けられる",
+  async (code) => {
+    const f = await fixture();
+    const id = await f.start();
+    await f.send(id, "最初");
+    const image = (await f.upload(id)).body.image.id;
+    const queued = await f.send(id, "預ける内容", "image-queue", "send", [image]);
+    const itemId = queued.body.queueItem!.id;
+    await f.request(`/conversations/${id}/draft`, "PUT", {
+      text: "次の指示",
+      images: [],
+      clientId: "tab",
+      editedAt: 1000,
+    });
+    const original = f.runner().runtime.options.images;
+    let fail = false;
+    const imageError = {
+      code: "internal" as const,
+      message: "画像を読み取れませんでした。もう一度操作してください。",
+    };
+    if (code === "internal")
+      f.runner().runtime.options.images = {
+        read: (conversationId, imageId) =>
+          fail ? err(imageError) : original.read(conversationId, imageId),
+      };
+    const notices: unknown[] = [];
+    f.runner().changes.subscribe((notice) => {
+      if (notice.kind === "notice") notices.push(notice);
+    });
+    const entered = deferred();
+    const release = deferred();
+    f.agent.beforeInterrupt = async () => {
+      entered.resolve();
+      await release.promise;
+    };
+    const pending = f.send(id, "次の指示", "image-retry", "interrupt");
+    await entered.promise;
+    const missing = "01J00000000000000000000999";
+    if (code === "invalid_input")
+      expect(
+        (
+          await f.request(`/conversations/${id}/queue/${itemId}`, "PATCH", {
+            text: "預ける内容",
+            images: [missing],
+          })
+        ).status,
+      ).toBe(200);
+    fail = true;
+    release.resolve();
+    const error =
+      code === "invalid_input"
+        ? { code, message: "画像が見つかりません。貼り直してください" }
+        : imageError;
+    expect(await pending).toEqual({
+      status: code === "invalid_input" ? 400 : 500,
+      body: { error },
+    });
+    const snapshot = (await f.snapshot(id)).body;
+    expect({
+      state: snapshot.conversation.runState,
+      reason: snapshot.conversation.stopReason,
+      draft: snapshot.draft,
+      queue: snapshot.queue,
+      messages: f.agent.messages,
+      stopped: f
+        .runner()
+        .runtime.store.events(id)
+        .filter((event) => event.type === "stopped")
+        .map((event) => event.payload),
+      receipts: f
+        .runner()
+        .runtime.store.events(id)
+        .flatMap((event) => (event.type === "user_message" ? event.payload.client_ids : [])),
+      notices,
+    }).toEqual({
+      state: "failed",
+      reason: "error",
+      draft: { text: "次の指示", images: [], updatedAt: 1000, updatedBy: "tab" },
+      queue: [
+        { ...queued.body.queueItem!, images: code === "invalid_input" ? [missing] : [image] },
+      ],
+      messages: [{ text: "最初", images: [] }],
+      stopped: [{ reason: "error", detail: error.message }],
+      receipts: ["最初"],
+      notices: [{ kind: "notice", level: "error", conversation_id: id, message: error.message }],
+    });
+    fail = false;
+    f.agent.beforeInterrupt = undefined;
+    expect(
+      (
+        await f.request(`/conversations/${id}/queue/${itemId}`, "PATCH", {
+          text: "直した内容",
+          images: [],
+        })
+      ).status,
+    ).toBe(200);
+    expect(await f.send(id, "次の指示", "image-retry")).toEqual(delivered);
+    expect({
+      messages: f.agent.messages,
+      draft: (await f.snapshot(id)).body.draft,
+      queue: f.runner().runtime.store.queue(id),
+    }).toEqual({
+      messages: [
+        { text: "最初", images: [] },
+        { text: "直した内容\n\n次の指示", images: [] },
+      ],
+      draft: null,
+      queue: [],
+    });
+  },
+);
+
+it.each(["text", "image"])(
+  "空の割り込みの待機中に一部を取り消しても、残る%sの指示だけを届ける",
+  async (kind) => {
+    const f = await fixture();
+    const id = await f.start();
+    await f.send(id, "最初");
+    const cancelled = await f.send(id, "取り消した指示", "cancel-one");
+    const image = (await f.upload(id)).body.image.id;
+    await f.send(
+      id,
+      kind === "text" ? "残る指示" : "",
+      "remaining",
+      "send",
+      kind === "image" ? [image] : [],
+    );
+    const entered = deferred();
+    const release = deferred();
+    f.agent.beforeInterrupt = async () => {
+      entered.resolve();
+      await release.promise;
+    };
+    const pending = f.send(id, "", "remaining-delivery", "interrupt");
+    await entered.promise;
+    expect(
+      await f.request(`/conversations/${id}/queue/${cancelled.body.queueItem!.id}`, "DELETE"),
+    ).toEqual({ status: 204, body: null });
+    release.resolve();
+    expect(await pending).toEqual(delivered);
+    expect({
+      draft: (await f.snapshot(id)).body.draft,
+      messages: f.agent.messages,
+      queue: f.runner().runtime.store.queue(id),
+      stopped: f
+        .runner()
+        .runtime.store.events(id)
+        .filter((event) => event.type === "stopped"),
+    }).toEqual({
+      draft: { text: "取り消した指示", images: [], updatedAt: 1000, updatedBy: "cancel-one" },
+      messages: [
+        { text: "最初", images: [] },
+        {
+          text: kind === "text" ? "残る指示" : "",
+          images: kind === "image" ? [{ data: png, mediaType: "image/png" }] : [],
+        },
+      ],
+      queue: [],
+      stopped: [],
+    });
+  },
+);
+
+it.each([
+  { text: "", missing: 0 },
+  { text: "残る本文", missing: 1 },
+  { text: "残る本文", missing: 2 },
+  { text: "", missing: 1 },
+  { text: "", missing: 2 },
+])(
+  "自動配達は本文 '$text'・画像の欠落 $missing 件を扱い、全欠落は添付し直して送れる",
+  async ({ text, missing }) => {
+    const f = await fixture({
+      rules: [
+        {
+          match: "^初回$",
+          steps: [
+            { tool: "mcp__sukuna__image_gate", input: {}, result: "ignored" },
+            { end: "success" },
+          ],
+        },
+      ],
+      fallback: [{ hold: true }],
+    });
+    const entered = deferred();
+    const release = deferred();
+    f.runner().runtime.tools.register({
+      name: "image_gate",
+      description: "画像の配達前を待つ",
+      input: {},
+      alwaysLoad: true,
+      handler: async () => {
+        entered.resolve();
+        await release.promise;
+        return { text: "完了", isError: false };
+      },
+    });
+    const id = await f.start();
+    const images = [(await f.upload(id)).body.image.id, (await f.upload(id)).body.image.id];
+    const draftImage = (await f.upload(id)).body.image.id;
+    await f.send(id, "初回");
+    await entered.promise;
+    const queued = await f.send(id, text, "boundary-queued", "send", images);
+    const item = queued.body.queueItem!;
+    expect(queued).toEqual({
+      status: 202,
+      body: {
+        result: "queued",
+        queueItem: {
+          id: item.id,
+          text,
+          images,
+          position: 1,
+          stockItemId: null,
+          clientId: "boundary-queued",
+          createdAt: 1000,
+        },
+      },
+    });
+    const draft = {
+      text: "未送信の下書き",
+      images: [draftImage],
+      updatedAt: 2000,
+      updatedBy: "tab",
+    };
+    await f.request(`/conversations/${id}/draft`, "PUT", {
+      text: draft.text,
+      images: draft.images,
+      editedAt: draft.updatedAt,
+      clientId: draft.updatedBy,
+    });
+    for (const image of images.slice(0, missing))
+      rmSync(join(f.home, "images", id, `${image}.png`));
+    const notices: unknown[] = [];
+    f.runner().changes.subscribe((notice) => {
+      if (notice.kind === "notice") notices.push(notice);
+    });
+    const ended = deferred();
+    f.runner().runtime.subscribe((signal) => {
+      if (signal.type === "turnEnded" && signal.conversationId === id) ended.resolve();
+    });
+    release.resolve();
+    await ended.promise;
+    await f.runner().runtime.serial(id, async () => ok(undefined));
+    const stalled = !text && missing === 2;
+    const expectedError =
+      "画像が見つからないため、指示を届けられませんでした。画像を添付し直して、もう一度送ってください。";
+    const snapshot = (await f.snapshot(id)).body;
+    const messages = f
+      .runner()
+      .runtime.store.events(id)
+      .filter((event) => event.type === "user_message");
+    expect({
+      sent: f.agent.messages,
+      state: snapshot.conversation.runState,
+      queue: snapshot.queue,
+      draft: snapshot.draft,
+      notices,
+      deliveredEvents: messages.slice(1).map((event) => event.payload),
+    }).toEqual({
+      sent: [
+        { text: "初回", images: [] },
+        ...(stalled
+          ? []
+          : [
+              {
+                text,
+                images: images.slice(missing).map(() => ({ data: png, mediaType: "image/png" })),
+              },
+            ]),
+      ],
+      state: stalled ? "idle" : "working",
+      queue: stalled ? [item] : [],
+      draft,
+      notices: missing
+        ? [
+            {
+              kind: "notice",
+              level: stalled ? "error" : "info",
+              conversation_id: id,
+              message: stalled
+                ? expectedError
+                : `画像 ${missing} 件が見つからないため、外して届けました`,
+            },
+          ]
+        : [],
+      deliveredEvents: stalled
+        ? []
+        : [
+            {
+              text,
+              images: images
+                .slice(missing)
+                .map((image) => ({ path: `images/${id}/${image}.png`, media_type: "image/png" })),
+              origin: "queued",
+              client_ids: ["boundary-queued"],
+              queued_ids: [item.id],
+              client_receipts: [
+                {
+                  client_id: "boundary-queued",
+                  result: "queued",
+                  queued_id: item.id,
+                  received_at: 1000,
+                },
+              ],
+            },
+          ],
+    });
+    if (stalled) {
+      expect(await f.send(id, text, "boundary-queued", "send", images)).toEqual(queued);
+      const replacement = (await f.upload(id)).body.image.id;
+      expect(
+        await f.request(`/conversations/${id}/queue/${item.id}`, "PATCH", {
+          text,
+          images: [replacement],
+        }),
+      ).toEqual({ status: 200, body: { queueItem: { ...item, images: [replacement] } } });
+      expect(await f.send(id, "", "repaired-delivery")).toEqual(delivered);
+      const last = f
+        .runner()
+        .runtime.store.events(id)
+        .filter((event) => event.type === "user_message")
+        .at(-1)!;
+      expect({
+        sent: f.agent.messages,
+        queue: (await f.snapshot(id)).body.queue,
+        draft: (await f.snapshot(id)).body.draft,
+        delivered: last.payload,
+      }).toEqual({
+        sent: [
+          { text: "初回", images: [] },
+          { text: "", images: [{ data: png, mediaType: "image/png" }] },
+        ],
+        queue: [],
+        draft,
+        delivered: {
+          text: "",
+          images: [{ path: `images/${id}/${replacement}.png`, media_type: "image/png" }],
+          origin: "developer",
+          client_ids: ["boundary-queued", "repaired-delivery"],
+          queued_ids: [item.id],
+          client_receipts: [
+            {
+              client_id: "boundary-queued",
+              result: "queued",
+              queued_id: item.id,
+              received_at: 1000,
+            },
+            { client_id: "repaired-delivery", result: "delivered", received_at: 1000 },
+          ],
+        },
+      });
+      const before = f.agent.messages.length;
+      expect(await f.send(id, text, "boundary-queued", "send", images)).toEqual({
+        status: 202,
+        body: { result: "queued", queueItem: null },
+      });
+      expect(f.agent.messages.length).toBe(before);
+    }
+  },
+);
+
+it.each(["edit", "cancel-all-draft", "cancel-all-stock", "cancel-one"])(
+  "作業場所の古い出力を待つ間の %s は、検証済みの作業場所と最新のキューで配達する",
+  async (action) => {
+    const f = await fixture();
+    const id = await f.start();
+    const oldCwd = join(f.home, "old-workspace");
+    const newCwd = join(f.home, "new-workspace");
+    mkdirSync(oldCwd);
+    mkdirSync(newCwd);
+    const recordWorktree = f.database.sqlite.prepare(
+      "INSERT INTO worktrees (id,project_id,path,branch,origin) VALUES (?,'p',?,?,'user')",
+    );
+    recordWorktree.run("old-worktree", oldCwd, "old");
+    recordWorktree.run("verified-worktree", newCwd, "new");
+    const activity = createWorktreeActivity(f.database.sqlite.name);
+    activity.run((reservation) => {
+      reservation.acquire(["old-worktree"]);
+      f.database.sqlite
+        .prepare("UPDATE conversations SET cwd=?,worktree_id='old-worktree' WHERE id=?")
+        .run(oldCwd, id);
+    });
+    await f.send(id, "最初");
+    const originalImage = (await f.upload(id)).body.image.id;
+    const changedBytes = Buffer.from("GIF89a");
+    const changedImage = (await f.upload(id, changedBytes, "image/gif")).body.image.id;
+    const queued = await f.send(id, "古い本文", "old-queued", "send", [originalImage]);
+    const item = queued.body.queueItem!;
+    const remaining =
+      action === "cancel-one"
+        ? await f.send(id, "残る本文", "remaining-queued", "send", [changedImage])
+        : undefined;
+    if (action === "cancel-all-stock") {
+      f.database.sqlite
+        .prepare(
+          "INSERT INTO stock_items (id,conversation_id,kind,text,state,sent_at) VALUES ('close-stock',?,'instruction','古い本文','sent',1000)",
+        )
+        .run(id);
+      f.database.sqlite
+        .prepare("UPDATE queued_instructions SET stock_item_id='close-stock' WHERE id=?")
+        .run(item.id);
+    }
+    expect(await f.request(`/conversations/${id}/stop`, "POST")).toEqual({
+      status: 202,
+      body: { runState: "stopped" },
+    });
+    const oldEvents = f.runner().runtime.store.events(id);
+    activity.run((reservation) => {
+      reservation.acquire(["old-worktree", "verified-worktree"]);
+      f.database.sqlite
+        .prepare("UPDATE conversations SET cwd=?,worktree_id=NULL WHERE id=?")
+        .run(newCwd, id);
+    });
+    const entered = deferred();
+    const release = deferred();
+    f.agent.beforeOutputEnd = async () => {
+      entered.resolve();
+      await release.promise;
+    };
+    let leaseHeldAtSend = false;
+    f.agent.beforeSend = (params) => {
+      if (params.cwd === newCwd) {
+        const lease = activity.acquire(["verified-worktree"]);
+        leaseHeldAtSend = lease.isErr();
+        if (lease.isOk()) lease.value.release();
+      }
+    };
+    const pending = f.send(id, action === "edit" ? "末尾の指示" : "", "close-delivery");
+    try {
+      await entered.promise;
+      const available = activity.acquire(["old-worktree", "verified-worktree"]);
+      expect(available.isOk()).toBe(true);
+      available._unsafeUnwrap().release();
+      if (action === "edit")
+        expect(
+          await f.request(`/conversations/${id}/queue/${item.id}`, "PATCH", {
+            text: "編集した本文",
+            images: [changedImage],
+          }),
+        ).toEqual({
+          status: 200,
+          body: { queueItem: { ...item, text: "編集した本文", images: [changedImage] } },
+        });
+      else
+        expect(await f.request(`/conversations/${id}/queue/${item.id}`, "DELETE")).toEqual({
+          status: 204,
+          body: null,
+        });
+      const returnedDraft = (await f.snapshot(id)).body.draft;
+      release.resolve();
+      if (action.startsWith("cancel-all")) {
+        expect(await pending).toEqual(invalid);
+        expect({
+          opened: f.agent.opened.length,
+          messages: f.agent.messages,
+          events: f.runner().runtime.store.events(id),
+          queue: f.runner().runtime.store.queue(id),
+          draft: (await f.snapshot(id)).body.draft,
+          receipt: f.runner().runtime.store.duplicate(id, "close-delivery", 0),
+          stock:
+            f.database.sqlite
+              .prepare("SELECT state,sent_seq FROM stock_items WHERE id='close-stock'")
+              .get() ?? null,
+        }).toEqual({
+          opened: 1,
+          messages: [{ text: "最初", images: [] }],
+          events: oldEvents,
+          queue: [],
+          draft: returnedDraft,
+          receipt: null,
+          stock: action === "cancel-all-stock" ? { state: "stocked", sent_seq: null } : null,
+        });
+        expect(returnedDraft).toEqual(
+          action === "cancel-all-stock"
+            ? null
+            : {
+                text: "古い本文",
+                images: [originalImage],
+                updatedAt: 1000,
+                updatedBy: "old-queued",
+              },
+        );
+      } else {
+        expect(await pending).toEqual(delivered);
+        const retained = action === "edit" ? item : remaining!.body.queueItem!;
+        const text = action === "edit" ? "編集した本文\n\n末尾の指示" : "残る本文";
+        const event = f
+          .runner()
+          .runtime.store.events(id)
+          .filter((event) => event.type === "user_message")
+          .at(-1)!;
+        expect({
+          opened: f.agent.opened.map((params) => ({
+            cwd: params.cwd,
+            sessionId: params.sessionId,
+            resume: params.resume,
+          })),
+          actualWorktreeId: f.runner().runtime.executions.get(id)?.worktreeId,
+          savedWorktreeId: f.runner().runtime.store.get(id)!.worktreeId,
+          leaseHeldAtSend,
+          sent: f.agent.messages,
+          event: event.payload,
+          queue: (await f.snapshot(id)).body.queue,
+          draft: (await f.snapshot(id)).body.draft,
+        }).toEqual({
+          opened: [
+            { cwd: oldCwd, sessionId: f.agent.opened[0]!.sessionId, resume: false },
+            { cwd: newCwd, sessionId: f.agent.opened[0]!.sessionId, resume: true },
+          ],
+          actualWorktreeId: "verified-worktree",
+          savedWorktreeId: null,
+          leaseHeldAtSend: true,
+          sent: [
+            { text: "最初", images: [] },
+            { text, images: [{ data: changedBytes, mediaType: "image/gif" }] },
+          ],
+          event: {
+            text,
+            images: [{ path: `images/${id}/${changedImage}.gif`, media_type: "image/gif" }],
+            origin: "developer",
+            client_ids: [retained.clientId, "close-delivery"],
+            queued_ids: [retained.id],
+            client_receipts: [
+              {
+                client_id: retained.clientId,
+                result: "queued",
+                queued_id: retained.id,
+                received_at: 1000,
+              },
+              { client_id: "close-delivery", result: "delivered", received_at: 1000 },
+            ],
+          },
+          queue: [],
+          draft: returnedDraft,
+        });
+      }
+    } finally {
+      release.resolve();
+      await pending;
+    }
+  },
+);

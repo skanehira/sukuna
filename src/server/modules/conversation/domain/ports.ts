@@ -1,0 +1,59 @@
+import type { Result } from "neverthrow";
+import type {
+  ConversationContent,
+  ConversationDraft,
+  PublicConversation,
+  PendingAnswers,
+} from "../../../../shared/conversation/api";
+import type { StoredEvent } from "../../../../shared/events";
+import type { QueueItem, MessageDependencies } from "./message-port";
+export type ConversationError = {
+  code:
+    | "not_found"
+    | "invalid_input"
+    | "conflict"
+    | "unanswered_questions"
+    | "internal"
+    | "runner_unavailable";
+  message: string;
+};
+export interface ConversationRepository {
+  transaction<T>(operation: () => T): T;
+  project(id: string): { id: string; path: string } | null;
+  conversation(id: string): PublicConversation | null;
+  draft(id: string): ConversationDraft | null;
+  writeDraft(id: string, draft: ConversationDraft): void;
+  queue(id: string): QueueItem[];
+  editQueue(id: string, itemId: string, input: ConversationContent): QueueItem | null;
+  removeQueue(id: string, itemId: string): QueueItem | null;
+  returnStock(id: string): void;
+  events(id: string, after?: number, limit?: number): StoredEvent[];
+  unansweredQuestion(id: string): Extract<StoredEvent, { type: "question" }> | null;
+  pendingAnswers(id: string): PendingAnswers | null;
+  saveAnswers(id: string, pending: PendingAnswers, now: number): void;
+  reopen(id: string): string[];
+}
+export type ImageStorage = {
+  save(
+    conversationId: string,
+    imageId: string,
+    mediaType: string,
+    data: Uint8Array,
+  ): Result<void, ConversationError>;
+  exists(path: string): boolean;
+};
+export type ConversationDependencies = {
+  repository: ConversationRepository;
+  runner: MessageDependencies["runner"];
+  images: ImageStorage;
+  id(): string;
+  now(): number;
+  changed(id: string, parts: ("draft" | "queue" | "answers" | "stock")[]): void;
+  reopened(ids: string[]): void;
+};
+export const emptyDraft = (draft: ConversationDraft | null): ConversationDraft | null =>
+  draft && (draft.text || draft.images.length) ? draft : null;
+export const missingConversation: ConversationError = {
+  code: "not_found",
+  message: "会話が見つかりません。",
+};
