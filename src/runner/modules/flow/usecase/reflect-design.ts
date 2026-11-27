@@ -16,7 +16,15 @@ import type {
   WorktreeActivityLease,
   WorktreeActivityReservation,
 } from "../../../../shared/workspace/worktree-activity";
-import { activeStates, type ConversationRuntime } from "../../conversation/usecase/runtime";
+import {
+  ProjectRunBlocked,
+  type ProjectRunReservation,
+} from "../../conversation/domain/conversation-store";
+import {
+  activeStates,
+  conflict,
+  type ConversationRuntime,
+} from "../../conversation/usecase/runtime";
 import {
   designInternal,
   type DesignFlowDependencies,
@@ -53,6 +61,7 @@ export function createReflectDesign(
     if (busy.has(id)) return err(designReflecting);
     busy.add(id);
     let scheduled = false;
+    let projectRun: ProjectRunReservation | undefined;
     try {
       const permitted = approvable(deps.repo.read(id), headCommit);
       if (permitted.isErr()) return err(permitted.error);
@@ -60,6 +69,7 @@ export function createReflectDesign(
       const tree = deps.repo.findTree(id, record.project.id, record.issue.number);
       if (!tree || tree.branch !== submission.branch || record.conversation?.worktreeId !== tree.id)
         return err(designStale);
+      projectRun = runtime.store.reserveProjectRun(record.project.id);
       const currentHead = await deps.git.head(record.project.path, `refs/heads/${tree.branch}`);
       if (callerCancelled()) return err(unavailableRunnerError);
       if (currentHead.isErr() || currentHead.value !== headCommit) return err(designStale);
@@ -108,8 +118,7 @@ export function createReflectDesign(
       })();
       if (accepted.isErr()) return err(accepted.error);
       const { latest, mode, notice } = accepted.value;
-      deps.notices.publish(notice);
-      scheduled = true;
+      const reflectionRun = projectRun;
       const background = Promise.resolve()
         .then(() => guardReleased)
         .then(() => reflectApproved(latest, tree, submission, mode))
@@ -125,13 +134,28 @@ export function createReflectDesign(
           }
         })
         .finally(() => {
-          busy.delete(id);
-          jobs.delete(background);
+          try {
+            reflectionRun.release();
+          } finally {
+            busy.delete(id);
+            jobs.delete(background);
+          }
         });
       jobs.add(background);
+      scheduled = true;
+      deps.notices.publish(notice);
       return ok({ status: "reflecting" as const });
+    } catch (error) {
+      if (error instanceof ProjectRunBlocked) return err(conflict(error.message));
+      throw error;
     } finally {
-      if (!scheduled) busy.delete(id);
+      if (!scheduled) {
+        try {
+          projectRun?.release();
+        } finally {
+          busy.delete(id);
+        }
+      }
     }
   }
 
