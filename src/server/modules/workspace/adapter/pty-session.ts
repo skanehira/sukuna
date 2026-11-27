@@ -1,7 +1,15 @@
 /// <reference types="vite/client" />
 
 import { err, ok, type Result } from "neverthrow";
-import { realpathSync, statSync } from "node:fs";
+import {
+  accessSync,
+  closeSync,
+  constants,
+  fstatSync,
+  openSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
 import { createRequire } from "node:module";
 import { setTimeout as sleep } from "node:timers/promises";
 import { spawn, type IPty } from "node-pty";
@@ -22,6 +30,10 @@ const SCROLLBACK = 10_000;
 const PAUSE_OUTPUT_AT = 1024 * 1024;
 const RESUME_OUTPUT_AT = 128 * 1024;
 
+// Node.js が公開しないフラグは Darwin の sys/fcntl.h と Linux の asm-generic/fcntl.h に合わせる。
+const DARWIN_O_SEARCH = 0x40000000 | constants.O_DIRECTORY;
+const LINUX_O_PATH = 0o10000000;
+
 type SendFrame = (frame: TerminalOutputFrame) => void;
 export type TerminalConnection = {
   subscribe(send: SendFrame): () => void;
@@ -34,7 +46,7 @@ export type PtySessions = TerminalSessionsPort & {
   close(): Promise<void>;
 };
 
-function openSession(pty: IPty, cols: number, rows: number) {
+function openSession(pty: IPty, cols: number, rows: number, directoryFd: number) {
   const terminal = new Terminal({
     cols,
     rows,
@@ -72,6 +84,7 @@ function openSession(pty: IPty, cols: number, rows: number) {
   });
   pty.onExit(({ exitCode, signal }) => {
     running = false;
+    closeSync(directoryFd);
     terminal.write("", () => {
       exitFrame = { type: "exit", code: exitCode, signal: signal || null };
       for (const send of clients) send(exitFrame);
@@ -167,6 +180,15 @@ function directoryAt(path: string): Result<{ cwd: string; key: string }, Termina
   }
 }
 
+function openSearchableDirectory(cwd: string): number {
+  if (process.platform === "darwin") return openSync(cwd, DARWIN_O_SEARCH);
+  if (process.platform === "linux") {
+    accessSync(cwd, constants.X_OK);
+    return openSync(cwd, LINUX_O_PATH | constants.O_DIRECTORY);
+  }
+  return openSync(cwd, constants.O_RDONLY | constants.O_DIRECTORY);
+}
+
 export function createPtySessions(
   options: {
     env?: NodeJS.ProcessEnv;
@@ -206,7 +228,14 @@ export function createPtySessions(
         );
         const id = ulid();
         let pty: IPty | undefined;
+        let directoryFd: number | undefined;
         try {
+          directoryFd = openSearchableDirectory(cwd);
+          if (terminalDirectoryKey(fstatSync(directoryFd, { bigint: true })) !== key)
+            return err({
+              code: "conflict",
+              message: "ターミナルの作業ディレクトリが変わりました。開き直してください。",
+            });
           pty = (options.spawn ?? spawn)(
             process.execPath,
             [
@@ -226,7 +255,9 @@ export function createPtySessions(
               name: TERM,
             },
           );
-          const next = Object.assign(openSession(pty, size.cols, size.rows), {
+          const opened = openSession(pty, size.cols, size.rows, directoryFd);
+          directoryFd = undefined;
+          const next = Object.assign(opened, {
             id,
             paths: new Set([cwd]),
             destinations: session?.destinations ?? new Map<string, string>(),
@@ -246,6 +277,8 @@ export function createPtySessions(
             code: "internal",
             message: "シェルを開けませんでした。設定を確かめてください。",
           });
+        } finally {
+          if (directoryFd !== undefined) closeSync(directoryFd);
         }
       }
 

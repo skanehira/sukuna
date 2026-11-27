@@ -1,7 +1,18 @@
 import { serve } from "@hono/node-server";
 import { execFileSync } from "node:child_process";
 import { once } from "node:events";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  accessSync,
+  chmodSync,
+  constants,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -231,7 +242,7 @@ describe("ターミナル API と WebSocket", () => {
     let bOutput = "";
     a.send({
       type: "input",
-      data: 'pwd; printf \'%s / %s / %s\\n\' "$TERM" "${SUKUNA_TEST-unset}" "$0"\r',
+      data: 'printf \'\\n\'; pwd; printf \'%s / %s / %s\\n\' "$TERM" "${SUKUNA_TEST-unset}" "$0"\r',
     });
     const commandResult = (data: string) =>
       data.replaceAll("\r", "").split("\n").includes("xterm-256color / unset / /bin/sh");
@@ -264,7 +275,7 @@ describe("ターミナル API と WebSocket", () => {
     await a.wait(({ type }) => type === "snapshot");
     a.send({
       type: "input",
-      data: "read -r gate < .reconnect; printf '%s%s\\n' terminal- reconnect\r",
+      data: "read -r gate < .reconnect; printf '\\n%s%s\\n' terminal- reconnect\r",
     });
     const closed = once(a.socket, "close");
     a.socket.close();
@@ -324,34 +335,92 @@ describe("ターミナル API と WebSocket", () => {
     expect({ status: opening.status, body: await opening.json() }).toEqual(reused);
   });
 
-  it("同じパスの新しい worktree で開き直し、作り直したファイルを読める", async () => {
-    const id = await openId();
-    const old = connect(id);
-    await old.connected;
-    await old.wait(({ type }) => type === "snapshot");
-    git(project, "worktree", "remove", worktree);
-    git(project, "worktree", "add", "--quiet", worktree, "try-2");
-    writeFileSync(join(worktree, "README"), "replacement-readme\n");
-    const list = worktreeListSchema.parse(
-      await (await request("/api/projects/p/worktrees", "GET")).json(),
-    );
-    expect(list.worktrees.map(({ id, terminalId }) => ({ id, terminalId }))).toEqual([
-      { id: null, terminalId: null },
-      { id: "w", terminalId: null },
-    ]);
-    const recreated = await openId();
-    expect(recreated).not.toBe(id);
-    const current = connect(recreated);
-    await current.connected;
-    await current.wait(({ type }) => type === "snapshot");
-    let output = "";
-    current.send({ type: "input", data: "cat README\r" });
-    expect(
-      await current.wait(
-        (frame) =>
-          frame.type === "output" && /\r?\nreplacement-readme\r?\n/.test((output += frame.data)),
-      ),
-    ).toEqual({ type: "output", data: expect.any(String) });
+  it.each([false, true])(
+    "同じパスの新しい worktree は別の端末を開く (元のシェルで cd する: %s)",
+    async (moved) => {
+      const id = await openId();
+      const old = connect(id);
+      await old.connected;
+      await old.wait(({ type }) => type === "snapshot");
+      if (moved) {
+        let output = "";
+        old.send({ type: "input", data: "cd /; printf '\\n'; pwd\r" });
+        await old.wait(
+          (frame) => frame.type === "output" && /\r?\n\/\r?\n/.test((output += frame.data)),
+        );
+      }
+      const directoryIdentity = () => {
+        const { dev, ino } = statSync(worktree, { bigint: true });
+        return { dev, ino };
+      };
+      const original = directoryIdentity();
+      git(project, "worktree", "remove", worktree);
+      git(project, "worktree", "add", "--quiet", worktree, "try-2");
+      writeFileSync(join(worktree, "README"), "replacement-readme\n");
+      const list = worktreeListSchema.parse(
+        await (await request("/api/projects/p/worktrees", "GET")).json(),
+      );
+      expect(list.worktrees.map(({ id, terminalId }) => ({ id, terminalId }))).toEqual([
+        { id: null, terminalId: null },
+        { id: "w", terminalId: null },
+      ]);
+      expect(directoryIdentity()).not.toEqual(original);
+      const recreated = await openId();
+      expect(recreated).not.toBe(id);
+      const current = connect(recreated);
+      await current.connected;
+      await current.wait(({ type }) => type === "snapshot");
+      let output = "";
+      current.send({ type: "input", data: "printf '\\n'; cat README\r" });
+      expect(
+        await current.wait(
+          (frame) =>
+            frame.type === "output" && /\r?\nreplacement-readme\r?\n/.test((output += frame.data)),
+        ),
+      ).toEqual({ type: "output", data: expect.any(String) });
+    },
+  );
+
+  it.skipIf(process.getuid?.() === 0)(
+    "一覧を読めず検索できる worktree を開き、既知のファイルを読める",
+    async () => {
+      chmodSync(worktree, 0o100);
+      try {
+        expect(() => accessSync(worktree, constants.R_OK)).toThrow();
+        expect(() => accessSync(worktree, constants.X_OK)).not.toThrow();
+        const client = connect(await openId());
+        await client.connected;
+        await client.wait(({ type }) => type === "snapshot");
+        let output = "";
+        client.send({ type: "input", data: "printf '\\n'; cat README; printf '\\n'\r" });
+        expect(
+          await client.wait(
+            (frame) => frame.type === "output" && /\r?\nfixture\r?\n/.test((output += frame.data)),
+          ),
+        ).toEqual({ type: "output", data: expect.any(String) });
+      } finally {
+        chmodSync(worktree, 0o700);
+      }
+    },
+  );
+
+  it.skipIf(process.getuid?.() === 0)("検索できない worktree の端末を開かない", async () => {
+    chmodSync(worktree, 0o000);
+    try {
+      expect(() => accessSync(worktree, constants.X_OK)).toThrow();
+      const response = await open();
+      expect({ status: response.status, body: await response.json() }).toEqual({
+        status: 500,
+        body: {
+          error: {
+            code: "internal",
+            message: "シェルを開けませんでした。設定を確かめてください。",
+          },
+        },
+      });
+    } finally {
+      chmodSync(worktree, 0o700);
+    }
   });
 
   it("同じディレクトリを指す別のパスで開くと実行中のシェルを引き継ぐ", async () => {
@@ -520,7 +589,7 @@ describe("ターミナル API と WebSocket", () => {
     });
     client.send({ type: "resize", cols: 94, rows: 27 });
     let output = "";
-    client.send({ type: "input", data: "stty size\r" });
+    client.send({ type: "input", data: "printf '\\n'; stty size\r" });
     await client.wait(
       (frame) => frame.type === "output" && /\r?\n27 94\r?\n/.test((output += frame.data)),
     );
