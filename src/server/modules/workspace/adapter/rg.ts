@@ -117,6 +117,7 @@ export function createRg(
           child.kill();
         }, 10_000);
         child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+          if (timedOut) return;
           pending += chunk;
           const lines = pending.split("\n");
           pending = lines.pop() ?? "";
