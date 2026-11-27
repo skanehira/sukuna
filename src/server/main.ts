@@ -1,4 +1,5 @@
 import { createInboxRepository, formatResetTime } from "./modules/inbox/adapter/inbox-repository";
+import { createRecapDependencies } from "./modules/recap/adapter/dependencies";
 import { serve } from "@hono/node-server";
 import { accessSync, constants } from "node:fs";
 import { homedir } from "node:os";
@@ -79,6 +80,12 @@ const server = serve(
           getWsHub().notice({ kind: "issue", issue_id: issueId, project_id: projectId, seq: 0 }),
       ),
       worktrees: createWorktreeDependencies(getDatabase),
+      recap: createRecapDependencies(
+        () => getDatabase().db,
+        { forward: (method, path) => getRunnerLink().forward(method, path) },
+        (id) =>
+          getWsHub().notice({ kind: "conversation_parts", conversation_id: id, parts: ["recap"] }),
+      ),
     }).fetch,
     port: env.port,
     hostname: "0.0.0.0",

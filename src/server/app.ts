@@ -23,6 +23,8 @@ import { createIssueRoutes } from "./modules/issue/adapter/issue-routes";
 import type { IssueServerDeps } from "../shared/issue/ports";
 import { createWorktreeRoutes } from "./modules/workspace/adapter/worktree-routes";
 import type { WorktreeDependencies } from "./modules/workspace/domain/worktree-ports";
+import { createRecapRoutes } from "./modules/recap/adapter/http";
+import type { RecapDependencies } from "./modules/recap/domain/ports";
 
 export type IdentityOptions = {
   login: string | undefined;
@@ -43,6 +45,7 @@ export type AppOptions = {
   issues?: IssueServerDeps;
   inbox?: InboxDependencies;
   worktrees?: WorktreeDependencies;
+  recap?: RecapDependencies;
 };
 
 export function createApp(options: AppOptions): Hono<IdentityEnv> {
@@ -69,6 +72,7 @@ export function createApp(options: AppOptions): Hono<IdentityEnv> {
   if (options.inbox) app.route("/api", createInboxRoutes(options.inbox));
 
   if (options.issues) app.route("/api", createIssueRoutes(options.issues));
+  if (options.recap) app.route("/api/conversations", createRecapRoutes(options.recap));
 
   if (options.workspace) app.route("/api/conversations", createWorkspaceRoutes(options.workspace));
 
