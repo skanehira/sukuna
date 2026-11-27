@@ -20,7 +20,7 @@ export function PromptEditor({
 }) {
   const host = useRef<HTMLDivElement | null>(null);
   const [mode, setMode] = useState("INSERT");
-  const [candidate, setCandidate] = useState(-1);
+  const [candidate, setCandidate] = useState<string | null>(null);
   const initial = useRef(spec);
   const [query, setQuery] = useState(() => controller.promptText());
   const commands = spec.commands?.filter((command) => command.name.startsWith(query.trimEnd()));
@@ -63,7 +63,7 @@ export function PromptEditor({
               if (!changingCompletion) {
                 cycling = false;
                 index = -1;
-                setCandidate(-1);
+                setCandidate(null);
               }
             }
           }),
@@ -120,7 +120,13 @@ export function PromptEditor({
       } else if (token === "<Tab>") {
         consumed = true;
         const text = view.state.doc.toString();
-        if (!cycling) completionCandidates = spec.commands?.filter((command) => command.name.startsWith(text)).map((command) => command.name) ?? spec.candidates ?? [];
+        if (!cycling)
+          completionCandidates =
+            spec.commands
+              ?.filter((command) => command.name.startsWith(text))
+              .map((command) => command.name) ??
+            spec.candidates ??
+            [];
         if ((cycling || /^\/\S*$/.test(text)) && completionCandidates.length) {
           index = (index + 1) % completionCandidates.length;
           const candidate = `${completionCandidates[index]} `;
@@ -131,7 +137,7 @@ export function PromptEditor({
           });
           changingCompletion = false;
           cycling = true;
-          setCandidate(index);
+          setCandidate(completionCandidates[index]);
         }
       } else if (token === ":" && !state?.insertMode) {
         consumed = true;
@@ -202,17 +208,22 @@ export function PromptEditor({
           {candidates.map((text, index) => (
             <span
               key={text}
-              className={index === Math.max(0, candidate) ? "text-accent" : "text-muted"}
+              className={text === (candidate ?? candidates[0]) ? "text-accent" : "text-muted"}
             >
-              {text}{commands ? ` ${commands[index].description.split("\n")[0]}` : ""}
+              {text}
+              {commands ? ` ${commands[index].description.split("\n")[0]}` : ""}
             </span>
           ))}
           <span className="text-muted">Tab で選ぶ</span>
         </div>
       ) : null}
-      {completing && spec.commands?.length === 0 ? <div className="px-3 pt-2 text-[13px] text-muted">最初の指示を送ると候補が出ます</div> : null}
+      {completing && spec.commands?.length === 0 ? (
+        <div className="px-3 pt-2 text-[13px] text-muted">最初の指示を送ると候補が出ます</div>
+      ) : null}
       <div ref={host} />
-      {spec.unsent ? <div className="px-3 pb-2 text-[13px] text-wait">未送信: {spec.unsent}</div> : null}
+      {spec.unsent ? (
+        <div className="px-3 pb-2 text-[13px] text-wait">未送信: {spec.unsent}</div>
+      ) : null}
       <div className="px-3 pb-2 text-xs text-muted">
         {mode === "INSERT" || mode === "REPLACE"
           ? `Esc Normal へ (${spec.verb}のは Normal から)`

@@ -12,6 +12,7 @@ import { Notices, type NoticePort } from "./shell/notices";
 import { ShellBoundary, WindowError } from "./shell/ShellBoundary";
 import { Skeleton } from "./shell/loading";
 import type { IdentityRecovery } from "./shell/AuthenticationGuard";
+import type { RightView } from "./buffer/right-window";
 
 const empty: LineInfo[] = [];
 const initial: LineInfo[] = [{ kind: "note", text: "表示する項目はありません。" }];
@@ -22,7 +23,7 @@ const missing = {
 };
 
 export type ScreenContent =
-  | { kind: "ready"; title: string; content: ReactNode }
+  | { kind: "ready"; title: string; content: ReactNode; fullWindow?: boolean }
   | { kind: "error"; error: { code: string; message: string } };
 export type ScreenLoader = (route: Route) => Promise<ScreenContent>;
 
@@ -37,6 +38,7 @@ type AppProps = {
   loadScreen?: ScreenLoader;
   main?: ReactNode;
   right?: ReactNode;
+  renderRight?: (view: RightView) => ReactNode;
 };
 
 export function App({
@@ -48,6 +50,7 @@ export function App({
   identityRecovery,
   main,
   right,
+  renderRight,
 }: AppProps = {}) {
   const [localNavigation] = useState(() => createNavigation({ kind: "home" }, () => undefined));
   const navigation = suppliedNavigation ?? localNavigation;
@@ -66,6 +69,7 @@ export function App({
         controller={controller}
         disconnected={!connected}
         notices={notices ? <Notices notices={notices} /> : undefined}
+        renderRight={renderRight}
         tree={
           <Frame title="sukuna" side="tree">
             <ShellBoundary>
@@ -155,6 +159,19 @@ function MainWindow({
     else if (loadScreen) void mutate().catch(() => undefined);
     else onReload();
   };
+  const recoveryNode = recovery ? (
+    <div className="shrink-0 border-t border-line bg-ground">
+      <WindowError
+        message={
+          identityRecovery?.message ??
+          networkFailure?.message ??
+          "サーバーにつながりません。最後に取得した内容を表示しています。"
+        }
+        onHome={onHome}
+        onReload={reload}
+      />
+    </div>
+  ) : null;
   const title = failure
     ? failure.code === "not_found"
       ? "見つかりません"
@@ -162,6 +179,13 @@ function MainWindow({
     : data?.kind === "ready"
       ? data.title
       : "一覧";
+  if (!failure && data?.kind === "ready" && data.fullWindow)
+    return (
+      <>
+        {data.content}
+        {recoveryNode}
+      </>
+    );
   return (
     <Frame title={title} side="main" active>
       <ShellBoundary key={routeUrl(route)}>
@@ -183,19 +207,7 @@ function MainWindow({
               ))}
           </div>
         )}
-        {recovery ? (
-          <div className="shrink-0 border-t border-line bg-ground">
-            <WindowError
-              message={
-                identityRecovery?.message ??
-                networkFailure?.message ??
-                "サーバーにつながりません。最後に取得した内容を表示しています。"
-              }
-              onHome={onHome}
-              onReload={reload}
-            />
-          </div>
-        ) : null}
+        {recoveryNode}
       </ShellBoundary>
     </Frame>
   );

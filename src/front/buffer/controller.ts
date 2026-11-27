@@ -32,9 +32,9 @@ export type PromptSpec = {
   change?(text: string): void;
   quote?: string[];
   images?: number;
-  submit(text: string): void | Promise<void>;
+  submit(text: string): void | boolean | Promise<void | boolean>;
   close(text: string): void;
-  interrupt?(text: string): void | Promise<void>;
+  interrupt?(text: string): void | boolean | Promise<void | boolean>;
   paste?(images: File[]): void;
 };
 export type WindowHandle = {
@@ -383,7 +383,12 @@ export class BufferController {
     const handle = this.windows.get(this.state.active);
     const lines = handle?.lines() ?? [];
     const line = lines[handle?.position().line ?? 0];
-    if (line?.kind === "menu" && line.action?.startsWith("conversation.choice.")) return [["open", "この選択肢を選ぶ (もう一度で外す)"], ["番号 Enter", "番号で選ぶ"], ["prompt.open", "入力"]];
+    if (line?.kind === "menu" && line.action?.startsWith("conversation.choice."))
+      return [
+        ["open", "この選択肢を選ぶ (もう一度で外す)"],
+        ["番号 Enter", "番号で選ぶ"],
+        ["prompt.open", "入力"],
+      ];
     if (line?.kind === "menu") return [["open", "実行する"]];
     const hints = this.hints.get(handle?.view ?? "") ?? [];
     return lines.some((line) => line.kind === "menu")
@@ -456,7 +461,9 @@ export class BufferController {
   }
   registerPromptUpdate(update: (text: string) => void): () => void {
     this.promptUpdate = update;
-    return () => { if (this.promptUpdate === update) this.promptUpdate = null; };
+    return () => {
+      if (this.promptUpdate === update) this.promptUpdate = null;
+    };
   }
   replacePromptText(text: string): void {
     this.promptDraft = text;
@@ -500,9 +507,15 @@ export class BufferController {
       return false;
     }
     try {
-      if (interrupt && spec.interrupt) await spec.interrupt(text);
-      else await spec.submit(text);
-      if (this.state.promptId !== promptId) return true;
+      const close =
+        interrupt && spec.interrupt ? await spec.interrupt(text) : await spec.submit(text);
+      if (
+        close === false ||
+        !this.state.prompt ||
+        this.state.promptId !== promptId ||
+        this.promptDraft !== text
+      )
+        return true;
       this.update({ prompt: null, mode: "NORMAL" });
       this.focus(this.promptOrigin);
       return true;

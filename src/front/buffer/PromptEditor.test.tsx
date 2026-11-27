@@ -101,6 +101,35 @@ describe("入力欄", () => {
 });
 
 describe("スキルの候補の表示", () => {
+  it("Tabの循環と手入力の絞り込みで、本文と強調する候補が一致する", () => {
+    const { view } = mount("/dev-", {
+      commands: [
+        { name: "/dev-a", description: "A" },
+        { name: "/dev-b", description: "B" },
+        { name: "/dev-c", description: "C" },
+      ],
+    });
+    const highlighted = () =>
+      [...screen.getByLabelText("スキルの候補").querySelectorAll(".text-accent")].map(
+        (node) => node.textContent,
+      );
+    expect(highlighted()).toEqual(["/dev-a A"]);
+    for (const name of ["a", "b", "c", "a"]) {
+      key(view, "Tab");
+      expect({ text: view.state.doc.toString(), selected: highlighted() }).toEqual({
+        text: `/dev-${name} `,
+        selected: [`/dev-${name} ${name.toUpperCase()}`],
+      });
+    }
+    act(() => view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "/dev-b" } }));
+    expect(highlighted()).toEqual(["/dev-b B"]);
+    key(view, "Tab");
+    expect({ text: view.state.doc.toString(), selected: highlighted() }).toEqual({
+      text: "/dev-b ",
+      selected: ["/dev-b B"],
+    });
+    expect(EditorView.findFromDOM(view.dom)).toBe(view);
+  });
   it("普通の本文には候補を出さず、/ で始まる一語のときだけ出す", () => {
     const { view } = mount("普通の本文", { candidates: ["/dev-impl", "/dev-spec"] });
     expect(screen.queryByLabelText("スキルの候補")).toBeNull();
