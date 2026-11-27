@@ -84,6 +84,8 @@ test("締めくくりをやめて指示を書き、一覧と検索からスレ�
     (route) => {
       const url = new URL(route.request().url());
       const path = url.pathname;
+      if (path === "/api/conversations/c1/stock") return route.fulfill({ json: { items: [] } });
+      if (path === "/api/conversations/c1/threads") return route.fulfill({ json: { threads: [] } });
       if (
         path === "/api/me" ||
         path === "/api/health" ||

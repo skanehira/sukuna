@@ -6,7 +6,7 @@ import { EditorView, drawSelection } from "@codemirror/view";
 import { defaultKeymap } from "@codemirror/commands";
 import { keymap } from "@codemirror/view";
 import { getCM, vim, Vim } from "@replit/codemirror-vim";
-import type { BufferController, PromptSpec } from "./controller";
+import { promptCloseHint, type BufferController, type PromptSpec } from "./controller";
 import { applyVim, vimMode } from "./keymap/apply-vim";
 import { eventKey } from "./keymap/notation";
 export function PromptEditor({
@@ -234,7 +234,7 @@ export function PromptEditor({
       <div className="px-3 pb-2 text-xs text-muted">
         {mode === "INSERT" || mode === "REPLACE"
           ? `Esc Normal へ (${spec.verb}のは Normal から)`
-          : `Enter ${spec.verb}　${spec.interrupt ? "Alt+Enter AI を止めてすぐ送る　" : ""}Esc 閉じる (書きかけは残る)`}
+          : `Enter ${spec.verb}　${spec.interrupt ? "Alt+Enter AI を止めてすぐ送る　" : ""}Esc ${promptCloseHint(spec)}`}
         {spec.images ? (
           <span className="ml-4 text-accent">画像 {spec.images} 件 (送信時に一緒に送る)</span>
         ) : null}

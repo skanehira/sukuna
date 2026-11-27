@@ -29,18 +29,23 @@ export type PromptSpec = {
   verb: string;
   initialText?: string;
   allowEmpty?: boolean;
+  scope?: string;
   candidates?: string[];
   commands?: { name: string; description: string }[];
   unsent?: string;
   allowChange?(text: string, edits: ChangeDesc): boolean;
   change?(text: string, edits?: ChangeDesc): void;
   quote?: string[];
+  discardOnClose?: boolean;
   images?: number;
   submit(text: string): void | boolean | Promise<void | boolean>;
   close(text: string): void;
   interrupt?(text: string): void | boolean | Promise<void | boolean>;
   paste?(images: File[]): void;
 };
+export function promptCloseHint(spec: Pick<PromptSpec, "discardOnClose">): string {
+  return spec.discardOnClose ? "閉じる (書きかけは捨てる)" : "閉じる (書きかけは残る)";
+}
 export type WindowHandle = {
   focus(): void;
   lines(): LineInfo[];
@@ -93,7 +98,12 @@ export type ControllerOptions = {
   back?(): boolean;
   prompt?(): PromptSpec | undefined;
   clipboard?: ClipboardPort;
+  openMarked?(this: void, context: ActionContext): boolean;
   notify?(message: string, kind: "error" | "info"): void;
+};
+type ActionInterceptor = {
+  views: readonly string[];
+  run(context: ActionContext): boolean | Promise<boolean>;
 };
 type WindowRegistration = { handle: WindowHandle; initialized: boolean };
 type PendingJump = { opening: number; jump: Jump; target?: object; interaction: number };
@@ -114,6 +124,8 @@ export class BufferController {
   private keymapVersion = 0;
   private keymapWrite = Promise.resolve();
   private confirmed: (() => void | Promise<void>) | undefined;
+  private interceptors = new Map<string, Set<ActionInterceptor>>();
+  private windowPrompts = new Map<string, () => PromptSpec | undefined>();
   private pending = new Set<string>();
   private status = new Map<string, string>();
   private hints = new Map<string, Hint[]>();
@@ -169,7 +181,8 @@ export class BufferController {
         () => {
           const line = this.currentLine();
           if (line?.editLabel && line.action) return this.run(line.action);
-          const spec = this.options.prompt?.();
+          const prompt = this.windowPrompts.get(this.context().view);
+          const spec = prompt ? prompt() : this.options.prompt?.();
           if (spec) this.openPrompt(spec);
         },
       ],
@@ -321,6 +334,12 @@ export class BufferController {
     const window = this.window(side);
     return window?.lines()[window.position().line];
   }
+  placeRecord(side: string, seq: number, seqLine: number, column: number): boolean {
+    const line = findSeqLine(this.windowLines(side), seq, seqLine);
+    if (line === null) return false;
+    this.place(side, line, column);
+    return true;
+  }
   windowPosition(side: string): SavedPosition | undefined {
     return this.window(side)?.position();
   }
@@ -340,16 +359,49 @@ export class BufferController {
       ...(range && window ? { selectedLines: window.lines().slice(range[0], range[1] + 1) } : {}),
     };
   }
+  windowLines(side = this.state.active): readonly LineInfo[] {
+    return this.window(side)?.lines() ?? [];
+  }
+  registerWindowPrompt(view: string, prompt: () => PromptSpec | undefined): () => void {
+    this.windowPrompts.set(view, prompt);
+    return () => {
+      if (this.windowPrompts.get(view) === prompt) this.windowPrompts.delete(view);
+    };
+  }
+  registerActionInterceptor(name: string, interceptor: ActionInterceptor): () => void {
+    const entries = this.interceptors.get(name) ?? new Set<ActionInterceptor>();
+    entries.add(interceptor);
+    this.interceptors.set(name, entries);
+    this.update({});
+    return () => {
+      entries.delete(interceptor);
+      if (!entries.size) this.interceptors.delete(name);
+      this.update({});
+    };
+  }
+  canRun(name: string, view: string, prompt = false): boolean {
+    const action = this.actions.get(name);
+    return (
+      (!prompt &&
+        [...(this.interceptors.get(name) ?? [])].some((entry) => entry.views.includes(view))) ||
+      (action !== undefined &&
+        (!prompt || action.fromPrompt === true || name === "cmdline") &&
+        (!action.views || action.views.includes(view)))
+    );
+  }
   async run(name: string, context = this.context()): Promise<void> {
     const action = this.actions.get(name);
-    if (!action) return;
-    if (action.views && !action.views.includes(context.view)) return;
-    if (this.state.active === "prompt" && !action.fromPrompt && name !== "cmdline") return;
-    if (action.confirm) {
-      this.confirm(action.confirm, context, () => action.run(context));
-      return;
-    }
-    await this.perform(() => action.run(context));
+    const fromPrompt = this.state.active === "prompt";
+    if (!this.canRun(name, context.view, fromPrompt)) return;
+    const interceptors = this.interceptors.get(name);
+    await this.perform(async () => {
+      if (!fromPrompt && interceptors)
+        for (const interceptor of interceptors)
+          if (interceptor.views.includes(context.view) && (await interceptor.run(context))) return;
+      if (!action || (action.views && !action.views.includes(context.view))) return;
+      if (action.confirm) this.confirm(action.confirm, context, () => action.run(context));
+      else await action.run(context);
+    });
   }
   private async perform(run: () => void | Promise<void>): Promise<void> {
     try {
@@ -418,6 +470,7 @@ export class BufferController {
     }
     if (!chosen?.line) return;
     const source = this.context(side);
+    if (!number && this.options.openMarked?.(source)) return;
     if (number) handle.place({ line: chosen.index, column: 0, topLine: chosen.index });
     const { line } = chosen;
     if (line.open) {
@@ -483,7 +536,7 @@ export class BufferController {
         ? [["Esc", `Normal へ (${this.state.prompt.verb}のは Normal から)`]]
         : [
             ["Enter", this.state.prompt.verb],
-            ["Esc", "閉じる (書きかけは残る)"],
+            ["Esc", promptCloseHint(this.state.prompt)],
           ];
     if (this.state.mode.startsWith("VISUAL"))
       return [

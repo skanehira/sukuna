@@ -11,7 +11,7 @@ const positionSchema = z.object({
   topLine: z.number().int().nonnegative(),
   ...anchor,
 });
-const rightView = z.object({ view: z.string(), target: z.string() });
+const rightView = z.object({ view: z.string(), target: z.string(), parent: z.string().optional() });
 const jumpSchema = z.object({
   url: z.string(),
   entry: z.string().optional(),

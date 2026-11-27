@@ -65,7 +65,7 @@ export function createStockDependencies(options: {
           `/conversations/${encodeURIComponent(id)}/finish/propose`,
           threadProposalIpcResponseSchema,
         )
-      ).map(({ run_state }) => ({ runState: run_state })),
+      ).map(({ run_state, proposal_seq }) => ({ runState: run_state, proposalSeq: proposal_seq })),
     release: async (id, idleOnly) => {
       const path = `/conversations/${encodeURIComponent(id)}/release/reserve`;
       const reservation = await forward(

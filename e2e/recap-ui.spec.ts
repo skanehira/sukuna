@@ -95,6 +95,10 @@ test("API fixtureを使うUIブラウザ確認: 未読から目次を編集し�
     async (route) => {
       const request = route.request();
       const path = new URL(request.url()).pathname;
+      if (path === "/api/conversations/recap-ui/stock")
+        return route.fulfill({ json: { items: [] } });
+      if (path === "/api/conversations/recap-ui/threads")
+        return route.fulfill({ json: { threads: [] } });
       if (
         path === "/api/me" ||
         path === "/api/health" ||

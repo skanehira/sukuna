@@ -56,7 +56,7 @@ export function proposeThreadFinish(
         text?.type === "assistant_text" &&
         text.payload.text.trim().length > 0
       )
-        return ok({ runState: "working" as const });
+        return ok({ runState: "working" as const, proposalSeq: request.seq });
     }
     try {
       const result = await runtime.deliver(
@@ -65,7 +65,11 @@ export function proposeThreadFinish(
         { events: [], check, checkBeforeCommit: expired },
         { includeQueued: false, recordOpeningFailure: false },
       );
-      return result.map(() => ({ runState: "working" as const }));
+      return result.andThen((receipt) =>
+        receipt.result === "delivered"
+          ? ok({ runState: "working" as const, proposalSeq: receipt.seq })
+          : err(cancelledStockSend),
+      );
     } catch (error) {
       runtime.options.log(
         { conversationId: id, issueId: null },

@@ -2,6 +2,7 @@ import { useSyncExternalStore, type ReactNode } from "react";
 // oxlint-disable-next-line no-restricted-imports -- 外部システムとの同期: 会話画面のキーと入力欄の操作を登録し、画面を離れると解除する
 import { useEffect } from "react";
 import { Buffer } from "../../buffer/Buffer";
+import type { BufferMarks } from "../../buffer/marks";
 import { Frame } from "../../buffer/Frame";
 import type { ConversationSession } from "../../lib/conversation/session";
 
@@ -12,6 +13,9 @@ export function ConversationPage({
   openAtTail = false,
   subscribe,
   recordSeq,
+  recordLine,
+  recordColumn,
+  marks,
   positionKey,
 }: {
   session: ConversationSession;
@@ -19,6 +23,9 @@ export function ConversationPage({
   openAtTail?: boolean;
   subscribe?: (session: ConversationSession) => () => void;
   recordSeq?: number;
+  recordLine?: number;
+  recordColumn?: number;
+  marks?: BufferMarks;
   positionKey?: string;
 }) {
   const { data } = useSyncExternalStore(session.subscribe, session.snapshot, session.snapshot);
@@ -37,6 +44,7 @@ export function ConversationPage({
         viewName="conversation"
         posKey={positionKey ?? `/conversations/${session.id}:main`}
         lines={loading}
+        marks={marks}
         followTail
         scrollPastEnd
         restorePosition={
@@ -46,8 +54,12 @@ export function ConversationPage({
         onReady={(handle) => {
           session.bind(handle, openAtTail);
           if (recordSeq === undefined) return;
-          const record = handle.findSeq(recordSeq);
-          if (record !== null) handle.jumpTo(record, { remember: false });
+          let record = handle.findSeq(recordSeq, recordLine);
+          if (record === null && recordLine !== undefined) {
+            session.expandDiff(recordSeq, true);
+            record = handle.findSeq(recordSeq, recordLine);
+          }
+          if (record !== null) handle.jumpTo(record, { remember: false, column: recordColumn });
         }}
       />
       {data?.conversation.runState === "working" && activity ? (

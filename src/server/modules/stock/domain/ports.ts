@@ -67,7 +67,7 @@ export type StockDependencies = {
     attemptId: string,
     interrupted: boolean,
   ): Promise<Result<{ recovered: StockSendResponse | null; reopened: boolean }, StockError>>;
-  propose(id: string): Promise<Result<{ runState: "working" }, StockError>>;
+  propose(id: string): Promise<Result<{ runState: "working"; proposalSeq?: number }, StockError>>;
   release(
     id: string,
     idleOnly?: boolean,

@@ -9,6 +9,7 @@ import { SearchResults } from "../../components/files/SearchResults";
 import type { FileContentResponse } from "../../../shared/files";
 import { ConversationApiError } from "../conversation/api";
 import { parseRoute, routeUrl, screenKey, type Route } from "../routes";
+import type { StockSession } from "../stock/session";
 import type { FilesApi } from "./api";
 import type { FileControls, FileScope, FileViewContext, TreeControls } from "./context";
 import { isMarkdown } from "./display";
@@ -43,6 +44,7 @@ export function createFilesWorkspace({
   refreshScope,
   entryId,
   scope,
+  stock,
 }: {
   api: FilesApi;
   controller: BufferController;
@@ -53,6 +55,7 @@ export function createFilesWorkspace({
   refreshScope: (id: string) => Promise<FileScope>;
   entryId: () => string;
   scope: (id: string) => FileScope | undefined;
+  stock?: (id: string) => StockSession;
 }) {
   const files = new Map<string, FileControls>();
   const trees = new Map<string, TreeControls>();
@@ -201,6 +204,7 @@ export function createFilesWorkspace({
   };
 
   return {
+    openFile: open,
     takePrepared(route: Route): PreparedFile | undefined {
       if (!prepared || prepared.entry !== route.entry || prepared.url !== routeUrl(route))
         return undefined;
@@ -232,6 +236,7 @@ export function createFilesWorkspace({
               startLine={positive(params.get("line")) - 1}
               initialContent={prepared?.data}
               onResolved={onResolved}
+              stock={stock?.(opening.id)}
             />
           ),
         };

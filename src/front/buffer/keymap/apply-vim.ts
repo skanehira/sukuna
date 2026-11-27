@@ -3,6 +3,7 @@ import type { EditorView } from "@codemirror/view";
 import type { BufferController, Mode } from "../controller";
 import { copyText } from "../clipboard";
 import { eventKey, parseKeys } from "./notation";
+import type { BufferSelection } from "../selection";
 import type { ActionContext, KeymapEntry } from "./registry";
 
 export function vimMode(view: EditorView): Mode {
@@ -15,6 +16,32 @@ export function vimMode(view: EditorView): Mode {
 export function vimCount(view: EditorView): string {
   const count = getCM(view)?.state.vim?.inputState.keyBuffer.join("") ?? "";
   return /^[1-9]\d*$/.test(count) ? count : "";
+}
+
+function bufferSelection(view: EditorView): BufferSelection | undefined {
+  const state = getCM(view)?.state.vim;
+  if (!state?.visualMode) return;
+  const mode = state.visualBlock ? "block" : state.visualLine ? "line" : "char";
+  const { doc, selection } = view.state;
+  const ranges = selection.ranges.flatMap(({ from, to }) => {
+    const first = doc.lineAt(from);
+    const last = doc.lineAt(to > from && mode === "line" ? to - 1 : to);
+    const result = [];
+    for (let number = first.number; number <= last.number; number++) {
+      const line = doc.line(number);
+      result.push({
+        line: number - 1,
+        from: Math.max(0, from - line.from),
+        to: Math.min(line.length, to - line.from),
+      });
+    }
+    return result;
+  });
+  if (mode !== "block") return { mode, ranges };
+  const { anchor, head } = state.sel;
+  const from = Math.min(anchor.ch, head.ch);
+  const to = Math.max(anchor.ch, head.ch) + 1;
+  return Number.isFinite(to) ? { mode, ranges, block: { from, to } } : { mode, ranges };
 }
 
 export function applyVim(
@@ -50,6 +77,8 @@ export function applyVim(
     } else {
       const name = entry.to.action;
       Vim.defineAction("sukunaDispatch", () => {
+        if (context.selection && (name === "stock.question" || name === "stock.instruct"))
+          Vim.handleKey(cm, "<Esc>", "mapping");
         void controller.run(name, context);
       });
       Vim.mapCommand(entry.keys, "action", "sukunaDispatch", {}, { context: mode });
@@ -85,12 +114,7 @@ export function applyVim(
     const allowed = controller.entries().filter((entry) => {
       if (entry.context !== context || entry.to === null) return false;
       if ("keys" in entry.to) return true;
-      const action = controller.actions.get(entry.to.action);
-      return (
-        action !== undefined &&
-        (!prompt || action.fromPrompt || action.name === "cmdline") &&
-        (!action.views || action.views.includes(viewName))
-      );
+      return controller.canRun(entry.to.action, viewName, prompt);
     });
     const full = `${prefix}${token}`;
     const matches = allowed.filter((entry) => entry.keys.startsWith(full));
@@ -115,7 +139,13 @@ export function applyVim(
       }
       prefix = "";
       controller.update({ prefix: "" });
-      invoke(exact, { ...controller.context(side), view: viewName, text: cm.getSelection() });
+      const selection = bufferSelection(view);
+      invoke(exact, {
+        ...controller.context(side),
+        view: viewName,
+        text: cm.getSelection(),
+        selection,
+      });
       return;
     }
     if (matches.length > 0 || full === "<Space>" || full === "<C-w>") {

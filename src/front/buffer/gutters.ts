@@ -1,5 +1,6 @@
 import type { Extension } from "@codemirror/state";
 import { gutter, GutterMarker } from "@codemirror/view";
+import { markField, type BufferMarks } from "./marks";
 import { bufferField } from "./state";
 import { CURSOR_NUMBER, MARK_GUTTER, NUM_GUTTER, sideMetrics, type BufferSide } from "./theme";
 
@@ -46,14 +47,18 @@ class NumberMarker extends GutterMarker {
   }
 }
 
-function markGutter(): Extension {
+function markGutter(field?: ReturnType<typeof markField>): Extension {
   return gutter({
     class: MARK_GUTTER,
     renderEmptyElements: true,
-    lineMarkerChange: (update) => update.docChanged,
+    lineMarkerChange: (update) =>
+      update.startState.field(bufferField).lines !== update.state.field(bufferField).lines ||
+      (field !== undefined && update.startState.field(field) !== update.state.field(field)),
     lineMarker(view, block) {
       const index = view.state.doc.lineAt(block.from).number - 1;
-      const mark = view.state.field(bufferField).lines[index]?.mark;
+      const mark =
+        (field && view.state.field(field).get(index)) ??
+        view.state.field(bufferField).lines[index]?.mark;
       if (mark === undefined || mark === "") return null;
       return new MarkMarker(mark);
     },
@@ -72,8 +77,9 @@ function numberGutter(): Extension {
   });
 }
 
-export function bufferGutters(side: BufferSide): Extension[] {
-  const extensions: Extension[] = [markGutter()];
+export function bufferGutters(side: BufferSide, marks?: BufferMarks): Extension[] {
+  const field = marks && markField(marks);
+  const extensions: Extension[] = field ? [field, markGutter(field)] : [markGutter()];
   if (sideMetrics(side).numbers) extensions.push(numberGutter());
   return extensions;
 }
