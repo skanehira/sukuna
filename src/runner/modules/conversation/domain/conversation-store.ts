@@ -38,6 +38,7 @@ export type QueuedInstruction = {
   createdAt: number;
   stockItemId?: string;
 };
+export type AcceptedInstruction = Omit<QueuedInstruction, "position" | "stockItemId">;
 export type SendResult =
   | { result: "delivered"; seq: number }
   | { result: "queued"; queuedId: string };
@@ -71,6 +72,9 @@ export interface ConversationStore {
   events(id: string): StoredEvent[];
   latestStopSeq(id: string): number | null;
   append(id: string, event: ConversationEvent, now: number): StoredEvent | null;
+  stageAccepted(instruction: AcceptedInstruction): void;
+  removeAccepted(id: string): boolean;
+  recoverAccepted(id?: string): boolean;
   queue(id: string): QueuedInstruction[];
   enqueue(instruction: QueuedInstruction): void;
   dequeue(id: string, deliveredSeq: number): void;
@@ -97,3 +101,9 @@ export class ProjectRunBlocked extends Error {
 }
 
 export class ProjectRunBusy extends ProjectRunBlocked {}
+
+export class ConversationWriteBusy extends Error {
+  constructor(cause: Error) {
+    super(cause.message, { cause });
+  }
+}

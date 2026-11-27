@@ -1,3 +1,4 @@
+import { parseDesignDiff } from "./design-diff";
 import { runCommand, type CommandOptions, type CommandResult } from "../../../../shared/command";
 import { lstat, readFile, appendFile, open, mkdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -337,5 +338,43 @@ export function createProjectGit(git: GitRunner): import("../domain/project-sett
       );
     },
     origin: (cwd) => read(cwd, "remote", "get-url", "origin"),
+  };
+}
+
+export function createDesignGit(git: GitRunner) {
+  return {
+    async diff(cwd: string, base: string, head: string) {
+      const result = await git.run(
+        [
+          "-c",
+          "diff.suppressBlankEmpty=false",
+          "diff",
+          "--patch-with-raw",
+          "-z",
+          "--find-renames",
+          "--no-ext-diff",
+          "--no-textconv",
+          "--no-color",
+          "--no-relative",
+          "--submodule=short",
+          "--no-indent-heuristic",
+          "--output-indicator-new=+",
+          "--output-indicator-old=-",
+          "--output-indicator-context= ",
+          base,
+          head,
+          "--",
+        ],
+        { cwd },
+      );
+      return result.exitCode === 0 ? parseDesignDiff(result.stdout) : null;
+    },
+    async head(cwd: string, branch: string) {
+      const result = await git.run(
+        ["rev-parse", "--verify", "--end-of-options", `refs/heads/${branch}^{commit}`],
+        { cwd },
+      );
+      return result.exitCode === 0 ? result.stdout.trim() : null;
+    },
   };
 }

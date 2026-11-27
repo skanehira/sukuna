@@ -1,6 +1,10 @@
 import { RunOptions } from "./run-options";
 import type { CommandCache } from "../domain/agent-port";
-import { ConversationWorkspaceChanged, ProjectRunBlocked } from "../domain/conversation-store";
+import {
+  ConversationWorkspaceChanged,
+  ConversationWriteBusy,
+  ProjectRunBlocked,
+} from "../domain/conversation-store";
 import { WorktreeActivityBusy } from "../../../../shared/workspace/worktree-activity";
 import { RUNNER_IPC_TIMEOUT_MS, STOCK_SEND_SETTLEMENT_TIMEOUT_MS } from "../../../../shared/ipc";
 import { deliverQueue } from "./deliver-queue";
@@ -25,6 +29,7 @@ import type {
 import type { ImagePort, LoadedImage } from "../domain/image-port";
 import type { Clock } from "../domain/clock";
 import type {
+  AcceptedInstruction,
   Conversation,
   ConversationStore,
   ProjectRunReservation,
@@ -37,6 +42,7 @@ import { AppToolRegistry } from "./app-tool-registry";
 import { UsageLimitTimer } from "./usage-limit-timer";
 import { recordRateLimit } from "./record-rate-limit";
 import type { TimelineInputComment } from "../../../../shared/progress/schema";
+import { unavailableRunnerError } from "../../../../shared/ipc";
 
 export type OperationError = {
   code: "conflict" | "not_found" | "internal" | "invalid_input" | "runner_unavailable";
@@ -50,7 +56,7 @@ export type RuntimeSignal = { conversationId: string } & (
   | { type: "stopped"; reason: string; previousRunState?: RunState }
   | { type: "inputRecorded"; seq: number; eventType: string }
   | { type: "delta"; text: string }
-  | { type: "parts"; parts: ("queue" | "answers" | "stock" | "threads")[] }
+  | { type: "parts"; parts: ("queue" | "answers" | "stock" | "threads" | "draft")[] }
 );
 export type RuntimeOptions = {
   store: ConversationStore;
@@ -85,6 +91,7 @@ type DeliveryOptions = {
   projectRun?: ProjectRunReservation;
   newConversation?: Conversation;
   recordOpeningFailure?: boolean;
+  afterAcceptance?: boolean;
 };
 export type InputAcceptance = {
   events: ConversationEvent[];
@@ -92,7 +99,15 @@ export type InputAcceptance = {
   check?: () => OperationError | null;
   checkBeforeCommit?: () => OperationError | null;
 };
-class InputRefused extends Error {
+export function callerInputAcceptance(
+  callerCancelled: (() => boolean) | undefined,
+  events: ConversationEvent[] = [],
+): InputAcceptance | undefined {
+  if (!callerCancelled) return undefined;
+  const check = () => (callerCancelled() ? unavailableRunnerError : null);
+  return { events, check, checkBeforeCommit: check };
+}
+export class InputRefused extends Error {
   readonly refusal: OperationError;
   constructor(refusal: OperationError) {
     super(refusal.message);
@@ -120,7 +135,14 @@ type Execution = {
   permission?: { request: PermissionRequest; resolve: (answer: PermissionDecision) => void };
   inputOrigin: Origin;
   reopening: Reopening | null;
+  acceptedInputId?: string;
+  refusedInterrupt?: { startSeq: number; message: string };
+  streamEnded: boolean;
+  turnActive: boolean;
 };
+function turnHasEnded(execution: Execution): boolean {
+  return !execution.turnActive || execution.streamEnded;
+}
 export const activeStates: RunState[] = ["working", "waiting_answer", "waiting_permission"];
 export const conflict = (
   message = "会話の状態が変わりました。もう一度操作してください。",
@@ -133,6 +155,7 @@ export class ConversationRuntime {
   readonly releases: ReleaseReservations;
   executions = new Map<string, Execution>();
   private operations = new Map<string, Promise<unknown>>();
+  private acceptedDeliveries = new Map<string, { instructionId: string; job: Promise<void> }>();
   private listeners = new Set<(signal: RuntimeSignal) => void | Promise<void>>();
   closing = false;
   options: RuntimeOptions;
@@ -171,21 +194,29 @@ export class ConversationRuntime {
   serial<T, E extends DeliveryError>(
     id: string,
     operation: () => Promise<Result<T, E>>,
+    callerCancelled?: () => boolean,
   ): Promise<Result<T, E | OperationError>> {
     const previous = this.operations.get(id) ?? Promise.resolve();
-    const next = previous.then(operation).catch((error: unknown) => {
-      if (
-        error instanceof WorktreeActivityBusy ||
-        error instanceof ConversationWorkspaceChanged ||
-        error instanceof ProjectRunBlocked
-      )
-        return err<T, OperationError>(conflict(error.message));
-      this.log(id, "会話の操作に失敗しました。", error);
-      return err<T, OperationError>({
-        code: "internal",
-        message: "会話の操作に失敗しました。もう一度操作してください。",
+    const next = previous
+      .then(async () => {
+        if (this.acceptedDeliveries.has(id)) await this.waitForAcceptedDelivery(id);
+        if (callerCancelled?.()) return err<T, OperationError>(unavailableRunnerError);
+        return operation();
+      })
+      .catch((error: unknown) => {
+        if (error instanceof InputRefused) return err<T, OperationError>(error.refusal);
+        if (
+          error instanceof WorktreeActivityBusy ||
+          error instanceof ConversationWorkspaceChanged ||
+          error instanceof ProjectRunBlocked
+        )
+          return err<T, OperationError>(conflict(error.message));
+        this.log(id, "会話の操作に失敗しました。", error);
+        return err<T, OperationError>({
+          code: "internal",
+          message: "会話の操作に失敗しました。もう一度操作してください。",
+        });
       });
-    });
     this.operations.set(id, next);
     void next.finally(() => {
       if (this.operations.get(id) === next) this.operations.delete(id);
@@ -242,7 +273,7 @@ export class ConversationRuntime {
     if (recorded.some((event) => event.type === "answer")) this.partsChanged(id, ["answers"]);
     return recorded;
   }
-  partsChanged(id: string, parts: ("queue" | "answers" | "stock" | "threads")[]): void {
+  partsChanged(id: string, parts: ("queue" | "answers" | "stock" | "threads" | "draft")[]): void {
     this.signal({ type: "parts", conversationId: id, parts });
   }
   deliverQueue = deliverQueue.bind(this);
@@ -251,15 +282,16 @@ export class ConversationRuntime {
   private execution(c: Conversation, worktreeId: string | null): Execution {
     const opened = this.executions.get(c.id);
     if (opened) return opened;
+    let execution: Execution | undefined;
     const session = this.options.agent.open({
       sessionId: c.sessionId ?? this.options.uuid(),
       resume: c.sessionId !== null,
       ...this.runOptions.build(c),
       context: { conversationId: c.id, projectId: c.projectId, issueId: c.issueId },
-      onQuestion: (request) => this.question(c.id, request),
-      onPermission: (request) => this.askPermission(c.id, request),
+      onQuestion: (request) => this.question(c.id, execution, request),
+      onPermission: (request) => this.askPermission(c.id, execution, request),
     });
-    const execution: Execution = {
+    execution = {
       cwd: c.cwd,
       worktreeId,
       session,
@@ -272,6 +304,8 @@ export class ConversationRuntime {
       startSeq: 0,
       inputOrigin: "developer",
       reopening: null,
+      streamEnded: false,
+      turnActive: false,
     };
     this.executions.set(c.id, execution);
     return execution;
@@ -290,10 +324,18 @@ export class ConversationRuntime {
       return this.deliverWithProjectRun(id, input, acceptance, options);
     }
     const reservation = this.store.reserveProjectRun(c.projectId);
+    let releaseAfterDelivery = false;
     try {
-      return await this.deliverWithProjectRun(id, input, acceptance, options);
+      const result = await this.deliverWithProjectRun(id, input, acceptance, options);
+      if (options.afterAcceptance && result.isOk()) {
+        releaseAfterDelivery = true;
+        void this.waitForAcceptedDelivery(id)
+          .finally(() => reservation.release())
+          .catch((error: unknown) => this.log(id, "作業の予約を解除できませんでした。", error));
+      }
+      return result;
     } finally {
-      reservation.release();
+      if (!releaseAfterDelivery) reservation.release();
     }
   }
   private async deliverWithProjectRun(
@@ -304,7 +346,7 @@ export class ConversationRuntime {
   ): Promise<Result<SendResult, OperationError>> {
     const { newConversation } = options;
     const prepare = () => {
-      const includeQueued = options.includeQueued ?? true;
+      const includeQueued = !options.afterAcceptance && (options.includeQueued ?? true);
       const queued = includeQueued ? this.store.queue(id) : [];
       const inputs = [...queued, input];
       const text = inputs
@@ -335,18 +377,45 @@ export class ConversationRuntime {
         });
       return ok({ includeQueued, queued, inputs, text, images, missingImages });
     };
+    const preflight = acceptance?.check?.();
+    if (preflight) return err(preflight);
     const initial = prepare();
     if (initial.isErr()) return err(initial.error);
-    if (options.interrupt) await this.interrupt(id, "interrupt");
-    const reject = (error: OperationError): Result<never, OperationError> => {
-      if (options.interrupt) {
-        this.record(id, [{ type: "stopped", payload: { reason: "error", detail: error.message } }]);
-        this.options.notice(id, error.message, "error");
-      }
+    const active = this.executions.get(id);
+    const previousIntent = active?.intent ?? null;
+    const interruptBeforeAcceptance = options.interrupt && !options.afterAcceptance;
+    const interruptedStart =
+      interruptBeforeAcceptance && active && !turnHasEnded(active) ? active.startSeq : null;
+    let retiredThroughSeq: number | undefined;
+    const finishInterrupted = async (message: string): Promise<void> => {
+      if (interruptedStart !== null && active)
+        await this.recordInterruptedStop(id, active, interruptedStart, message, retiredThroughSeq);
+    };
+    const reject = async (error: OperationError): Promise<Result<never, OperationError>> => {
+      await finishInterrupted(error.message);
       return err(error);
     };
-    for (;;) {
-      const result = this.store.withWorkspace(
+    if (interruptBeforeAcceptance && active && !active.streamEnded) {
+      try {
+        await Promise.race([this.interrupt(id, "interrupt"), active.consuming]);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "AI を停止できませんでした。";
+        if (
+          !turnHasEnded(active) &&
+          active.startSeq === interruptedStart &&
+          this.executions.get(id) === active
+        ) {
+          active.intent = previousIntent;
+          active.refusedInterrupt = { startSeq: interruptedStart, message };
+        }
+        await finishInterrupted(message);
+        throw error;
+      }
+      const refusal = acceptance?.check?.();
+      if (refusal) return reject(refusal);
+    }
+    const attemptDelivery = () =>
+      this.store.withWorkspace(
         id,
         (worktreeId): Result<SendResult, OperationError> | Execution | null => {
           let refusal = acceptance?.check?.() ?? null;
@@ -355,9 +424,13 @@ export class ConversationRuntime {
           const c = this.store.get(id) ?? newConversation;
           if (!c) throw new Error("会話がありません。");
           const opened = this.executions.get(id);
-          if (opened && (opened.cwd !== c.cwd || opened.worktreeId !== worktreeId)) return opened;
+          if (
+            opened &&
+            (opened.streamEnded || opened.cwd !== c.cwd || opened.worktreeId !== worktreeId)
+          )
+            return opened;
           const prepared = prepare();
-          if (prepared.isErr()) return reject(prepared.error);
+          if (prepared.isErr()) return err(prepared.error);
           const { includeQueued, queued, inputs, text, images, missingImages } = prepared.value;
           const hasStructuredComments = inputs.some(
             (entry) => entry.timelineComments !== undefined,
@@ -407,6 +480,19 @@ export class ConversationRuntime {
               ],
             },
           };
+          const deferred: AcceptedInstruction | undefined = options.afterAcceptance
+            ? {
+                id: this.options.id(),
+                conversationId: id,
+                text,
+                images: input.images,
+                clientId: input.clientId ?? null,
+                createdAt: this.options.clock.now(),
+                ...(input.timelineComments === undefined
+                  ? {}
+                  : { timelineComments: input.timelineComments }),
+              }
+            : undefined;
           let execution: Execution | undefined;
           let openingError: { cause: unknown } | undefined;
           let resumeClosedAt: number | null = null;
@@ -414,7 +500,7 @@ export class ConversationRuntime {
           try {
             records = this.record(
               id,
-              [...(acceptance?.events ?? []), event],
+              [...(acceptance?.events ?? []), ...(deferred ? [] : [event])],
               () => {
                 if (newConversation) this.store.create(newConversation);
                 acceptance?.before?.();
@@ -428,7 +514,8 @@ export class ConversationRuntime {
                   openingError = { cause: error };
                   throw error;
                 }
-                if (includeQueued)
+                if (deferred) this.store.stageAccepted(deferred);
+                else if (includeQueued)
                   this.store.dequeue(
                     id,
                     (this.store.get(id)?.lastSeq ?? 0) + (acceptance?.events.length ?? 0) + 1,
@@ -481,10 +568,54 @@ export class ConversationRuntime {
             throw error;
           }
           if (refusal) return err(refusal);
-          if (!records.length) return null;
-          if (!execution) throw new Error("実行がありません。");
-          const activeExecution = execution;
-          if (!opened) activeExecution.consuming = this.consume(id, activeExecution);
+          if (!execution) return null;
+          if (!opened) execution.consuming = this.consume(id, execution);
+          const deliver = (activeExecution: Execution, record: StoredEvent) => {
+            this.timers.cancel(id);
+            activeExecution.rate = null;
+            activeExecution.assistantError = null;
+            activeExecution.intent = null;
+            delete activeExecution.refusedInterrupt;
+            activeExecution.startSeq = record.seq;
+            activeExecution.turnActive = true;
+            activeExecution.acceptedInputId = deferred?.id;
+            activeExecution.inputOrigin = input.origin;
+            activeExecution.reopening =
+              resumeClosedAt === null
+                ? null
+                : {
+                    closedAt: resumeClosedAt,
+                    until:
+                      record.createdAt +
+                      (input.origin === "stock"
+                        ? RUNNER_IPC_TIMEOUT_MS + STOCK_SEND_SETTLEMENT_TIMEOUT_MS
+                        : reopenWaitMs),
+                  };
+            activeExecution.ended = new Promise((resolve) => {
+              activeExecution.end = resolve;
+            });
+            activeExecution.session.send({
+              text,
+              images: images.map(({ data, mediaType }) => ({ data, mediaType })),
+            });
+            if (missingImages)
+              this.options.notice(
+                id,
+                `画像 ${missingImages} 件が見つからないため、外して届けました`,
+                "info",
+              );
+          };
+          if (deferred) {
+            this.deliverAccepted(
+              id,
+              execution,
+              deferred.id,
+              Boolean(opened && options.interrupt),
+              event,
+              deliver,
+            );
+            return ok({ result: "queued", queuedId: deferred.id });
+          }
           if (queued.length)
             this.partsChanged(
               id,
@@ -492,67 +623,290 @@ export class ConversationRuntime {
             );
           const record = records.at(-1);
           if (!record) throw new Error("指示を記録できません。");
-          this.timers.cancel(id);
-          activeExecution.rate = null;
-          activeExecution.assistantError = null;
-          activeExecution.intent = null;
-          activeExecution.startSeq = record.seq;
-          activeExecution.inputOrigin = input.origin;
-          activeExecution.reopening =
-            resumeClosedAt === null
-              ? null
-              : {
-                  closedAt: resumeClosedAt,
-                  until:
-                    record.createdAt +
-                    (input.origin === "stock"
-                      ? RUNNER_IPC_TIMEOUT_MS + STOCK_SEND_SETTLEMENT_TIMEOUT_MS
-                      : reopenWaitMs),
-                };
-          activeExecution.ended = new Promise((resolve) => {
-            activeExecution.end = resolve;
-          });
-          activeExecution.session.send({
-            text,
-            images: images.map(({ data, mediaType }) => ({ data, mediaType })),
-          });
-          if (missingImages)
-            this.options.notice(
-              id,
-              `画像 ${missingImages} 件が見つからないため、外して届けました`,
-              "info",
-            );
+          deliver(execution, record);
           return ok({ result: "delivered", seq: record.seq });
         },
       );
+    for (;;) {
+      let result: ReturnType<typeof attemptDelivery>;
+      try {
+        result = attemptDelivery();
+      } catch (error) {
+        await finishInterrupted(
+          error instanceof Error ? error.message : "指示を届けられませんでした。",
+        );
+        throw error;
+      }
       if (result === null) continue;
-      if (!("session" in result)) return result;
-      result.session.close();
+      if (!("session" in result)) return result.isErr() ? reject(result.error) : result;
+      try {
+        result.session.close();
+      } catch (error) {
+        if (!result.streamEnded) throw error;
+        this.log(id, "終了した実行を閉じられませんでした。", error);
+      }
       await result.consuming;
-      if (this.executions.get(id) === result) this.executions.delete(id);
+      if (this.executions.get(id) === result) {
+        const refusal = acceptance?.check?.();
+        if (refusal) return reject(refusal);
+        if (result === active && result.startSeq === interruptedStart)
+          retiredThroughSeq = this.store.get(id)?.lastSeq;
+        this.executions.delete(id);
+      }
     }
   }
+  private async recordInterruptedStop(
+    id: string,
+    execution: Execution,
+    startSeq: number,
+    message: string,
+    retiredThroughSeq?: number,
+  ): Promise<void> {
+    if (!turnHasEnded(execution)) return;
+    try {
+      const stopped = await this.retryConversationWrite(() =>
+        this.record(
+          id,
+          [{ type: "stopped", payload: { reason: "error", detail: message } }],
+          undefined,
+          () => {
+            const current = this.store.get(id);
+            const running = this.executions.get(id);
+            return (
+              !this.closing &&
+              current?.closedAt === null &&
+              activeStates.includes(current.runState) &&
+              execution.startSeq === startSeq &&
+              turnHasEnded(execution) &&
+              (running === execution ||
+                (running === undefined && current.lastSeq === retiredThroughSeq))
+            );
+          },
+        ),
+      );
+      if (stopped.length) this.options.notice(id, message, "error");
+    } catch (error) {
+      this.log(id, "割り込んだ番の停止を記録できませんでした。", error);
+    }
+  }
+  private deliverAccepted(
+    id: string,
+    execution: Execution,
+    instructionId: string,
+    interrupt: boolean,
+    event: ConversationEvent,
+    deliver: (execution: Execution, record: StoredEvent) => void,
+  ) {
+    let active = execution;
+    this.trackAcceptedDelivery(id, instructionId, async () => {
+      try {
+        if (interrupt) {
+          await Promise.race([this.interrupt(id, "interrupt"), execution.consuming]);
+          if (execution.turnActive) throw new Error("元の番の終了を確認できませんでした。");
+          execution.session.close();
+          await execution.consuming;
+          this.executions.delete(id);
+        } else if (execution.streamEnded) {
+          throw new Error("AI との接続が切れました。");
+        }
+        this.store.withWorkspace(id, (worktreeId) => {
+          const conversation = this.store.get(id);
+          if (
+            worktreeId !== execution.worktreeId ||
+            conversation?.cwd !== execution.cwd ||
+            conversation.closedAt !== null
+          )
+            throw new ConversationWorkspaceChanged();
+          if (interrupt) {
+            active = this.execution(conversation, worktreeId);
+            active.consuming = this.consume(id, active);
+          }
+          const records = this.record(id, [event], () => {
+            if (!this.store.removeAccepted(instructionId))
+              throw new Error("受理済みの指示がありません。");
+            if (interrupt)
+              this.store.clearQuestionsBefore(id, (this.store.get(id)?.lastSeq ?? 0) + 1);
+          });
+          if (interrupt) this.partsChanged(id, ["answers"]);
+          const record = records.at(-1);
+          if (!record) throw new Error("指示を記録できません。");
+          deliver(active, record);
+        });
+      } catch (error) {
+        await this.failAcceptedDelivery(
+          id,
+          active,
+          instructionId,
+          "差し戻しの指摘を AI に届けられませんでした。会話を開いて、もう一度指示してください。",
+          error,
+        );
+      }
+    });
+  }
+  private trackAcceptedDelivery(id: string, instructionId: string, action: () => Promise<void>) {
+    const job = Promise.resolve()
+      .then(action)
+      .catch((error: unknown) => this.log(id, "差し戻しの失敗を記録できませんでした。", error))
+      .finally(() => {
+        if (this.acceptedDeliveries.get(id)?.job === job) this.acceptedDeliveries.delete(id);
+      });
+    this.acceptedDeliveries.set(id, { instructionId, job });
+  }
+  private async waitForAcceptedDelivery(id: string): Promise<void> {
+    let delivery = this.acceptedDeliveries.get(id);
+    while (delivery) {
+      await delivery.job;
+      delivery = this.acceptedDeliveries.get(id);
+    }
+  }
+  drainAcceptedDeliveries(): Promise<unknown> {
+    return Promise.all(
+      [...this.acceptedDeliveries.keys()].map((id) => this.waitForAcceptedDelivery(id)),
+    );
+  }
+  private async failAcceptedDelivery(
+    id: string,
+    execution: Execution,
+    instructionId: string,
+    message: string,
+    error: unknown,
+  ) {
+    if (this.executions.get(id) === execution) {
+      execution.turnActive = false;
+      this.executions.delete(id);
+      execution.end();
+      try {
+        execution.session.close();
+      } catch (closeError) {
+        this.log(id, "実行を閉じられませんでした。", closeError);
+      }
+    }
+    const stopped = {
+      type: "stopped" as const,
+      payload: { reason: "error" as const, detail: message },
+    };
+    const restored = await this.retryConversationWrite(() => {
+      const current = this.store.get(id);
+      if (this.closing || !current || current.closedAt !== null || this.executions.has(id))
+        return null;
+      let restored = false;
+      this.record(id, current.runState === "failed" ? [] : [stopped], () => {
+        restored = this.store.recoverAccepted(instructionId);
+      });
+      return restored;
+    });
+    if (restored === null) return;
+    if (restored) this.partsChanged(id, ["queue"]);
+    this.log(id, message, error);
+    this.options.notice(id, message, "error");
+  }
+  private async retryConversationWrite<T>(write: () => T): Promise<T> {
+    for (;;) {
+      try {
+        return write();
+      } catch (error) {
+        if (!(error instanceof ConversationWriteBusy)) throw error;
+        await new Promise<void>((resolve) => {
+          this.options.clock.setTimeout(resolve, 100);
+        });
+      }
+    }
+  }
+  private failExecution(id: string, execution: Execution, message: string) {
+    if (this.executions.get(id) !== execution) return;
+    try {
+      execution.session.close();
+    } catch (error) {
+      this.log(id, "実行を閉じられませんでした。", error);
+      return;
+    }
+    execution.end();
+    this.executions.delete(id);
+    this.record(id, [{ type: "stopped", payload: { reason: "error", detail: message } }]);
+  }
+  prepareStop(id: string) {
+    const execution = this.executions.get(id);
+    const accepted = this.acceptedDeliveries.get(id)?.instructionId;
+    const seq = execution?.startSeq;
+    const last = this.store.get(id)?.lastSeq;
+    return () =>
+      this.stop(
+        id,
+        () => {
+          const current = this.executions.get(id);
+          return accepted
+            ? current?.acceptedInputId === accepted
+            : execution === current &&
+                (current ? current.startSeq === seq : this.store.get(id)?.lastSeq === last);
+        },
+        () => {
+          const current = this.executions.get(id);
+          if (current)
+            this.failExecution(id, current, "AI の番を停止できなかったため実行を閉じました。");
+        },
+      );
+  }
   private async consume(id: string, execution: Execution): Promise<void> {
+    let failure: { error: unknown } | undefined;
     try {
       for await (const output of execution.session.output) await this.output(id, execution, output);
     } catch (error) {
-      if (!this.closing)
-        this.record(id, [
-          {
-            type: "stopped",
-            payload: {
-              reason: "error",
-              detail: error instanceof Error ? error.message : "AI の実行に失敗しました。",
-            },
-          },
-        ]);
-      this.log(id, "AI の実行に失敗しました。", error);
+      failure = { error };
+    } finally {
+      execution.streamEnded = true;
       execution.end();
-      execution.session.close();
-      this.executions.delete(id);
     }
+    if (this.executions.get(id) !== execution) return;
+    const refusedInterrupt = execution.refusedInterrupt;
+    if (refusedInterrupt && refusedInterrupt.startSeq === execution.startSeq) {
+      delete execution.refusedInterrupt;
+      void this.serial(id, async () => {
+        await this.recordInterruptedStop(
+          id,
+          execution,
+          refusedInterrupt.startSeq,
+          refusedInterrupt.message,
+        );
+        return ok(undefined);
+      });
+      return;
+    }
+    const instructionId = execution.acceptedInputId;
+    if (instructionId && execution.turnActive && execution.intent === null && !this.closing) {
+      const prior = this.acceptedDeliveries.get(id)?.job;
+      this.trackAcceptedDelivery(id, instructionId, async () => {
+        if (prior) await prior;
+        if (
+          this.executions.get(id) !== execution ||
+          execution.acceptedInputId !== instructionId ||
+          !execution.turnActive ||
+          execution.intent !== null ||
+          this.closing
+        )
+          return;
+        const message = "差し戻しの後に AI との接続が切れました。";
+        await this.failAcceptedDelivery(id, execution, instructionId, message, failure?.error);
+      });
+      return;
+    }
+    if (!failure) return;
+    const { error } = failure;
+    if (!this.closing)
+      this.record(id, [
+        {
+          type: "stopped",
+          payload: {
+            reason: "error",
+            detail: error instanceof Error ? error.message : "AI の実行に失敗しました。",
+          },
+        },
+      ]);
+    this.log(id, "AI の実行に失敗しました。", error);
+    execution.session.close();
+    this.executions.delete(id);
   }
   private async output(id: string, execution: Execution, output: AgentOutput): Promise<void> {
+    if (this.executions.get(id) !== execution) return;
     if (output.kind === "init") {
       this.store.transaction(() => this.store.session(id, output.sessionId));
       const projectId = this.store.get(id)?.projectId;
@@ -600,6 +954,7 @@ export class ConversationRuntime {
       const intent = execution.intent;
       const finishedSeq = execution.startSeq;
       const reopening = execution.reopening;
+      execution.turnActive = false;
       execution.end();
       if (stop.state === "usage_limited") {
         const stopped = records.find((record) => record.type === "stopped");
@@ -658,7 +1013,18 @@ export class ConversationRuntime {
     }
     return this.options.commands?.read(id, projectId) ?? [];
   }
-  private question(id: string, request: QuestionRequest): Promise<Record<string, string>> {
+  private question(
+    id: string,
+    execution: Execution | undefined,
+    request: QuestionRequest,
+  ): Promise<Record<string, string>> {
+    if (
+      !execution ||
+      this.executions.get(id) !== execution ||
+      !execution.turnActive ||
+      execution.intent !== null
+    )
+      return Promise.reject(new Error("この番は終了しました。"));
     this.record(id, [
       {
         type: "question",
@@ -666,15 +1032,21 @@ export class ConversationRuntime {
       },
     ]);
     return new Promise((resolve, reject) => {
-      const execution = this.executions.get(id);
-      if (!execution) {
-        reject(new Error("実行がありません。"));
-        return;
-      }
       execution.question = { request, resolve, reject };
     });
   }
-  private askPermission(id: string, request: PermissionRequest): Promise<PermissionDecision> {
+  private askPermission(
+    id: string,
+    execution: Execution | undefined,
+    request: PermissionRequest,
+  ): Promise<PermissionDecision> {
+    if (
+      !execution ||
+      this.executions.get(id) !== execution ||
+      !execution.turnActive ||
+      execution.intent !== null
+    )
+      return Promise.resolve({ behavior: "deny", message: "この番は終了しました。" });
     this.record(id, [
       {
         type: "permission_request",
@@ -689,8 +1061,7 @@ export class ConversationRuntime {
       },
     ]);
     return new Promise((resolve) => {
-      const execution = this.executions.get(id);
-      if (execution) execution.permission = { request, resolve };
+      execution.permission = { request, resolve };
     });
   }
   async interrupt(id: string, intent: "user" | "interrupt"): Promise<void> {

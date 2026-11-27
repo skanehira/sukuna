@@ -1,15 +1,17 @@
 import { err, ok, type Result } from "neverthrow";
 import type { ConversationRuntime, DeliveryError } from "./runtime";
 import type { Answers } from "../../../../shared/events";
-import { conflict } from "./runtime";
+import { callerInputAcceptance, conflict } from "./runtime";
 import { sendUnlocked } from "./send";
+type AnswerOutcome = { result: "answered" | "delivered" | "queued"; seq?: number };
 export function answer(
   this: ConversationRuntime,
   id: string,
   requestId: string,
   answers: Answers,
-): Promise<Result<{ result: "answered" | "delivered" | "queued"; seq?: number }, DeliveryError>> {
-  return this.serial(id, async () => {
+  callerCancelled?: () => boolean,
+): Promise<Result<AnswerOutcome, DeliveryError>> {
+  const submitAnswer = async (): Promise<Result<AnswerOutcome, DeliveryError>> => {
     const question = this.store
       .events(id)
       .find((e) => e.type === "question" && e.payload.request_id === requestId);
@@ -30,6 +32,7 @@ export function answer(
     const waiting =
       execution?.question?.request.requestId === requestId ? execution.question : undefined;
     const acceptance = {
+      ...callerInputAcceptance(callerCancelled),
       events: [
         {
           type: "answer" as const,
@@ -62,5 +65,6 @@ export function answer(
       result: sent.value.result,
       ...(sent.value.result === "delivered" ? { seq: sent.value.seq } : {}),
     });
-  });
+  };
+  return this.serial(id, submitAnswer, callerCancelled);
 }

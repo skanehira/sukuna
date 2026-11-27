@@ -1,6 +1,7 @@
 import type { ConversationRuntime } from "./runtime";
 export function recover(runtime: ConversationRuntime): void {
   runtime.store.clearReleaseReservations();
+  runtime.store.recoverAccepted();
   for (const c of runtime.store.list()) {
     if (["working", "waiting_answer", "waiting_permission"].includes(c.runState))
       runtime.record(c.id, [

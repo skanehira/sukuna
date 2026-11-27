@@ -1,5 +1,6 @@
 import type { z } from "zod";
 import { err, ok } from "neverthrow";
+import { unavailableRunnerError } from "../../../../shared/ipc";
 import {
   issueConflict,
   issueNotFound,
@@ -12,14 +13,20 @@ import {
 } from "../../../../shared/issue/ports";
 import { issueInputSchema, type issueToolSchemas } from "../../../../shared/issue/schema";
 import { newIssue, prepareIssueWrite } from "../../../../shared/issue/rules";
-import type { IssueRepositoryPort, IssueNoticePort } from "../domain/ports";
+import type { FinishWithdrawal, IssueRepositoryPort, IssueNoticePort } from "../domain/ports";
 import { moveStateWithin } from "./move-state";
 
 export type IssueOpsDeps = {
   data: IssueDataUnitOfWork;
   run<T>(action: (data: IssueDataRepository, state: IssueRepositoryPort) => T): T;
-  withdraw(issueId: string, ownConversations: string[]): Promise<{ kind: string }>;
+  withdraw(
+    issueId: string,
+    ownConversations: string[],
+    callerCancelled?: () => boolean,
+    finish?: FinishWithdrawal,
+  ): Promise<{ kind: string }>;
   clear(issueId: string): unknown;
+  hasDesignWorktree?(issueId: string): boolean;
   notices: IssueNoticePort;
   clock: IssueClock;
 };
@@ -107,7 +114,12 @@ export function createIssueOps(deps: IssueOpsDeps) {
       });
       return ok({ issue: result.value.issue });
     },
-    async withdraw(id: string): Promise<IssueOperationResult> {
+    async withdraw(
+      id: string,
+      callerCancelled = () => false,
+      finish?: FinishWithdrawal,
+    ): Promise<IssueOperationResult> {
+      if (callerCancelled()) return err(unavailableRunnerError);
       const repo = deps.data.read;
       const issue = repo.view(id);
       if (!issue) return err(issueNotFound);
@@ -115,7 +127,15 @@ export function createIssueOps(deps: IssueOpsDeps) {
       const dependents = issue.dependents.filter(
         (row) => !["draft", "done", "withdrawn", "stopped"].includes(row.state),
       );
-      const result = await deps.withdraw(id, repo.activeConversationIds(id));
+      const design =
+        ["design", "design_review"].includes(issue.state) || deps.hasDesignWorktree?.(id);
+      const result = await deps.withdraw(
+        id,
+        repo.activeConversationIds(id),
+        callerCancelled,
+        design ? finish : undefined,
+      );
+      if (result.kind === "caller_cancelled") return err(unavailableRunnerError);
       if (result.kind === "stop_failed")
         return err({
           code: "internal",

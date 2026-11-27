@@ -5,11 +5,20 @@ import { activeStates, conflict } from "./runtime";
 export function stop(
   this: ConversationRuntime,
   id: string,
+  stillCurrent = () => true,
+  onFailure?: () => void,
+  callerCancelled?: () => boolean,
 ): Promise<Result<{ runState: RunState }, OperationError>> {
-  return this.serial(id, async () => {
+  const interruptCurrent = async () => {
     const c = this.store.get(id);
-    if (!c || !activeStates.includes(c.runState)) return err(conflict());
-    await this.interrupt(id, "user");
-    return ok({ runState: this.store.get(id)?.runState ?? "stopped" });
-  });
+    if (!stillCurrent() || !c || !activeStates.includes(c.runState)) return err(conflict());
+    try {
+      await this.interrupt(id, "user");
+    } catch (error) {
+      onFailure?.();
+      throw error;
+    }
+    return ok<{ runState: RunState }>({ runState: this.store.get(id)?.runState ?? "stopped" });
+  };
+  return this.serial(id, interruptCurrent, callerCancelled);
 }
