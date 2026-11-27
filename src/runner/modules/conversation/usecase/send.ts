@@ -38,6 +38,7 @@ export async function sendUnlocked(
         createdAt: this.options.clock.now(),
       });
     });
+    this.partsChanged(id, ["queue"]);
     return ok({ result: "queued", queuedId });
   }
   if (activeStates.includes(c.runState)) await this.interrupt(id, "interrupt");

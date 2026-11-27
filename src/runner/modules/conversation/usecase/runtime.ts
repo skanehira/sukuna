@@ -1,3 +1,4 @@
+import { deliverQueue } from "./deliver-queue";
 import { start } from "./start";
 import { send } from "./send";
 import { stop } from "./stop";
@@ -32,6 +33,7 @@ export type RuntimeSignal = { conversationId: string } & (
   | { type: "stopped"; reason: string; previousRunState?: RunState }
   | { type: "inputRecorded"; seq: number; eventType: string }
   | { type: "delta"; text: string }
+  | { type: "parts"; parts: ("queue" | "answers")[] }
 );
 export type RuntimeOptions = {
   store: ConversationStore;
@@ -83,6 +85,7 @@ export class ConversationRuntime {
   readonly timers: UsageLimitTimer;
   executions = new Map<string, Execution>();
   private operations = new Map<string, Promise<unknown>>();
+  private projectCommands = new Map<string, { name: string; description: string }[]>();
   private listeners = new Set<(signal: RuntimeSignal) => void | Promise<void>>();
   closing = false;
   options: RuntimeOptions;
@@ -172,8 +175,13 @@ export class ConversationRuntime {
     const current = this.store.get(id)?.runState;
     if (previous && current && previous !== current)
       this.signal({ type: "runStateChanged", conversationId: id, previous, current });
+    if (recorded.some((event) => event.type === "answer")) this.partsChanged(id, ["answers"]);
     return recorded;
   }
+  partsChanged(id: string, parts: ("queue" | "answers")[]): void {
+    this.signal({ type: "parts", conversationId: id, parts });
+  }
+  deliverQueue = deliverQueue.bind(this);
   start = start.bind(this);
   send = send.bind(this);
   private execution(c: Conversation): Execution {
@@ -273,6 +281,7 @@ export class ConversationRuntime {
       acceptance?.before();
       if (includeQueued) this.store.dequeue(id);
     });
+    if (queued.length) this.partsChanged(id, ["queue"]);
     const record = records.at(-1);
     if (!record) throw new Error("指示を記録できません。");
     this.timers.cancel(id);
@@ -310,6 +319,8 @@ export class ConversationRuntime {
   private async output(id: string, execution: Execution, output: AgentOutput): Promise<void> {
     if (output.kind === "init") {
       this.store.transaction(() => this.store.session(id, output.sessionId));
+      const projectId = this.store.get(id)?.projectId;
+      if (projectId) this.projectCommands.set(projectId, output.commands);
       return;
     }
     if (output.kind === "text_delta") {
@@ -367,9 +378,17 @@ export class ConversationRuntime {
         });
       return;
     }
-    if (output.kind === "assistant_text" && execution.inputOrigin !== "answer_text")
+    if (output.kind === "assistant_text" && execution.inputOrigin !== "answer_text") {
       this.store.transaction(() => this.store.clearStaleQuestions(id));
+      this.partsChanged(id, ["answers"]);
+    }
     this.record(id, outputEvents(output));
+  }
+  async commands(id: string): Promise<{ name: string; description: string }[]> {
+    const execution = this.executions.get(id);
+    if (execution) return execution.session.commands();
+    const projectId = this.store.get(id)?.projectId;
+    return projectId ? (this.projectCommands.get(projectId) ?? []) : [];
   }
   private question(id: string, request: QuestionRequest): Promise<Record<string, string>> {
     this.record(id, [

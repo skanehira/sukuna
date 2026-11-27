@@ -394,7 +394,7 @@ type ClientMessage =
 | `inbox` | `changed` (`conversation_ids`、`issue_ids`、`project_ids`) | 画面のサーバーの中の通し番号 | 画面が API で読み直す |
 | `conversation:<id>` | `event` (記録の 1 行)、`delta`、`state` (`run_state`、`stop_reason`、`resets_at`)、`changed` (`parts`)、`resync` (`last_seq`) | `event` は記録の `seq`。ほかはその時点の `last_seq` | `after` より後の `event` を順に再送する。`state` と `changed` の分は画面が API で読み直す |
 | `issue:<id>` | `event` (`issue_events` の 1 行)、`changed` | `event` は `issue_events.seq` | `after` より後の `event` を再送する。ほかは画面が API で読み直す |
-| `app` | `notice` (お知らせ)、`runner` (`connected`)、`settings_changed` | 画面のサーバーの中の通し番号 | 画面が API で読み直す |
+| `app` | `notice` (お知らせ)、`runner` (`connected`)、`settings_changed`、`ping` (死活確認) | 画面のサーバーの中の通し番号 | 画面が API で読み直す |
 
 `conversation:<id>` の `changed` の `parts` は、次の値の配列である。
 
@@ -427,7 +427,7 @@ type AppNotice = {
 - 画面は `delta` の文字を、会話の末尾の書きかけの発言として逐次出す (`features/buffer-ui.md`「末尾の区画」)
 - `delta` は再送しない。画面は、その会話の次の `assistant_text` か `turn_end` の `event` が届いたら、書きかけの表示を消す
 - 購読を受けたら、画面のサーバーは対象を開ける権限を確かめない (使うのは本人 1 人)。存在しない対象の購読は、何も配信しない
-- 画面のサーバーは 20 秒ごとに ping を送る。画面は 45 秒何も届かなければ接続を閉じてつなぎ直す
+- 画面のサーバーは 20 秒ごとに `{ topic: "app", seq: <通し番号>, type: "ping", payload: {} }` を全接続へ送る。購読が無い接続にも送る。`seq` はほかの `app` の配信と同じ通し番号を使う。画面は受信時刻だけを更新し、通知の表示・API の読み直し・保存は行わない。最後の受信から 45 秒何も届かなければ接続を閉じてつなぎ直す
 - 送り待ちが 8 MiB を超えた接続は、画面のサーバーが閉じる。画面はつなぎ直し、続きから受け取る
 - 画面のつなぎ直しの間隔は、0.5 秒から倍にして 8 秒までとし、つながったら 0.5 秒に戻す
 - 切れてから 3 秒つながらないとき、画面はつながらないことを表示する (表示は DESIGN.md「アプリシェル」)
@@ -696,6 +696,8 @@ interface GhRunner {
 | ランナーへの操作の呼び出しと、知らせの受け取り | 画面のサーバーの組み立て (インフラ) | `src/server/runner-link.ts` |
 | `/ws` の受け口、購読、再送、いま見ているもの → `conversation_events`、`issue_events` (読み取り) | 画面のサーバーの組み立て (インフラ) | `src/server/ws-hub.ts` |
 | 画面の `/ws` の接続、購読、つなぎ直し | UI | `src/front/lib/realtime.ts` |
+
+作業場所の切り替えは `features/worktree-terminal.md` の処理を使う。ランナーの組み立てで `startRunnerApp` の `ipc.workspace` に渡し、`ipc-routes.ts` が入力と結果を振り分ける。
 
 ## エッジケースの決定
 
