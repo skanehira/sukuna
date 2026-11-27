@@ -59,7 +59,7 @@ export interface ConversationStore {
   duplicate(id: string, clientId: string, since: number): SendResult | null;
   isUnanswered(id: string, questionSeq: number): boolean;
   finishAnswers(id: string, questionSeq: number): void;
-  clearStaleQuestions(id: string): void;
+  clearQuestionsBefore(id: string, startSeq: number): void;
   saveRateLimit(value: unknown): void;
   reserveRelease(id: string, token: string, milliseconds: number): void;
   clearRelease(id: string, token: string): Result<void, { message: string }>;

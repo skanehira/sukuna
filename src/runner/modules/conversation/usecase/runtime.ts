@@ -530,7 +530,7 @@ export class ConversationRuntime {
       return;
     }
     if (output.kind === "assistant_text" && execution.inputOrigin !== "answer_text") {
-      this.store.transaction(() => this.store.clearStaleQuestions(id));
+      this.store.transaction(() => this.store.clearQuestionsBefore(id, execution.startSeq));
       this.partsChanged(id, ["answers"]);
     }
     this.record(id, outputEvents(output));

@@ -1,0 +1,31 @@
+{
+  "rules": [
+    {
+      "match": "^予約 API を作って$",
+      "steps": [
+        { "text": "確認したいことが2点あります。" },
+        {
+          "ask": [
+            {
+              "question": "在庫を戻す方法は?",
+              "header": "方法",
+              "multi_select": false,
+              "options": [
+                { "label": "定期処理", "description": "1分ごと" },
+                { "label": "次の処理", "description": "必要なとき" }
+              ]
+            },
+            {
+              "question": "設定で変えられるようにする?",
+              "header": "設定",
+              "multi_select": false,
+              "options": [{ "label": "はい", "description": "設定で変える" }]
+            }
+          ]
+        },
+        { "text": "選んだ方針で設計を進めます。" },
+        { "end": "success" }
+      ]
+    }
+  ]
+}

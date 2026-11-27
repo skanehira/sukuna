@@ -325,13 +325,15 @@ export class SqliteConversationStore implements ConversationStore {
       .prepare("UPDATE questions SET answered = 1 WHERE conversation_id = ? AND seq = ?")
       .run(id, questionSeq);
   }
-  clearStaleQuestions(id: string): void {
-    this.sqlite.prepare("DELETE FROM pending_answers WHERE conversation_id = ?").run(id);
+  clearQuestionsBefore(id: string, startSeq: number): void {
+    this.sqlite
+      .prepare("DELETE FROM pending_answers WHERE conversation_id = ? AND question_seq < ?")
+      .run(id, startSeq);
     this.sqlite
       .prepare(
-        "UPDATE questions SET answered = 1 WHERE conversation_id = ? AND kind = 'choice' AND answered = 0",
+        "UPDATE questions SET answered = 1 WHERE conversation_id = ? AND seq < ? AND kind = 'choice' AND answered = 0",
       )
-      .run(id);
+      .run(id, startSeq);
   }
   saveRateLimit(value: unknown): void {
     this.sqlite

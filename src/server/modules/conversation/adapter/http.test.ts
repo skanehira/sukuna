@@ -603,6 +603,42 @@ it("回答を全問まとめて一度だけAIに返し、確認が必要な未�
       .all(id),
   }).toEqual({ pending: null, questions: [{ answered: 1 }, { answered: 1 }] });
 });
+it("同じ番の発言では未回答の質問を保ち、次の番の発言で前の回答を片づける", async () => {
+  const f = await fixture({
+    rules: [
+      {
+        match: "^質問$",
+        steps: [{ text: "相談があります。" }, { ask: [question("Q1"), question("Q2")] }],
+      },
+      { match: "^別の指示$", steps: [{ text: "別の指示を受け取りました。" }, { end: "success" }] },
+    ],
+  });
+  const id = await f.start();
+  await f.send(id, "質問");
+  await settled(f, id, "waiting_answer");
+  await expect
+    .poll(async () =>
+      (await f.request<ConversationEventsPage>(`/conversations/${id}/events`)).body.events.map(
+        (event) => event.type,
+      ),
+    )
+    .toContain("assistant_text");
+  const { events } = (await f.request<ConversationEventsPage>(`/conversations/${id}/events`)).body;
+  const questionSeq = events.find((event) => event.type === "question")!.seq;
+  const path = `/conversations/${id}/answers`;
+  const pending = { questionSeq, answers: { "0": { choices: ["A"], text: null } } };
+  expect(await f.request(path, "PUT", pending)).toEqual({
+    status: 200,
+    body: { pendingAnswers: pending },
+  });
+
+  expect((await f.request(`/conversations/${id}/stop`, "POST")).status).toBe(202);
+  expect((await f.snapshot(id)).body.pendingAnswers).toEqual(pending);
+  await f.send(id, "別の指示");
+  await settled(f, id, "idle");
+  expect((await f.snapshot(id)).body.pendingAnswers).toBeNull();
+  expect((await f.request(path, "PUT", pending)).status).toBe(409);
+});
 it("停止した質問への保存済み回答は通常の指示として届けて閉じた会話も開き直す", async () => {
   const f = await fixture({
     rules: [

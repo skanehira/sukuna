@@ -17,6 +17,7 @@ export default defineConfig({
     command: `bash e2e/start-server.sh ${port}`,
     url: `http://localhost:${port}/api/health`,
     reuseExistingServer: false,
+    gracefulShutdown: { signal: "SIGTERM", timeout: 25_000 },
     timeout: 120_000,
   },
 });
