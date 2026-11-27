@@ -1,17 +1,21 @@
 import { objectOf, type ActivityEvent } from "./stage";
 
-export function formatLastAction(name: string, input: unknown, cwd: string): string {
+export function toolTarget(name: string, input: unknown, cwd: string): string {
   const fields = objectOf(input);
-  let tool = name;
-  let target = "";
-  if (name.startsWith("mcp__")) tool = name.split("__").slice(2).join("__");
-  else if (name === "Bash") target = stringOf(fields.command).split(/\r?\n/)[0] ?? "";
-  else if (["Read", "Edit", "Write", "NotebookEdit"].includes(name)) {
+  if (name === "Bash") return stringOf(fields.command).split(/\r?\n/)[0] ?? "";
+  if (["Read", "Edit", "Write", "NotebookEdit"].includes(name)) {
     const path = stringOf(name === "NotebookEdit" ? fields.notebook_path : fields.file_path);
-    target = path.startsWith("/") ? relativePath(cwd, path) : path;
-  } else if (name === "Grep" || name === "Glob") target = stringOf(fields.pattern);
-  else if (name === "WebFetch") target = stringOf(fields.url);
-  else if (name === "Task" || name === "Agent") target = stringOf(fields.description);
+    return path.startsWith("/") ? relativePath(cwd, path) : path;
+  }
+  if (name === "Grep" || name === "Glob") return stringOf(fields.pattern);
+  if (name === "WebFetch") return stringOf(fields.url);
+  if (name === "Task" || name === "Agent") return stringOf(fields.description);
+  return "";
+}
+
+export function formatLastAction(name: string, input: unknown, cwd: string): string {
+  const tool = name.startsWith("mcp__") ? name.split("__").slice(2).join("__") : name;
+  const target = toolTarget(name, input, cwd);
   const text = target ? `${tool}(${target})` : tool;
   const characters = Array.from(text);
   return characters.length > 60 ? `${characters.slice(0, 60).join("")}…` : text;
