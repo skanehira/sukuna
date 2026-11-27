@@ -1,21 +1,24 @@
 import { describe, expect, it } from "vite-plus/test";
 import { render, screen } from "@testing-library/react";
+import { EditorView } from "@codemirror/view";
 import { App } from "./App";
 
 describe("App", () => {
-  it("アプリを開くと、ツリー・主のウィンドウ・右のウィンドウが出る", () => {
+  it("アプリを開くと見出し sukuna と空の一覧が出る", () => {
     render(<App />);
 
+    expect(screen.getByRole("heading", { name: "sukuna" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "sukuna" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "会話: バッファの土台" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "直近" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "一覧" })).toBeInTheDocument();
   });
 
-  it("主のウィンドウに会話の行が出る", () => {
-    render(<App />);
+  it("会話を開いていない初期状態には、架空の会話や末尾の区画を足さない", () => {
+    const { container } = render(<App />);
 
     expect(
-      screen.getByText("line.ts の LineInfo を正本にして、state.ts に StateField を置きました。"),
-    ).toBeInTheDocument();
+      [...container.querySelectorAll<HTMLElement>(".cm-editor")].map((editor) =>
+        EditorView.findFromDOM(editor)?.state.doc.toString(),
+      ),
+    ).toEqual(["", "表示する項目はありません。"]);
   });
 });
