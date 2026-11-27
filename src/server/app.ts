@@ -15,8 +15,7 @@ import { Hono } from "hono";
 import type { HealthResponse } from "../shared/api";
 import { createIdentityMiddleware, type IdentityEnv } from "./modules/identity/adapter/middleware";
 import { createMeHandler } from "./modules/identity/adapter/routes";
-import { createTailscaleLocalApi } from "./modules/identity/adapter/tailscale-local-api";
-import type { ClockPort, TailscaleLocalApiPort } from "./modules/identity/domain/ports";
+import { defaultIdentityOptions, type IdentityOptions } from "./modules/identity/adapter/options";
 import { createResolveIdentity } from "./modules/identity/usecase/resolve-identity";
 import { createWorkspaceRoutes } from "./modules/workspace/adapter/http";
 import type { WorkspaceDependencies } from "./modules/workspace/domain/ports";
@@ -31,12 +30,7 @@ import type { WorktreeDependencies } from "./modules/workspace/domain/worktree-p
 import { createRecapRoutes } from "./modules/recap/adapter/http";
 import type { RecapDependencies } from "./modules/recap/domain/ports";
 
-export type IdentityOptions = {
-  login: string | undefined;
-  devIdentity: string | undefined;
-  tailscale: TailscaleLocalApiPort;
-  clock: ClockPort;
-};
+export type { IdentityOptions } from "./modules/identity/adapter/options";
 
 export type AppOptions = {
   pr?: PrDependencies;
@@ -107,13 +101,4 @@ export function createApp(options: AppOptions): Hono<IdentityEnv> {
   }
 
   return app;
-}
-
-function defaultIdentityOptions(): IdentityOptions {
-  return {
-    login: process.env.SUKUNA_LOGIN,
-    devIdentity: process.env.SUKUNA_DEV_IDENTITY,
-    tailscale: createTailscaleLocalApi(),
-    clock: { now: () => Date.now() },
-  };
 }

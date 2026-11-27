@@ -11,6 +11,7 @@ import {
   writeRuntimeLog,
   getProgressDependencies,
   getConversationDependencies,
+  getPtySessions,
 } from "./runtime";
 import { createWorktreeDependencies } from "./modules/workspace/adapter/worktree-dependencies";
 import { createWorkspaceDependencies } from "./modules/workspace/adapter/dependencies";
@@ -44,7 +45,7 @@ export default createApp({
     (issueId, projectId) =>
       getWsHub().notice({ kind: "issue", issue_id: issueId, project_id: projectId, seq: 0 }),
   ),
-  worktrees: createWorktreeDependencies(getDatabase),
+  worktrees: createWorktreeDependencies(getDatabase, { terminals: getPtySessions() }),
   recap: createRecapDependencies(
     () => getDatabase().db,
     { forward: (method, path) => getRunnerLink().forward(method, path) },

@@ -53,7 +53,9 @@ export async function describeWorktree(
     unpushedCount: safety.unpushedCount,
     locked: entry.locked,
     missing: status.value.missing,
-    terminalId: null,
+    terminalId: status.value.missing
+      ? null
+      : (deps.terminals?.sessions.runningId(entry.path) ?? null),
   };
   return ok({ item, safety, safetyInput });
 }

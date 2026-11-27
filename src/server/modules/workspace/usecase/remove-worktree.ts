@@ -109,6 +109,7 @@ export async function removeWorktree(id: string, deps: WorktreeDependencies) {
       const saved = await deps.removals.save(project, id, pending);
       if (saved.isErr()) return err(saved.error);
       plan = pending;
+      if (gone && deps.terminals) await deps.terminals.sessions.endAt(record.path);
       if (!gone) {
         const confirmed = deps.repository.snapshot(project.id);
         if (confirmed.isErr()) return err(confirmed.error);
@@ -120,6 +121,7 @@ export async function removeWorktree(id: string, deps: WorktreeDependencies) {
           ),
         });
         if (latestSafety.conflict) return err(latestSafety.conflict);
+        if (deps.terminals) await deps.terminals.sessions.endAt(record.path);
         const removed = present.value
           ? await deps.git.remove(project.path, record.path)
           : await deps.git.prune(project.path);
