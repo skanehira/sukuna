@@ -1,6 +1,16 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import Database from "better-sqlite3";
 import { err, ok, type Result } from "neverthrow";
 import { applyMigrations, migrations, type Migration } from "./migrate";
 import { openDatabase, type OpenedDatabase } from "./open";
@@ -82,6 +92,71 @@ function releaseLock(lockPath: string, pid: number): void {
   rmSync(lockPath, { force: true });
 }
 
+function tryAcquireLock(
+  lockPath: string,
+  pid: number,
+  alive: (pid: number) => boolean,
+): Result<LockHandle | null, LockError> {
+  let guard: Database.Database | undefined;
+  let acquired = false;
+  try {
+    guard = new Database(`${lockPath}.guard`, { timeout: 0 });
+    guard.exec("BEGIN IMMEDIATE");
+    for (;;) {
+      const created = tryCreateLock(lockPath, pid);
+      if (created === "created") {
+        const heldGuard = guard;
+        acquired = true;
+        return ok({
+          release: () => {
+            if (!heldGuard.open) return;
+            try {
+              releaseLock(lockPath, pid);
+            } finally {
+              heldGuard.close();
+            }
+          },
+        });
+      }
+      if (created === "failed") {
+        return err({
+          type: "lock_failed",
+          message: `ロックのファイルを作れませんでした: ${lockPath}`,
+        });
+      }
+
+      const fd = openSync(lockPath, "r");
+      try {
+        const observed = fstatSync(fd);
+        const contents = readFileSync(fd, "utf8");
+        const holder = parsePid(contents);
+        if (holder === null || !alive(holder)) {
+          const current = statSync(lockPath);
+          if (
+            current.dev === observed.dev &&
+            current.ino === observed.ino &&
+            readFileSync(lockPath, "utf8") === contents
+          ) {
+            rmSync(lockPath);
+            continue;
+          }
+        }
+        return ok(null);
+      } finally {
+        closeSync(fd);
+      }
+    }
+  } catch (error) {
+    if (isErrno(error, "SQLITE_BUSY") || isErrno(error, "ENOENT")) return ok(null);
+    return err({
+      type: "lock_failed",
+      message: `ロックを取得できませんでした: ${lockPath}: ${messageOf(error)}`,
+    });
+  } finally {
+    if (!acquired) guard?.close();
+  }
+}
+
 export async function acquireLock(
   options: AcquireLockOptions,
 ): Promise<Result<LockHandle, LockError>> {
@@ -94,31 +169,9 @@ export async function acquireLock(
   const startedAt = now();
 
   for (;;) {
-    const created = tryCreateLock(options.lockPath, pid);
-    if (created === "created") {
-      return ok({ release: () => releaseLock(options.lockPath, pid) });
-    }
-    if (created === "failed") {
-      return err({
-        type: "lock_failed",
-        message: `ロックのファイルを作れませんでした: ${options.lockPath}`,
-      });
-    }
-
-    let holder: number | null;
-    try {
-      holder = parsePid(readFileSync(options.lockPath, "utf8"));
-    } catch (error) {
-      if (isErrno(error, "ENOENT")) continue;
-      return err({
-        type: "lock_failed",
-        message: `ロックのファイルを読めませんでした: ${options.lockPath}`,
-      });
-    }
-    if (holder !== null && !alive(holder)) {
-      rmSync(options.lockPath, { force: true });
-      continue;
-    }
+    const attempt = tryAcquireLock(options.lockPath, pid, alive);
+    if (attempt.isErr()) return err(attempt.error);
+    if (attempt.value !== null) return ok(attempt.value);
     if (now() - startedAt >= timeoutMs) {
       return err({
         type: "lock_timeout",

@@ -2,6 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vite-plus/test";
+import Database from "better-sqlite3";
 import { openDatabase } from "./open";
 import { acquireLock, startDatabase } from "./startup";
 import { createTempHome, removeTempHome, tableNames } from "./test-helpers";
@@ -39,6 +40,203 @@ function spawnLiveProcess(): { pid: number; kill: () => Promise<void> } {
 }
 
 describe("データベースのロック", () => {
+  it("排他の作成直後に落ちて PID が空なら、OS の排他の中で回収して取る", async () => {
+    const home = createTempHome();
+    const lockPath = join(home, "db.lock");
+    writeFileSync(lockPath, "", { flag: "wx" });
+    const clock = fakeClock();
+
+    try {
+      const result = await acquireLock({
+        lockPath,
+        pid: 4242,
+        timeoutMs: 1000,
+        now: clock.now,
+        sleep: clock.sleep,
+      });
+
+      expect(result.isOk()).toBe(true);
+      if (!result.isOk()) throw new Error("空のロックを回収できませんでした");
+      expect(clock.sleeps()).toBe(0);
+      expect(readFileSync(lockPath, "utf8")).toBe("4242");
+      result.value.release();
+      expect(existsSync(lockPath)).toBe(false);
+    } finally {
+      removeTempHome(home);
+    }
+  });
+
+  it("古いロック回収中の所有者交代でも、生存中の新しい持ち主を待つ", async () => {
+    const home = createTempHome();
+    const lockPath = join(home, "db.lock");
+    writeFileSync(lockPath, "99999999");
+    const clock = fakeClock();
+    let switched = false;
+
+    try {
+      const result = await acquireLock({
+        lockPath,
+        pid: 4242,
+        timeoutMs: 1000,
+        now: clock.now,
+        sleep: clock.sleep,
+        isProcessAlive: (holder) => {
+          if (!switched && holder === 99999999) {
+            switched = true;
+            rmSync(lockPath);
+            writeFileSync(lockPath, String(process.pid), { flag: "wx" });
+            return false;
+          }
+          return holder === process.pid;
+        },
+      });
+
+      expect(result.isErr()).toBe(true);
+      if (!result.isErr()) throw new Error("生存中のロックを取得できてしまいました");
+      expect(result.error).toEqual({
+        type: "lock_timeout",
+        message: "データベースのロックを 1 秒待っても取れませんでした",
+      });
+      expect(clock.sleeps()).toBe(2);
+      expect(readFileSync(lockPath, "utf8")).toBe(String(process.pid));
+    } finally {
+      removeTempHome(home);
+    }
+  });
+
+  it("別の取得処理が OS の排他を持つあいだは、db.lock の新規作成を待つ", async () => {
+    const home = createTempHome();
+    const lockPath = join(home, "db.lock");
+    const guard = new Database(`${lockPath}.guard`, { timeout: 0 });
+    guard.exec("BEGIN IMMEDIATE");
+    const clock = fakeClock();
+
+    try {
+      const result = await acquireLock({
+        lockPath,
+        pid: 4242,
+        now: clock.now,
+        sleep: async (ms) => {
+          await clock.sleep(ms);
+          guard.close();
+        },
+      });
+
+      expect(result.isOk()).toBe(true);
+      if (!result.isOk()) throw new Error("ロックを取れませんでした");
+      expect(clock.sleeps()).toBe(1);
+      expect(readFileSync(lockPath, "utf8")).toBe("4242");
+      result.value.release();
+      expect(existsSync(lockPath)).toBe(false);
+    } finally {
+      if (guard.open) guard.close();
+      removeTempHome(home);
+    }
+  });
+
+  it("古い PID を回収しているあいだは、別の取得処理に OS の排他を渡さない", async () => {
+    const home = createTempHome();
+    const lockPath = join(home, "db.lock");
+    const contender = new Database(`${lockPath}.guard`, { timeout: 0 });
+    writeFileSync(lockPath, "99999999");
+    let contenderResult = "not-run";
+
+    try {
+      const result = await acquireLock({
+        lockPath,
+        pid: 4242,
+        isProcessAlive: () => {
+          try {
+            contender.exec("BEGIN IMMEDIATE");
+            contenderResult = "acquired";
+            contender.exec("ROLLBACK");
+          } catch (error) {
+            if (!(error instanceof Database.SqliteError)) throw error;
+            contenderResult = error.code;
+          }
+          return false;
+        },
+      });
+
+      expect(result.isOk()).toBe(true);
+      if (!result.isOk()) throw new Error("ロックを取れませんでした");
+      expect(contenderResult).toBe("SQLITE_BUSY");
+      expect(readFileSync(lockPath, "utf8")).toBe("4242");
+      result.value.release();
+      expect(existsSync(lockPath)).toBe(false);
+    } finally {
+      contender.close();
+      removeTempHome(home);
+    }
+  });
+
+  it("OS の排他を持つプロセスが強制終了すると、補助ファイルが残っていてもロックを取れる", async () => {
+    const home = createTempHome();
+    const lockPath = join(home, "db.lock");
+    const child = spawn(
+      process.execPath,
+      [
+        "-e",
+        `
+      const Database = require("better-sqlite3");
+      const database = new Database(process.argv[1], { timeout: 0 });
+      database.exec("BEGIN IMMEDIATE");
+      process.send("locked");
+      setInterval(() => {}, 60_000);
+    `,
+        `${lockPath}.guard`,
+      ],
+      { stdio: ["ignore", "ignore", "pipe", "ipc"] },
+    );
+    const pid = child.pid;
+    if (pid === undefined) throw new Error("ロックの持ち主を起動できませんでした");
+    const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("排他の取得を確認できませんでした")), 5000);
+        child.once("error", (error) => {
+          clearTimeout(timer);
+          reject(error);
+        });
+        child.once("exit", () => {
+          clearTimeout(timer);
+          reject(new Error("排他の取得前に終了しました"));
+        });
+        child.once("message", (message) => {
+          clearTimeout(timer);
+          if (message === "locked") resolve();
+          else reject(new Error("排他の取得結果が違います"));
+        });
+      });
+      writeFileSync(lockPath, String(pid));
+      const clock = fakeClock();
+
+      const result = await acquireLock({
+        lockPath,
+        pid: 4242,
+        now: clock.now,
+        sleep: async (ms) => {
+          await clock.sleep(ms);
+          child.kill("SIGKILL");
+          await exited;
+        },
+      });
+
+      expect(result.isOk()).toBe(true);
+      if (!result.isOk()) throw new Error("ロックを取れませんでした");
+      expect(clock.sleeps()).toBe(1);
+      expect(readFileSync(lockPath, "utf8")).toBe("4242");
+      expect(existsSync(`${lockPath}.guard`)).toBe(true);
+      result.value.release();
+      expect(existsSync(lockPath)).toBe(false);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      await exited;
+      removeTempHome(home);
+    }
+  });
+
   it("別の生きているプロセスがロックを持っているあいだは待ち、外れると取って進む", async () => {
     const home = createTempHome();
     const lockPath = join(home, "db.lock");
@@ -60,8 +258,10 @@ describe("データベースのロック", () => {
       });
 
       expect(result.isOk()).toBe(true);
+      if (!result.isOk()) throw new Error("ロックを取れませんでした");
       expect(clock.sleeps()).toBe(1);
       expect(readFileSync(lockPath, "utf8")).toBe("4242");
+      result.value.release();
     } finally {
       await holder.kill();
       removeTempHome(home);
@@ -87,8 +287,10 @@ describe("データベースのロック", () => {
       });
 
       expect(result.isOk()).toBe(true);
+      if (!result.isOk()) throw new Error("ロックを取れませんでした");
       expect(clock.sleeps()).toBe(0);
       expect(readFileSync(lockPath, "utf8")).toBe("4242");
+      result.value.release();
     } finally {
       removeTempHome(home);
     }
