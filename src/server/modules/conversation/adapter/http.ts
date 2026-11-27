@@ -9,11 +9,18 @@ import {
   saveConversationDraftSchema,
   sendConversationAnswersSchema,
   startPublicConversationSchema,
+  switchPublicWorkspaceSchema,
 } from "../../../../shared/conversation/api";
-import { emptyDraft, missingConversation, type ConversationDependencies } from "../domain/ports";
+import {
+  emptyDraft,
+  missingConversation,
+  type ConversationDependencies,
+  type ConversationWorktrees,
+} from "../domain/ports";
 import type { IdentityEnv } from "../../identity/adapter/middleware";
 import { createMessageHandler } from "./message-routes";
 import { startConversation } from "../usecase/start-conversation";
+import { switchWorkspace } from "../usecase/switch-workspace";
 import { prepareMessageAcceptance } from "../usecase/send-message";
 import { saveDraft } from "../usecase/save-draft";
 import { saveAnswers, sendAnswers } from "../usecase/answers";
@@ -36,7 +43,7 @@ function respond(
           ? 400
           : result.error.code === "runner_unavailable"
             ? 503
-            : result.error.code === "internal"
+            : result.error.code === "internal" || result.error.code === "worktree_failed"
               ? 500
               : 409,
     );
@@ -51,7 +58,10 @@ function wire(
     ? respond(c, result)
     : Response.json(result.value.body, { status: result.value.status });
 }
-export function createConversationRoutes(deps: ConversationDependencies) {
+export function createConversationRoutes(
+  deps: ConversationDependencies,
+  worktrees?: ConversationWorktrees,
+) {
   const app = new Hono<IdentityEnv>();
   app.onError((_error, c) =>
     c.json(
@@ -69,13 +79,19 @@ export function createConversationRoutes(deps: ConversationDependencies) {
   app.post("/conversations", async (c) => {
     const input = await body(c, startPublicConversationSchema);
     return input.success
-      ? wire(c, await startConversation(input.data.projectId, deps))
+      ? wire(c, await startConversation(input.data, deps, worktrees))
       : c.json({ error: invalid }, 400);
   });
   app.use("/conversations/:id/*", async (c, next) => {
     if (!deps.repository.conversation(c.req.param("id")!))
       return c.json({ error: missingConversation }, 404);
     await next();
+  });
+  app.put("/conversations/:id/workspace", async (c) => {
+    const input = await body(c, switchPublicWorkspaceSchema);
+    return input.success
+      ? wire(c, await switchWorkspace(c.req.param("id"), input.data.worktreeId, deps, worktrees))
+      : c.json({ error: invalid }, 400);
   });
   app.get("/conversations/:id", async (c) => {
     const id = c.req.param("id");

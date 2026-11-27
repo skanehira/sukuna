@@ -1,5 +1,6 @@
 import type { WorktreeActivityReservation } from "../../../../shared/workspace/worktree-activity";
 import type { Result } from "neverthrow";
+import type { WorkspaceSwitchAttempt } from "../../../../shared/ipc";
 import type {
   ConversationEvent,
   RunState,
@@ -25,6 +26,7 @@ export type Conversation = {
   lastActivityAt: number | null;
   closedAt: number | null;
 };
+export type ConversationWorkspace = Pick<Conversation, "cwd" | "worktreeId">;
 export type QueuedInstruction = {
   id: string;
   conversationId: string;
@@ -43,6 +45,19 @@ export interface ConversationStore {
   transaction<T>(operation: () => T): T;
   withWorktreeReservation<T>(operation: (reservation: WorktreeActivityReservation) => T): T;
   withWorkspace<T>(id: string, operation: (worktreeId: string | null) => T): T;
+  withWorkspaceSwitch<T>(
+    id: string,
+    targetWorktreeId: string | null,
+    operation: (fromWorktreeIds: string[]) => T,
+  ): T;
+  switchWorkspace(
+    expected: Conversation,
+    target: ConversationWorkspace,
+    fromWorktreeIds: string[],
+    canUpdate: () => boolean,
+  ): boolean;
+  workspaceSwitchSettled(attempt: WorkspaceSwitchAttempt, now: number): boolean;
+  recordWorkspaceSwitch(attempt: WorkspaceSwitchAttempt, id: string, now: number): void;
   get(id: string): Conversation | null;
   projectOptions(id: string): {
     model: "opus" | "sonnet" | "haiku" | null;

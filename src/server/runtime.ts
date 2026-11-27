@@ -75,6 +75,7 @@ let database: OpenedDatabase | undefined;
 let hub: WsHub | undefined;
 let runner: RunnerLink | undefined;
 let initializing: Promise<Result<void, StartupError>> | undefined;
+const now = () => Date.now();
 let log: Logger = createLogger({
   now: () => Date.now(),
   write: (line) => console.log(line),
@@ -107,6 +108,7 @@ export async function initializeRuntime(
           "runner.sock",
         ),
       log,
+      now,
       notice: (notice) => hub?.notice(notice),
       connection: (connected) => hub?.connection(connected),
     });
@@ -159,7 +161,9 @@ export function getConversationDependencies(): ConversationDependencies {
       },
     },
     id: ulid,
-    now: () => Date.now(),
+    now,
+    notice: (id, message) =>
+      getWsHub().notice({ kind: "notice", conversation_id: id, level: "info", message }),
     changed: (id, parts) =>
       getWsHub().notice({ kind: "conversation_parts", conversation_id: id, parts }),
     reopened: (ids) =>

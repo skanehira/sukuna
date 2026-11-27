@@ -10,6 +10,7 @@ import type { Logger } from "../shared/log";
 import { agentScriptSchema } from "../shared/agent-script";
 import { createGhRunner } from "../shared/gh/gh-runner";
 import { ConversationRuntime } from "./modules/conversation/usecase/runtime";
+import { switchWorkspace } from "./modules/conversation/usecase/switch-workspace";
 import { recover } from "./modules/conversation/usecase/recover";
 import { SqliteConversationStore } from "./modules/conversation/adapter/sqlite-conversation-store";
 import { ScriptedAgent } from "./modules/conversation/adapter/scripted-agent";
@@ -148,6 +149,14 @@ export async function startRunnerApp(options: {
       log,
       { pid: process.pid, started_at: clock.now(), version: "0.0.0" },
       {
+        workspace: (id, input, cancelled) =>
+          switchWorkspace(
+            runtime,
+            id,
+            { cwd: input.cwd, worktreeId: input.worktree_id ?? null },
+            cancelled,
+            input.attempt,
+          ),
         ...options.ipc,
         flow: createIssueOpsHandler(issueOps),
         allowMerge: createRunnerAllowMerge(database.db, runtime, {

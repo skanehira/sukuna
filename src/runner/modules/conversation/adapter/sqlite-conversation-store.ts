@@ -2,7 +2,16 @@ import { statSync } from "node:fs";
 import { ConversationWorkspaceChanged } from "../domain/conversation-store";
 import { createWorktreeActivity } from "../../../../shared/workspace/sqlite-worktree-activity";
 import type { WorktreeActivityReservation } from "../../../../shared/workspace/worktree-activity";
-import { releaseReservationKey, RELEASE_RESERVATION_PREFIX } from "../../../../shared/ipc";
+import {
+  releaseReservationKey,
+  RELEASE_RESERVATION_PREFIX,
+  type WorkspaceSwitchAttempt,
+} from "../../../../shared/ipc";
+import { readPublicConversation } from "../../../../shared/conversation/sqlite-public-conversation";
+import {
+  readWorkspaceSwitchReceipt,
+  writeWorkspaceSwitchReceipt,
+} from "../../../../shared/conversation/sqlite-workspace-switch-receipts";
 import { Result } from "neverthrow";
 import type Database from "better-sqlite3";
 import { eventSchema, type ConversationEvent, type StoredEvent } from "../../../../shared/events";
@@ -11,6 +20,7 @@ import { timelineInputCommentSchema } from "../../../../shared/progress/schema";
 import type {
   Conversation,
   ConversationStore,
+  ConversationWorkspace,
   QueuedInstruction,
   SendResult,
 } from "../domain/conversation-store";
@@ -103,6 +113,67 @@ export class SqliteConversationStore implements ConversationStore {
   }
   withWorkspace<T>(id: string, operation: (worktreeId: string | null) => T): T {
     return this.withValidWorkspace(() => this.get(id), operation);
+  }
+  withWorkspaceSwitch<T>(
+    id: string,
+    targetWorktreeId: string | null,
+    operation: (fromWorktreeIds: string[]) => T,
+  ): T {
+    const current = this.get(id);
+    const fromWorktreeIds = current ? this.workspace(current).ids : [];
+    const ids =
+      targetWorktreeId === null ? fromWorktreeIds : [...fromWorktreeIds, targetWorktreeId];
+    return this.withReservations(ids, () => operation(fromWorktreeIds));
+  }
+  switchWorkspace(
+    expected: Conversation,
+    target: ConversationWorkspace,
+    fromWorktreeIds: string[],
+    canUpdate: () => boolean,
+  ): boolean {
+    const current = this.get(expected.id);
+    if (
+      !current ||
+      current.projectId !== expected.projectId ||
+      current.kind !== expected.kind ||
+      current.cwd !== expected.cwd ||
+      current.worktreeId !== expected.worktreeId ||
+      current.runState !== expected.runState ||
+      this.workspace(current).ids.some((id) => !fromWorktreeIds.includes(id))
+    )
+      return false;
+    const project = this.sqlite
+      .prepare("SELECT path FROM projects WHERE id=? AND removed_at IS NULL")
+      .get(current.projectId) as { path: string } | undefined;
+    if (!project) return false;
+    if (target.worktreeId === null) {
+      if (target.cwd !== project.path) return false;
+    } else {
+      const destination = this.workspace({ ...current, ...target });
+      if (
+        !destination.valid ||
+        !destination.tracked ||
+        !statSync(target.cwd, { throwIfNoEntry: false })?.isDirectory()
+      )
+        return false;
+    }
+    if (!canUpdate()) return false;
+    return (
+      this.sqlite
+        .prepare(
+          "UPDATE conversations SET cwd=?,worktree_id=? WHERE id=? AND cwd=? AND worktree_id IS ?",
+        )
+        .run(target.cwd, target.worktreeId, current.id, expected.cwd, expected.worktreeId)
+        .changes === 1
+    );
+  }
+  workspaceSwitchSettled(attempt: WorkspaceSwitchAttempt, now: number): boolean {
+    return readWorkspaceSwitchReceipt(this.sqlite, attempt, now) !== null;
+  }
+  recordWorkspaceSwitch(attempt: WorkspaceSwitchAttempt, id: string, now: number): void {
+    const conversation = readPublicConversation(this.sqlite, id);
+    if (!conversation) throw new Error("会話の作業場所を読み取れませんでした。");
+    writeWorkspaceSwitchReceipt(this.sqlite, attempt, { conversationId: id, conversation }, now);
   }
   reserveRelease(id: string, token: string, milliseconds: number): void {
     this.sqlite
