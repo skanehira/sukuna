@@ -9,10 +9,14 @@ import { buildId } from "./build-id";
 import {
   attachUpgradeHandler,
   getDatabase,
-  initializeRuntime,
   getProgressDependencies,
   getMessageDependencies,
+  getRunnerLink,
+  getWsHub,
+  initializeRuntime,
 } from "./runtime";
+import { ulid } from "ulid";
+import { createStockDependencies } from "./modules/stock/adapter/dependencies";
 import { createWorkspaceDependencies } from "./modules/workspace/adapter/dependencies";
 
 const environment = readEnvironment("server", process.env, homedir(), (path) => {
@@ -39,14 +43,24 @@ if (initialized.isErr()) {
   log({ level: "error", component: "db.migrate", message: initialized.error.message });
   process.exit(1);
 }
+const workspace = createWorkspaceDependencies(() => getDatabase().db);
 const server = serve(
   {
     fetch: createApp({
       clientDir,
       build: buildId,
-      workspace: createWorkspaceDependencies(() => getDatabase().db),
+      workspace,
       progress: getProgressDependencies(),
       messages: getMessageDependencies(),
+      stock: createStockDependencies({
+        database: () => getDatabase().db,
+        workspace,
+        runner: getRunnerLink,
+        changed: (id, parts) =>
+          getWsHub().notice({ kind: "conversation_parts", conversation_id: id, parts }),
+        id: ulid,
+        now: () => Date.now(),
+      }),
     }).fetch,
     port: env.port,
     hostname: "0.0.0.0",

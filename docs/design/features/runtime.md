@@ -109,6 +109,7 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 | `issues` と `issue_dependencies` の、下書きの行 | 画面のサーバー | 下書きは開発者だけが書く (`features/issue.md`) |
 | `issues` と `issue_dependencies` の、下書きでない行。下書きから精査待ちへ移す書き込み。`issue_events` | ランナー (自動フロー) | DESIGN.md「横断規約 > 自動フローと既存のスキル」 |
 | `settings` のキー `usage.rate_limit` | ランナー | AI の実行の知らせから決まる (`features/project-settings.md`) |
+| `settings` のキー `runner-release:<会話の id>` | ランナー | 終了保存までの実行の予約 (`features/stock-thread.md`「終了の予約に使う内部の口」) |
 | `settings` のキー `backup_status` | ランナー | バックアップはランナーがとる (`features/operations.md`) |
 | `settings` のキー `last_restore` と、復元のときの `flow_paused` | 復元の処理と、起動時の後始末 (`db.lock` の中) | 2 つのプロセスを止めてから書く (`features/operations.md`) |
 | `settings` のほかのキー、`projects` | 画面のサーバー | 開発者の操作 |
@@ -151,6 +152,8 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 | GET | `/conversations/:id/commands` | スキルとスラッシュコマンドの候補 | なし | `commands` (`name`、`description`) |
 | POST | `/conversations/:id/workspace` | 開発者が始めた会話の作業ディレクトリを切り替える。開いている実行を閉じる (`features/worktree-terminal.md`「作業場所の切り替え」) | `cwd`、`worktree_id?` | `cwd` |
 | POST | `/conversations/:id/release` | 実行を片付けて手放す (閉じる・削除の前)。利用枠の戻りを待つタイマーも外す | なし | `run_state` |
+| POST | `/conversations/:id/release/reserve` | スレッドの終了保存まで操作を予約する (`features/stock-thread.md`「終了の予約に使う内部の口」) | なし | `token` |
+| POST | `/conversations/:id/release/complete` | 終了の予約を解除する (同上) | `token` | なし |
 | POST | `/conversations/:id/stock/send` | ストックを送る (`features/stock-thread.md`) | `kinds` | stock-thread.md の `POST /api/conversations/:id/stock/send` の 200 と同じ |
 | POST | `/conversations/:id/recap/rebuild` | 反映していない番から目次などの更新をやり直す (`features/recap.md`) | なし | `state` |
 | POST | `/flow/issues/:id/confirm` | 下書きを確定する (`features/issue.md`) | なし | `issue` |

@@ -6,10 +6,12 @@ export function resume(
   id: string,
   by: "developer" | "usage_limit" | "flow" = "developer",
 ): Promise<Result<{ seq: number }, OperationError>> {
+  if (this.releases.has(id)) return Promise.resolve(err(conflict()));
   return this.serial(id, async () => {
     const c = this.store.get(id);
     if (
       !c ||
+      (by === "usage_limit" && c.closedAt !== null) ||
       !(
         c.runState === "failed" ||
         c.runState === "usage_limited" ||

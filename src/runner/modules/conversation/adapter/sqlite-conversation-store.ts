@@ -1,3 +1,5 @@
+import { releaseReservationKey, RELEASE_RESERVATION_PREFIX } from "../../../../shared/ipc";
+import { Result } from "neverthrow";
 import type Database from "better-sqlite3";
 import { eventSchema, type ConversationEvent, type StoredEvent } from "../../../../shared/events";
 import { nextRunState } from "../domain/run-state";
@@ -16,6 +18,28 @@ export class SqliteConversationStore implements ConversationStore {
   }
   transaction<T>(operation: () => T): T {
     return this.sqlite.transaction(operation).immediate();
+  }
+  reserveRelease(id: string, token: string, milliseconds: number): void {
+    this.sqlite
+      .prepare(
+        "INSERT INTO settings (key,value) VALUES (?, json_object('token', ?, 'expiresAt', unixepoch('subsec') * 1000 + ?)) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+      )
+      .run(releaseReservationKey(id), token, milliseconds);
+  }
+  clearRelease(id: string, token: string): Result<void, { message: string }> {
+    return Result.fromThrowable(
+      () => {
+        this.sqlite
+          .prepare("DELETE FROM settings WHERE key=? AND json_extract(value, '$.token')=?")
+          .run(releaseReservationKey(id), token);
+      },
+      () => ({ message: "実行の予約を解除できませんでした。" }),
+    )();
+  }
+  clearReleaseReservations(): void {
+    this.sqlite
+      .prepare("DELETE FROM settings WHERE key GLOB ?")
+      .run(`${RELEASE_RESERVATION_PREFIX}*`);
   }
   get(id: string): Conversation | null {
     return (
