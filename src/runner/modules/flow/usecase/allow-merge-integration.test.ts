@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { expect, it } from "vite-plus/test";
 import { fixture, flowText, pauseOld, scenarios } from "../merge-integration-test-support";
 import { issueInstructions } from "../../issue/domain/issue-instructions";
@@ -43,7 +44,7 @@ it.each(scenarios)(
         cwd: current.cwd,
         model: "haiku",
         permissionMode: "default",
-        appendSystemPrompt: issueInstructions(),
+        appendSystemPrompt: `${issueInstructions()}\n\nこの会話で決まったことの一覧は ${join(f.home, "docs/decisions/c.md")} にある。前に決めたことを尋ねられたら、このファイルを読んで答える。目次はツール recap_read で読める。`,
         context: { conversationId: "c", projectId: "p", issueId: "i" },
         tools: [
           "issue_get",
@@ -56,6 +57,7 @@ it.each(scenarios)(
           "report_ci_failed",
           "report_implementation_done",
           "report_needs_human",
+          "recap_read",
         ].sort(),
       });
       expect({

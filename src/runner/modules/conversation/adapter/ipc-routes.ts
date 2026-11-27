@@ -12,6 +12,7 @@ import {
   startConversationSchema,
   workspaceSchema,
 } from "../../../../shared/ipc";
+import type { RecapState } from "../../../../shared/recap/api";
 import type { Logger } from "../../../../shared/log";
 import type { ConversationRuntime, DeliveryError, OperationError } from "../usecase/runtime";
 
@@ -26,6 +27,7 @@ function wireResult(value: unknown): unknown {
 }
 export type IpcExtensions = {
   flow?: Hono;
+  rebuildRecap?: (id: string) => Result<{ state: RecapState }, OperationError>;
   allowMerge?: (
     id: string,
     headSha: string,
@@ -188,6 +190,9 @@ export function createIpcRoutes(
       allowMerge(id, p.head_sha),
     );
   }
+  const rebuildRecap = extensions.rebuildRecap;
+  if (rebuildRecap)
+    route("/conversations/:id/recap/rebuild", empty, (id) => Promise.resolve(rebuildRecap(id)));
   if (extensions.flow) app.route("/flow", extensions.flow);
   app.get("/health", (c) => c.json(health));
   return app;

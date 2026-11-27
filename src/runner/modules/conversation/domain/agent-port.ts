@@ -30,6 +30,7 @@ export type OpenParams = {
   model: "opus" | "sonnet" | "haiku" | null;
   permissionMode: "bypassPermissions" | "default" | "acceptEdits" | "plan";
   appendSystemPrompt: string;
+  additionalDirectories?: string[];
   appTools: AppTool[];
   context: { conversationId: string; projectId: string; issueId: string | null };
   onQuestion(req: QuestionRequest): Promise<Record<string, string>>;
@@ -41,6 +42,7 @@ export type CompleteParams = {
   prompt: string;
   title: string;
   purpose: string;
+  signal?: AbortSignal;
 };
 export interface AgentPort {
   open(params: OpenParams): AgentSession;

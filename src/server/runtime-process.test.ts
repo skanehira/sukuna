@@ -11,7 +11,7 @@ import { migrations } from "../shared/db/migrate";
 import { RunnerLink } from "./runner-link";
 import type { ServerMessage } from "../shared/ws";
 
-const loader = `import {createServer} from 'vite';const loader=await createServer({configFile:false,root:process.cwd(),envDir:false,server:{middlewareMode:true,ws:false,watch:null},optimizeDeps:{entries:[]}});`;
+const loader = `import {createServer} from 'vite';const loader=await createServer({configFile:false,root:process.cwd(),cacheDir:process.env.SUKUNA_HOME+'/vite-cache-'+process.pid,envDir:false,server:{middlewareMode:true,ws:false,watch:null},optimizeDeps:{entries:[]}});`;
 const root = fileURLToPath(new URL("../..", import.meta.url));
 function startProcess(home: string, role: "runner" | "server") {
   const code =

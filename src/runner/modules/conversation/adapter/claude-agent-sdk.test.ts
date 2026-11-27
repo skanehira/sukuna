@@ -88,6 +88,7 @@ it("SDK の実行で再開設定と保存期間を渡し、入力・質問・許
     model: null,
     permissionMode: "bypassPermissions",
     appendSystemPrompt: "追加",
+    additionalDirectories: ["/project"],
     appTools: [],
     context: { conversationId: "c", projectId: "p", issueId: null },
     onQuestion: () => Promise.resolve({ 方針: "A" }),
@@ -111,12 +112,14 @@ it("SDK の実行で再開設定と保存期間を渡し、入力・質問・許
   expect({
     resume: captured.options?.resume,
     cwd: captured.options?.cwd,
+    additionalDirectories: captured.options?.additionalDirectories,
     settings: captured.options?.settings,
     settingSources: captured.options?.settingSources,
     systemPrompt: captured.options?.systemPrompt,
   }).toEqual({
     resume: "session",
     cwd: "/repo",
+    additionalDirectories: ["/project"],
     settings: { cleanupPeriodDays: 36500 },
     settingSources: undefined,
     systemPrompt: { type: "preset", preset: "claude_code", append: "追加" },
