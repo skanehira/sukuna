@@ -228,19 +228,28 @@ it("同じ課題を並行して取り込んでも下書きと通知は1件だけ
   const bodies = await Promise.all(
     responses.map(async (r) => ({ status: r.status, body: await r.json() })),
   );
-  expect(bodies).toEqual([
-    {
-      status: 200,
-      body: {
-        imported: [{ githubNumber: 17, issueId: "imported-1", issueNumber: 2 }],
-        skipped: [],
+  expect(bodies).toHaveLength(2);
+  expect(bodies).toEqual(
+    expect.arrayContaining([
+      {
+        status: 200,
+        body: {
+          imported: [{ githubNumber: 17, issueId: "imported-1", issueNumber: 2 }],
+          skipped: [],
+        },
       },
-    },
-    {
-      status: 200,
-      body: { imported: [], skipped: [{ githubNumber: 17, reason: "already_imported" }] },
-    },
-  ]);
+      {
+        status: 200,
+        body: { imported: [], skipped: [{ githubNumber: 17, reason: "already_imported" }] },
+      },
+    ]),
+  );
+  const imported = database.db
+    .select({ id: issues.id, githubNumber: issues.githubNumber })
+    .from(issues)
+    .all()
+    .filter(({ githubNumber }) => githubNumber === 17);
+  expect(imported).toEqual([{ id: "imported-1", githubNumber: 17 }]);
   expect(f.changed).toEqual([["imported-1", "github"]]);
 });
 

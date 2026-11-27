@@ -30,6 +30,7 @@ export type LineInfo = {
   open?: () => void | Promise<void>;
   cursor?: true;
   action?: string;
+  editLabel?: string;
   status?: string;
   main?: boolean;
   danger?: boolean;

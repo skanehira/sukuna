@@ -164,6 +164,8 @@ export class BufferController {
         "入力欄を開く",
         "会話",
         () => {
+          const line = this.currentLine();
+          if (line?.editLabel && line.action) return this.run(line.action);
           const spec = this.options.prompt?.();
           if (spec) this.openPrompt(spec);
         },
@@ -205,6 +207,9 @@ export class BufferController {
   recordInteraction = (): void => {
     this.interaction += 1;
   };
+  interactionRevision(): number {
+    return this.interaction;
+  }
   entries(): KeymapEntry[] {
     return this.bindings;
   }
@@ -354,10 +359,19 @@ export class BufferController {
     context: ActionContext,
     run: () => void | Promise<void>,
     choicesInText?: boolean,
-  ): void {
+  ): () => void {
+    const confirmation = { text, context, choicesInText };
     this.origin = context.window;
     this.confirmed = run;
-    this.update({ confirmation: { text, context, choicesInText } });
+    this.update({ confirmation });
+    return () => {
+      if (this.state.confirmation === confirmation) this.dismissConfirmation();
+    };
+  }
+  private dismissConfirmation(): void {
+    if (!this.state.confirmation) return;
+    this.confirmed = undefined;
+    this.update({ confirmation: null });
   }
   answer(
     event: Pick<KeyboardEvent, "key" | "isComposing" | "ctrlKey" | "altKey" | "metaKey">,
@@ -366,8 +380,7 @@ export class BufferController {
     const run = this.confirmed;
     if (!confirmation || !run) return false;
     if (["Shift", "Control", "Alt", "Meta"].includes(event.key)) return true;
-    this.confirmed = undefined;
-    this.update({ confirmation: null });
+    this.dismissConfirmation();
     this.focus(confirmation.context.window);
     if (
       event.key === "y" &&
@@ -486,7 +499,12 @@ export class BufferController {
         ["prompt.open", "入力"],
       ];
     if (line?.kind === "menu") return [["open", "実行する"]];
-    const hints = this.hints.get(handle?.view ?? "") ?? [];
+    const hints: Hint[] = line?.editLabel
+      ? [
+          ["prompt.open", `${line.editLabel}を書く`],
+          ["back", "戻る"],
+        ]
+      : (this.hints.get(handle?.view ?? "") ?? []);
     return lines.some((line) => line.kind === "menu")
       ? [...hints, ["番号 Enter", "操作を実行"]]
       : hints;
@@ -500,7 +518,7 @@ export class BufferController {
     };
   }
   statusItems(): string[] {
-    return [...this.status.values()];
+    return [...new Set(this.status.values())];
   }
   openSearch(submit: (query: string) => void | Promise<void>): void {
     this.openCommand();
@@ -745,7 +763,7 @@ export class BufferController {
       this.commandRevision++;
       this.commandRetry = null;
       this.closePrompt();
-      if (this.state.confirmation) this.update({ confirmation: null });
+      this.dismissConfirmation();
     }
     this.opening += 1;
     this.options.url = url;

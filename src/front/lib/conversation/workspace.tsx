@@ -97,6 +97,8 @@ export function createConversationWorkspace(
         changes.get(message.topic)?.forEach((receive) => receive(message));
     },
   });
+  const projectForConversation = (id: string) =>
+    sessions.get(id)?.snapshot().data?.conversation.projectId;
   const subscribeChanges: LifecycleFeed = (topic, receive, from) => {
     const receivers = changes.get(topic) ?? new Set();
     receivers.add(receive);
@@ -321,13 +323,13 @@ export function createConversationWorkspace(
       if (view.view !== "conversation-switch") return lifecycle?.right(view) ?? null;
       const route = parseRoute(controller.options.url ?? "/");
       const currentProject =
-        route.kind === "project"
-          ? route.id
-          : sessions.get(route.id ?? "")?.snapshot().data?.conversation.projectId;
+        route.kind === "project" ? route.id : projectForConversation(route.id ?? "");
       return (
         <ConversationSwitch api={api} controller={controller} currentProject={currentProject} />
       );
     },
+    projectForConversation,
+    subscribeChanges,
     start() {
       const unregister = registerConversationSwitch(controller);
       const unregisterLifecycle = lifecycle?.start();
