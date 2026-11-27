@@ -110,6 +110,7 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 | `issues` と `issue_dependencies` の、下書きでない行。下書きから精査待ちへ移す書き込み。`issue_events` | ランナー (自動フロー) | DESIGN.md「横断規約 > 自動フローと既存のスキル」 |
 | `settings` のキー `usage.rate_limit` | ランナー | AI の実行の知らせから決まる (`features/project-settings.md`) |
 | `settings` のキー `runner-release:<会話の id>` | ランナー | 終了保存までの実行の予約 (`features/stock-thread.md`「終了の予約に使う内部の口」) |
+| `settings` のキー `runner-workspace-switch:<要求の UUID>` | ランナー、画面のサーバー | ランナーが切り替え結果を、画面のサーバーが取消しを書く (`features/worktree-terminal.md` の作業場所の切り替え API) |
 | `settings` のキー `backup_status` | ランナー | バックアップはランナーがとる (`features/operations.md`) |
 | `settings` のキー `last_restore` と、復元のときの `flow_paused` | 復元の処理と、起動時の後始末 (`db.lock` の中) | 2 つのプロセスを止めてから書く (`features/operations.md`) |
 | `settings` のほかのキー、`projects` | 画面のサーバー | 開発者の操作 |
@@ -119,12 +120,13 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 | `notifications`、`push_subscriptions` | 画面のサーバー | 通知と Web Push を出すのは画面のサーバーだけである (`features/inbox.md`) |
 | 削除する会話とスレッドの、全テーブルの行 | 画面のサーバー | ランナーが実行を手放したあとに消す (`features/conversation-lifecycle.md`) |
 
-2 つのプロセスが同じ列を書くのは、次の列だけである。どれも元の値を条件に付けて更新し (例: `WHERE state = <元の状態>`)、後から書いた方が前の変化を上書きしないようにする。
+2 つのプロセスが同じ列やキーを書けるのは、次の箇所だけである。既存の行を更新するときは、元の値を条件に付け、後から書いた方が前の変化を上書きしないようにする。
 
 - `stock_items` の `state` と `thread_conversation_id` (`features/stock-thread.md`)
 - 下書きから精査待ちへ移す `issues` (`features/issue.md`)
 - `toc_entries` の `title` と `start_seq`。ランナーが行を足し、画面のサーバーが開発者の修正を書く (`features/recap.md`)
 - `conversations` の `cwd` と `worktree_id`。worktree の削除では、画面のサーバーが `cwd` が消した worktree のパスのときだけ書く。merge のあとの直しなど、自動フローが worktree を用意したときと、開発者が作業場所を切り替えたときはランナーが書く。切り替えでは、読んだときの `cwd` を条件に付ける (`features/worktree-terminal.md`、`features/implementation-flow.md`)
+- `settings` の `runner-workspace-switch:` で始まるキー。ランナーは確定結果を、画面のサーバーは未確定の要求の取消しを書く。どちらも SQLite の書き込みロック内で同じ要求の行が無いことを確かめてから追加する。この名前で始まる期限切れの行だけを掃除する
 - `worktrees` の `removed_at`。どちらのプロセスも、`removed_at` が空のときだけ書く (`features/worktree-terminal.md`「書くプロセス」)
 
 貼り付けた画像は、画面のサーバーが `$SUKUNA_HOME/images/<conversation_id>/<ID>.<拡張子>` に書き、記録には `SUKUNA_HOME` からの相対のパスで残す。ランナーは、指示を送るときにこのファイルを読む。
@@ -150,7 +152,7 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 | POST | `/conversations/:id/answers` | 選択式の質問に答える | `request_id`、`answers` (`pending_answers.answers` と同じ形) | `result` (`answered` / `delivered` / `queued`)、`seq?` |
 | POST | `/conversations/:id/permissions/:requestId` | 許可の確認に答える | `behavior` (`allow` / `deny`)、`message?` | `seq` |
 | GET | `/conversations/:id/commands` | スキルとスラッシュコマンドの候補 | なし | `commands` (`name`、`description`) |
-| POST | `/conversations/:id/workspace` | 開発者が始めた会話の作業ディレクトリを切り替える。開いている実行を閉じる (`features/worktree-terminal.md`「作業場所の切り替え」) | `cwd`、`worktree_id?` | `cwd` |
+| POST | `/conversations/:id/workspace` | 開発者が始めた会話の作業ディレクトリを切り替える。開いている実行を閉じる (`features/worktree-terminal.md`「作業場所の切り替え」) | `cwd`、`worktree_id?`、`attempt?` (要求 ID と有効期限) | `cwd` |
 | POST | `/conversations/:id/release` | 実行を片付けて手放す (閉じる・削除の前)。利用枠の戻りを待つタイマーも外す | なし | `run_state` |
 | POST | `/conversations/:id/release/reserve` | スレッドの終了保存まで操作を予約する (`features/stock-thread.md`「終了の予約に使う内部の口」) | なし | `token` |
 | POST | `/conversations/:id/release/complete` | 終了の予約を解除する (同上) | `token` | なし |
@@ -174,8 +176,8 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 - issue が停止中 (`failed`、`cause` が `worktree_failed`) の段階の会話への指示と再開は、届ける前に `flow` の `retryStageWorktree` に回す (`features/issue-flow.md`「停止中から戻る」)。作り直しに失敗したときは、指示を届けず、記録も書かずに 500 `worktree_failed` を返す
 - `/flow/notify` は、画面のサーバーが issue の項目、プロジェクトの設定、一時停止を書いたあとに送る。全体の一時停止のように対象のプロジェクトが無いときは、どちらの id も付けない
 - PR の取得で GitHub で merge されたのを見たときも、画面のサーバーは `/flow/notify` を `issue_id` 付きで送る (`features/pr-review.md`「取得と最後に取得した内容」)
-- 画面のサーバーは、つながらない・10 秒で応答が無い・知らせの流れが切れているときに、API へ 503 (`runner_unavailable`) を返す。`message` は「AI を動かすプロセスにつながりません。少し待ってから、もう一度操作してください。」とする
-- 手動の再開の受付を確定する前に、IPC の切断と期限を確認する。画面のサーバーは、10 秒後の時刻を Unix ミリ秒で `x-sukuna-ipc-deadline` に渡す
+- ランナーにつながらない、10 秒以内に応答がない、または知らせの流れが切れた場合、画面のサーバーは API に 503 (`runner_unavailable`) を返す。`message` は「AI を動かすプロセスにつながりません。少し待ってから、もう一度操作してください。」とする。作業場所の切り替えは共有 SQLite で確定を確認し、`features/worktree-terminal.md` の PUT の規則に従って応答する
+- 手動の再開と作業場所の切り替えを確定する前に、IPC の切断と期限を確認する。画面のサーバーは、10 秒後の時刻を Unix ミリ秒で `x-sukuna-ipc-deadline` に渡す
 - 質問と許可の確認の `request_id` は、ランナーが `question` / `permission_request` の記録の `payload` に入れる。画面のサーバーは、`pending_answers.question_seq` の記録から `request_id` を引いて回答の操作に渡す
 - 回答の操作の `result` は、質問を待っている会話に答えを返したとき `answered` とする。待ちの消えた質問の回答を指示の文にして送ったときは、指示を送る操作と同じく `delivered` か `queued` とする。`seq` は、記録を書いたときだけ返す
 - `/flow/projects/:id/stop` は、作業中と回答待ち・許可待ちの会話を止める。作業中でない `usage_limited` と `stopped` (`restarted`) の会話も、`stopped` (`user`) にし、利用枠の戻りを待つタイマーを外す
@@ -714,7 +716,7 @@ interface GhRunner {
 
 1. **空・最小データ**: 最初の指示なしで会話を始めると、行だけを作り、記録は 0 件で `run_state` は `idle` にする。記録の無い会話の購読は、再送を 0 件にする。偽物の台本に合う規則も `fallback` も無いときは、`turn_end` (`success`) だけを流す
 2. **上限・境界値**: ツールの結果は 64 KiB、差分は 5,000 行、ツールの入力は値ごとに 16 KiB までを保存する。再送は 1 回の購読で 1,000 件まで、送り待ちは接続ごとに 8 MiB までとする。ソケットのパスは 103 バイトまでとする
-3. **エラー時に利用者へ見えるもの**: ランナーにつながらない操作は 503 (`runner_unavailable`) になり、画面はお知らせを出す。状態の合わない操作は 409 になる。AI の開始に失敗したとき (ログインの切れなど) は、`stopped` (`error`) にエラーの文を入れ、会話の末尾に止まった理由として出る
+3. **エラー時に利用者へ見えるもの**: ランナーにつながらないときは、操作の応答規則に従って画面にお知らせを出す。状態の合わない操作は 409 になる。AI の開始に失敗したとき (ログインの切れなど) は、`stopped` (`error`) にエラーの文を入れ、会話の末尾に止まった理由として出る
 4. **並行操作・二重実行**: ランナーは会話ごとに操作を 1 列に並べて処理する。同じ会話で 10 分以内に届いた同じ `client_id` の送信は、1 回だけ届けるか預ける。2 つ目のランナーは起動を失敗させる。マイグレーションは `db.lock` の排他のロックの中で当て、2 つ目のプロセスは当て済みの記録を見て何もしない
 5. **再表示時の整合**: 画面はつなぎ直すと、`after` で続きの記録を受け取り、記録以外は API で読み直す。画面のサーバーが再起動したときも同じで、ランナーの AI は動き続ける。ランナーとのつながりが戻ったら、購読中の対象を SQLite から読み直して配信する
 6. **表示の寿命**: AI の書きかけの発言は、会話の末尾に逐次出し、同じ発言の保存か番の終わりで消える。保存しないので、画面を開き直すと書きかけは出ず、保存した発言から表示する

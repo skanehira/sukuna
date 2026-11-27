@@ -236,16 +236,21 @@ worktree の一覧の行で Enter を押すと、いま主のウィンドウに�
 開発者が始めた会話の作業場所を切り替える (「作業場所の切り替え」)。画面のサーバーは、worktree を確かめてから、ランナーの `POST /conversations/:id/workspace` に渡す。
 
 - リクエスト: `{ "worktreeId": "01J..." | null }`。`null` はプロジェクトのディレクトリである
-- 応答: 200 で `{ "conversation": <会話の状態> }` (`features/conversation.md` の `GET /api/conversations/:id` と同じ形)
+- 応答: 200 で切り替えが確定した時点の `{ "conversation": <会話の状態> }` (`features/conversation.md` の `GET /api/conversations/:id` と同じ形)
 - 404 `not_found`: 会話か worktree が無い / worktree を消してある / worktree のフォルダが無い / worktree が会話と別のプロジェクトのもの
 - 409 `conflict`: 会話が `chat` ではない (「worktree を切り替えられるのは、開発者が始めた会話です」) / AI が動いている (「AI が動いているあいだは切り替えられません。止めてから切り替えてください」)
-- 503 `runner_unavailable`: ランナーにつながらない。何も変えない
+- 503 `runner_unavailable`: ランナーとの接続や返信を失い、この要求の切り替えが確定していない。処理が残っていても、この要求で作業場所が変わることはない
+- 500 `internal`: SQLite の障害などで確定を確認できないときは、会話を読み直して作業場所を確認するように `message` で案内する
+
+画面のサーバーは切り替えの要求ごとに UUID を発行し、有効期限と一緒にランナーへ送る。IPC の返信を失っても、共有 SQLite に同じ要求の確定結果があれば 200 を返す。結果がなければ、書き込み用のトランザクション内で再確認してから取消しを記録し、503 を返す。ランナーは取消し済みの要求を確定しない。
 
 ランナーは、会話ごとの 1 列の処理の中で次を行う。
 
 1. AI が `working` / `waiting_answer` / `waiting_permission` なら 409 を返す
 2. 開いている実行があれば閉じる。利用枠の戻りを待つタイマーは外さない。戻ったときの再開は、新しい作業ディレクトリで開く
-3. `conversations.cwd` と `worktree_id` を、読んだときの `cwd` を条件に付けて書く。同じときに worktree が消されて書けなければ 409 を返す。書けたら、配信で会話の変化を知らせる
+3. 読み取った `cwd` を条件にして `conversations.cwd` と `worktree_id` を更新する。この間に worktree が消されて更新できなければ 409 を返す。要求 ID がある更新では、同じトランザクションで確定時の会話の状態を記録する。コミットの直前に IPC の期限と切断を確認し、コミットが済んだら会話の変化を配信する
+
+結果と取消しは `settings` の `runner-workspace-switch:<要求の UUID>` に保存する。先に記録した結果か取消しを使う。記録は発行から 60 秒間参照できる。期限切れの記録は、次に結果や取消しを書くときに削除する。書き手と排他は `features/runtime.md`「書くプロセスの分担」に従う。
 
 ### POST `/api/terminals`
 
