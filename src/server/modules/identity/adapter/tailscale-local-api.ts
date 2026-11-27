@@ -73,6 +73,7 @@ function whois(input: WhoisInput, timeoutMs: number): Promise<Result<WhoisOwner,
       (response) => {
         const chunks: Buffer[] = [];
         response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("error", () => resolve(err("connection")));
         response.on("end", () => {
           resolve(
             parseWhoisResponse(response.statusCode ?? 0, Buffer.concat(chunks).toString("utf8")),

@@ -187,31 +187,53 @@ describe("本人の判定のミドルウェア", () => {
     expect(tailscale.whoisCalls).toHaveLength(4);
   });
 
-  it("認証の失敗では資格情報を読み直して 1 回だけ問い合わせ直し、成功した結果は 60 秒覚える", async () => {
-    const owner = { loginName: LOGIN, deviceName: "macbook-air" };
-    const whoisResults = [err("auth"), ok(owner)];
-    const { app, tailscale, clock } = setup({
-      whois: async () => whoisResults.shift() ?? ok(owner),
-    });
+  it.each([60_000, 61_000])(
+    "認証失敗は 1 回だけ問い合わせ直し、59,999ms までの本人情報を %i ms で更新して持ち主の変更を拒否する",
+    async (refreshAt) => {
+      const owner = { loginName: LOGIN, deviceName: "macbook-air" };
+      const nextOwner = { loginName: "other@example.com", deviceName: "macbook-air" };
+      const whoisResults = [err("auth"), ok(owner)];
+      const { app, tailscale, clock } = setup({
+        whois: async () => whoisResults.shift() ?? ok(nextOwner),
+      });
 
-    const first = await app.request("/api/me", undefined, incomingWith("100.64.0.7", 4321));
+      const first = await app.request("/api/me", undefined, incomingWith("100.64.0.7", 4321));
 
-    expect(first.status).toBe(200);
-    expect(tailscale.whoisCalls).toHaveLength(2);
-    expect(tailscale.credentialReads()).toBe(2);
+      expect(first.status).toBe(200);
+      expect(meResponseSchema.parse(await first.json())).toEqual({
+        login: LOGIN,
+        device: "macbook-air",
+        build: BUILD,
+      });
+      expect(tailscale.whoisCalls).toHaveLength(2);
+      expect(tailscale.credentialReads()).toBe(2);
 
-    clock.set(60_000);
-    const cached = await app.request("/api/me", undefined, incomingWith("100.64.0.7", 4322));
+      clock.set(59_999);
+      const cached = await app.request("/api/me", undefined, incomingWith("100.64.0.7", 4322));
 
-    expect(cached.status).toBe(200);
-    expect(tailscale.whoisCalls).toHaveLength(2);
+      expect(cached.status).toBe(200);
+      expect(meResponseSchema.parse(await cached.json())).toEqual({
+        login: LOGIN,
+        device: "macbook-air",
+        build: BUILD,
+      });
+      expect(tailscale.whoisCalls).toHaveLength(2);
 
-    clock.set(61_000);
-    const refreshed = await app.request("/api/me", undefined, incomingWith("100.64.0.7", 4323));
+      clock.set(refreshAt);
+      const refreshed = await app.request("/api/me", undefined, incomingWith("100.64.0.7", 4323));
 
-    expect(refreshed.status).toBe(200);
-    expect(tailscale.whoisCalls).toHaveLength(3);
-  });
+      expect(refreshed.status).toBe(401);
+      expect(errorResponseSchema.parse(await refreshed.json())).toEqual({
+        error: {
+          code: "unauthorized",
+          message: DENIED_IDENTITY_MESSAGE,
+          details: { reason: "identity" },
+        },
+      });
+      expect(tailscale.whoisCalls).toHaveLength(3);
+      expect(tailscale.credentialReads()).toBe(3);
+    },
+  );
 
   it("SUKUNA_DEV_IDENTITY があると 127.0.0.1 からの接続が通り、login はその値、device は local になる", async () => {
     const { app, tailscale } = setup({ devIdentity: "dev@example.com" });

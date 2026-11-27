@@ -38,7 +38,7 @@ export function createResolveIdentity(deps: ResolveIdentityDeps): ResolveIdentit
 
     const now = deps.clock.now();
     const hit = remembered.get(ip);
-    if (hit !== undefined && now - hit.at <= CACHE_TTL_MS) {
+    if (hit !== undefined && now - hit.at < CACHE_TTL_MS) {
       return decide(hit.owner, deps.login);
     }
 

@@ -265,27 +265,41 @@ describe("createResolveIdentity", () => {
     },
   );
 
-  it("成功した結果は 60 秒覚え、61 秒後には問い合わせ直す", async () => {
-    const tailscale = createTailscaleFake();
-    const clock = createClockFake(0);
-    const resolve = createResolveIdentity({
-      login: LOGIN,
-      devIdentity: undefined,
-      tailscale: tailscale.api,
-      clock,
-    });
+  it.each([60_000, 61_000])(
+    "成功した結果は 59,999ms まで使い、%i ms では問い合わせ直して持ち主の変更を反映する",
+    async (refreshAt) => {
+      const owner = { loginName: LOGIN, deviceName: "macbook-air" };
+      const nextOwner = { loginName: "other@example.com", deviceName: "macbook-air" };
+      const whoisResults = [ok(owner), ok(nextOwner)];
+      const tailscale = createTailscaleFake({
+        whois: async () => whoisResults.shift() ?? ok(nextOwner),
+      });
+      const clock = createClockFake(0);
+      const resolve = createResolveIdentity({
+        login: LOGIN,
+        devIdentity: undefined,
+        tailscale: tailscale.api,
+        clock,
+      });
 
-    await resolve({ address: "100.64.0.7", port: 4321 });
-    expect(tailscale.whoisCalls).toHaveLength(1);
+      const first = await resolve({ address: "100.64.0.7", port: 4321 });
 
-    clock.set(60_000);
-    await resolve({ address: "100.64.0.7", port: 4321 });
-    expect(tailscale.whoisCalls).toHaveLength(1);
+      expect(first).toEqual({ allowed: true, identity: { login: LOGIN, device: "macbook-air" } });
+      expect(tailscale.whoisCalls).toHaveLength(1);
 
-    clock.set(61_000);
-    await resolve({ address: "100.64.0.7", port: 4321 });
-    expect(tailscale.whoisCalls).toHaveLength(2);
-  });
+      clock.set(59_999);
+      const cached = await resolve({ address: "100.64.0.7", port: 4321 });
+
+      expect(cached).toEqual(first);
+      expect(tailscale.whoisCalls).toHaveLength(1);
+
+      clock.set(refreshAt);
+      const refreshed = await resolve({ address: "100.64.0.7", port: 4321 });
+
+      expect(refreshed).toEqual({ allowed: false, reason: "identity" });
+      expect(tailscale.whoisCalls).toHaveLength(2);
+    },
+  );
 
   it("一致しなかった whois の結果も 60 秒覚える", async () => {
     const tailscale = createTailscaleFake({

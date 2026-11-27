@@ -165,4 +165,16 @@ describe("createTailscaleLocalApi の whois", () => {
 
     expect(owner).toEqual(err("connection"));
   });
+
+  it("ローカル API が本文の途中で接続を切ったときも connection として返す", async () => {
+    const port = await startServer((_request, response) => {
+      response.writeHead(200, { "content-length": "100" });
+      response.write('{"UserProfile":');
+      setImmediate(() => response.destroy());
+    });
+
+    const owner = await createTailscaleLocalApi({ timeoutMs: 20 }).whois(whoisInput(port));
+
+    expect(owner).toEqual(err("connection"));
+  }, 1_000);
 });
