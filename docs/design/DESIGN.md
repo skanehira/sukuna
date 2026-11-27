@@ -390,7 +390,7 @@ issue の状態の移り変わりは `features/issue-flow.md` の表が正本で
 - 配置先には `node_modules` が要る。SQLite のドライバと擬似端末の部品は、ビルドの成果物に同梱しない
 - 更新: リポジトリを更新して `vp install` と `vp build` を行い、画面のサーバーだけを入れ替える。ランナーを入れ替えるのは、ランナーのコードが変わったときだけにする
 - バックアップ: SQLite のデータベースを、SQLite のバックアップの機能で写す。貼り付けた画像は含めない。復元は、2 つのプロセスを止めてから行う。手順は `features/operations.md` に書く
-- CI: GitHub Actions で `vp check`、`CI=1 vp test --run`、`vp build` を実行する。PR のときは、別のジョブ (`mutation`) で `vp run mutation:changed` を PR の基準のブランチに対して流す。全体を流すと PR ごとの待ち時間が長くなりすぎるので、変えたファイルだけにする。変異スコアでは PR を落とさない。今あるコードには生き残りの変異があり、そのファイルに触れた無関係の PR まで落ちるためである
+- CI: GitHub Actions で `vp check`、`CI=1 vp test --run`、`vp build` を実行する。PR のときは、別のジョブ (`mutation`) で `vp run mutation:changed` を PR の基準のブランチに対して流す。全体を流すと PR ごとの待ち時間が長くなりすぎるので、変えたファイルだけにする。変異スコアでは PR を落とさない。今あるコードには生き残りの変異があり、そのファイルに触れた無関係の PR まで落ちるためである。`mutation` ジョブの準備 (ripgrep などの道具の導入) は `ci` ジョブと揃える。テストが呼ぶ道具が無いと、Stryker の初回のテスト実行で落ちる
 - シークレット: アプリは API キーを持たない。AI の実行は、この Mac の Claude Code のログインを使う (「未解決の論点」)
 
 ## 既知の制約
@@ -428,7 +428,7 @@ issue の状態の移り変わりは `features/issue-flow.md` の表が正本で
 - TypeScript 7 には JS の API が無い。Stryker は既定で `tsconfig.json` をこの API で読み書きするので、`TypeError: ts.parseConfigFileTextToJson is not a function` で起動に失敗する。`stryker.config.json` の `tsconfigFile` に存在しないファイルの名前を指定して、この処理を止める。このリポジトリの tsconfig は Stryker の sandbox の外を参照しないので、書き換えは要らない
 - Vite は `import.meta.glob` の引数を、文字列と object のリテラルとしてしか読めない。Stryker が引数を変異させると、そのモジュールを import するテストが `Parse failed` で落ちる。`import.meta.glob` の呼び出しは `// Stryker disable all: <理由>` と `// Stryker restore all` で囲む
 - `src/runner/dev.test.ts` は、子のプロセスで開発用ランナーを起動する結合テストである。`src` 全体を変異の対象にすると、Stryker の初回のテスト実行で落ちる。`stryker.config.json` の `ignorePatterns` で、Stryker の sandbox から外す。いつものテストでは流れる
-- 変異 1 件にかかる CPU 時間は、jsdom の project のテストで約 13 秒、node の project のテストで約 0.5 秒である。CI の `mutation` ジョブの制限時間は、jsdom の側のファイルが多い PR を見込んで 180 分にする
+- 変異テストにかかる時間は、ファイルと実行環境で大きく変わる。28 スレッドの Mac では、`notation.ts` (jsdom の project のテストが流れる。変異 189 件) が 2 分 41 秒、`transition.ts` (node の project。変異 273 件) が 10 秒である。CI では、`migrate.ts` (node の project。変異 66 件) に約 5 分かかる。`mutation` ジョブの制限時間は、jsdom の側のファイルが多い PR を見込んで 180 分にする。超えるとジョブは失敗する
 - `node-pty` は、導入のあとに補助の実行ファイルへ実行権限を付けないと動かない。`postinstall` で付ける
 - Tailscale のローカル API のポートとトークンは、Tailscale の再起動で変わる。起動時に固定せず、認証か接続に失敗したら読み直す (PoC `tailscale-identity`)
 - 目次などの更新の実行には、題名を必ず渡す。渡さないと、題名を作る別の呼び出しが毎回走る (PoC `summary-ai-cost`)
