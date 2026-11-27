@@ -25,6 +25,12 @@ import { ProjectPage } from "./pages/project";
 import { Tree, registerInboxNavigation } from "./components/tree";
 import type { ScreenLoader } from "./App";
 import { createBrowserNotifications } from "./lib/notifications";
+import {
+  createRestoreWorkspace,
+  getRestoreResult,
+  postRestore,
+  restorePendingNotice,
+} from "./lib/settings-restore";
 
 const reload = () => window.location.reload();
 const navigation = createNavigation(
@@ -73,6 +79,16 @@ const inbox = new InboxStore(
   notifications.updateTitle,
 );
 const stopInboxNavigation = registerInboxNavigation(controller, inbox);
+const restore = createRestoreWorkspace({
+  controller,
+  store: settings,
+  formatTime,
+  post: (id) => postRestore(window.fetch.bind(window), id),
+  getResult: (id) => getRestoreResult(window.fetch.bind(window), id),
+  schedule: timer.schedule,
+  finish: (message, kind) => notices.replaceInfoWithResult(restorePendingNotice, message, kind),
+});
+const stopRestore = restore.start();
 const conversations = createConversationWorkspace(
   createConversationApi(window.fetch.bind(window)),
   controller,
@@ -150,12 +166,23 @@ import.meta.hot?.dispose(() => {
   window.removeEventListener("pagehide", pagehide);
   stopSettingsCommands();
   stopUsageCommand();
+  stopRestore();
   stopConversations();
   stopInboxNavigation();
   inbox.dispose();
   document.removeEventListener("visibilitychange", visibility);
   dispose();
 });
+const connection = {
+  snapshot: () => conversations.connection.snapshot() && !restore.restarting.snapshot(),
+  subscribe(callback: () => void) {
+    const dispose = [
+      conversations.connection.subscribe(callback),
+      restore.restarting.subscribe(callback),
+    ];
+    return () => dispose.forEach((unregister) => unregister());
+  },
+};
 const loadIdentity = createIdentityLoader((url) => window.fetch(url));
 
 createRoot(document.getElementById("root")!).render(
@@ -170,8 +197,8 @@ createRoot(document.getElementById("root")!).render(
             identityRecovery={identityRecovery}
             loadScreen={loadScreen}
             renderTree={(route) => <Tree store={inbox} route={route} />}
-            renderRight={conversations.renderRight}
-            connection={conversations.connection}
+            renderRight={(view) => restore.right(view) ?? conversations.renderRight(view)}
+            connection={connection}
           />
         )}
       </AuthenticationGuard>

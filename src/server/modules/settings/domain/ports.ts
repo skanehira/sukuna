@@ -1,5 +1,7 @@
 import type { KeymapConfig } from "../../../../shared/settings/keymap-schema";
 import type { BackupItem } from "../../../../shared/settings/settings-schema";
+import type { Result } from "neverthrow";
+import type { RestoreLookup } from "../../../../shared/settings/restore-schema";
 
 export type SettingsDependencies = {
   readValues(): Map<string, unknown>;
@@ -8,4 +10,13 @@ export type SettingsDependencies = {
   readVapidPublicKey(): Promise<string | null>;
   putKeymap(keymap: KeymapConfig, revision?: string): boolean;
   changed(): void;
+  requestRestore?(
+    backupId: string,
+  ): Promise<
+    Result<
+      { restarting: true; requestId: string },
+      { code: "not_found" | "conflict"; message: string }
+    >
+  >;
+  restoreResult?(requestId: string): RestoreLookup | undefined;
 };

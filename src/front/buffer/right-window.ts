@@ -1,6 +1,7 @@
 export type RightView = { view: string; target: string };
 export type RightState = { current: RightView | null; stack: RightView[] };
-const transient = (view: RightView) => view.view === "closing" || view.view === "thread";
+const transient = (view: RightView) =>
+  view.view === "closing" || view.view === "thread" || view.view === "backups";
 export class RightWindow {
   current: RightView | null;
   private revision = 0;

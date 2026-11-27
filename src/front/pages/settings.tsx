@@ -4,8 +4,9 @@ import { Frame } from "../buffer/Frame";
 import type { ColumnDef, LineInfo } from "../buffer/line";
 import { SettingsBuffer } from "../components/settings/SettingsBuffer";
 import type { SettingsStore } from "../lib/settings-store";
+import { restoreAction } from "../lib/settings-restore";
 
-const columns: ColumnDef[] = [{ name: "settings", widths: [12, 38], heads: ["項目", "値"] }];
+const columns: ColumnDef[] = [{ name: "settings", widths: [15, 35], heads: ["項目", "値"] }];
 const waiting: LineInfo[] = [{ kind: "skeleton", text: "読み込み中" }];
 
 export const resetKeymapAction = "settings.keymap-reset";
@@ -41,6 +42,13 @@ function settingsLines(settings: Settings, formatTime: (at: number) => string): 
       action: resetKeymapAction,
       text: "キーの割り当てを既定に戻す",
       cols: ["キーの割り当てを既定に戻す", ""],
+    },
+    {
+      kind: "menu",
+      id: restoreAction,
+      action: restoreAction,
+      text: "バックアップから復元する",
+      cols: ["バックアップから復元する", "確認のうえ復元する"],
     },
   ];
 }

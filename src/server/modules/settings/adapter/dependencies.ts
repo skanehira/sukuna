@@ -1,13 +1,20 @@
+import { randomUUID } from "node:crypto";
 import { and, count, eq, inArray, isNull } from "drizzle-orm";
 import { lstat, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import type { OpenedDatabase } from "../../../../shared/db/open";
 import { conversations, projects, settings } from "../../../../shared/db/schema";
+import { restoreReceiptSchema } from "../../../../shared/settings/restore-schema";
 import type { BackupItem } from "../../../../shared/settings/settings-schema";
 import type { SettingsDependencies } from "../domain/ports";
 import { readKeymap } from "../usecase/get-settings";
 import { keymapRevision } from "./keymap-revision";
+
+import { backupFileId } from "../../../../shared/settings/backup-paths";
+import type { LaunchdPort } from "../domain/launchd-port";
+import { requestRestore } from "../usecase/request-restore";
+import { createRestoreFiles } from "./restore-files";
 
 const settingKeys = ["keymap", "flow_paused", "backup_status", "last_restore"];
 const publicKeySchema = z.object({ publicKey: z.string().min(1) });
@@ -16,8 +23,32 @@ export function createSettingsDependencies(
   database: () => OpenedDatabase["db"],
   home: string,
   changed: () => void,
+  restore?: {
+    launchd: Pick<LaunchdPort, "registered" | "kickstart">;
+    now: () => number;
+    receiptWarning?: (error: unknown) => void;
+  },
 ): SettingsDependencies {
+  const files = createRestoreFiles(home, restore?.receiptWarning);
   return {
+    requestRestore: (backupId) =>
+      requestRestore(backupId, {
+        ...files,
+        launchd: restore?.launchd ?? { registered: async () => false, kickstart: async () => {} },
+        now: restore?.now ?? Date.now,
+        id: randomUUID,
+      }),
+    restoreResult: (id) => {
+      const result = files.lookup(id);
+      if (result) return result;
+      const row = database()
+        .select({ value: settings.value })
+        .from(settings)
+        .where(eq(settings.key, "last_restore"))
+        .get();
+      const saved = restoreReceiptSchema.safeParse(row?.value).data;
+      return saved?.requestId === id ? saved : undefined;
+    },
     readValues: () =>
       new Map(
         database()
@@ -70,15 +101,12 @@ async function listBackups(directory: string): Promise<BackupItem[]> {
     files
       .filter((file) => file.isFile())
       .map(async ({ name }) => {
-        const daily = /^sukuna-(\d{4}-\d{2}-\d{2})\.db$/.exec(name);
-        const beforeRestore = /^(before-restore-\d{8}-\d{6})\.db$/.exec(name);
-        const id = daily?.[1] ?? beforeRestore?.[1];
-        if (id === undefined) return null;
+        const backup = backupFileId(name);
+        if (!backup) return null;
         const file = await optionalFile(() => lstat(join(directory, name)));
         if (!file?.isFile()) return null;
         return {
-          id,
-          kind: daily ? "daily" : "before_restore",
+          ...backup,
           createdAt: Math.trunc(file.mtimeMs),
           sizeBytes: file.size,
         } satisfies BackupItem;

@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 
-export type NoticeSnapshot = { error: string | null; info: string | null };
+export type NoticeSnapshot = { error: string | null; info: string | null; result?: string };
 export type TimerPort = { schedule(callback: () => void, ms: number): () => void };
 export type NoticePort = ReturnType<typeof createNotices>;
 
@@ -27,8 +27,15 @@ export function createNotices(timer: TimerPort) {
         cancel = timer.schedule(() => update({ ...state, info: null }), 4000);
       }
     },
+    replaceInfoWithResult(previous: string, message: string, kind: "info" | "error") {
+      const info = state.info === previous ? null : state.info;
+      if (info === null) cancel?.();
+      update(
+        kind === "error" ? { info, error: message } : { info, error: state.error, result: message },
+      );
+    },
     dismissError: () => {
-      update({ ...state, error: null });
+      update({ info: state.info, error: null });
     },
     dispose: () => {
       cancel?.();
@@ -47,6 +54,15 @@ export function Notices({ notices }: { notices: NoticePort }) {
           className="rounded-md border border-wait/30 bg-surface px-4 py-3 text-wait shadow-lg break-words"
         >
           {state.error}
+        </div>
+      ) : null}
+      {state.result !== undefined ? (
+        <div
+          role="status"
+          aria-label="操作の結果"
+          className="rounded-md border border-line bg-surface px-4 py-3 text-ink shadow-lg break-words"
+        >
+          {state.result}
         </div>
       ) : null}
       {state.info !== null ? (

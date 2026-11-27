@@ -1,5 +1,6 @@
 import {
   closeSync,
+  existsSync,
   fstatSync,
   mkdirSync,
   openSync,
@@ -14,6 +15,7 @@ import Database from "better-sqlite3";
 import { err, ok, type Result } from "neverthrow";
 import { applyMigrations, migrations, type Migration } from "./migrate";
 import { openDatabase, type OpenedDatabase } from "./open";
+import { recoverRestore, restoreWorkerLockPath } from "./restore-state";
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_INTERVAL_MS = 500;
@@ -46,6 +48,8 @@ export type StartupOptions = {
   homeDir?: string;
   migrations?: Migration[];
   lock?: Omit<AcquireLockOptions, "lockPath">;
+  restoreReceiptWarning?: (error: unknown) => void;
+  now?: () => number;
 };
 
 function defaultSleep(ms: number): Promise<void> {
@@ -199,15 +203,40 @@ export async function startDatabase(
   if (lockResult.isErr()) return err(lockResult.error);
   const lock = lockResult.value;
 
+  let opened: OpenedDatabase | undefined;
   try {
-    const opened = openDatabase(homeDir);
+    opened = openDatabase(homeDir);
     const migrationResult = applyMigrations(opened.sqlite, options.migrations ?? migrations);
     if (migrationResult.isErr()) {
       opened.close();
       return err({ type: "migration_failed", message: migrationResult.error.message });
     }
+    if (existsSync(join(homeDir, "restore.json"))) {
+      const worker = await acquireLock({
+        ...options.lock,
+        lockPath: restoreWorkerLockPath(homeDir),
+        timeoutMs: 0,
+      });
+      if (worker.isOk()) {
+        try {
+          recoverRestore(
+            opened.sqlite,
+            homeDir,
+            options.now ?? options.lock?.now ?? Date.now,
+            options.lock?.isProcessAlive ?? isProcessAlive,
+            options.restoreReceiptWarning,
+          );
+        } finally {
+          worker.value.release();
+        }
+      } else if (worker.error.type !== "lock_timeout") {
+        opened.close();
+        return err(worker.error);
+      }
+    }
     return ok(opened);
   } catch (error) {
+    if (opened?.sqlite.open) opened.close();
     return err({
       type: "open_failed",
       message: `データベースを開けませんでした: ${messageOf(error)}`,

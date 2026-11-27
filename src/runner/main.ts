@@ -1,10 +1,16 @@
 import { accessSync, constants } from "node:fs";
 import { homedir } from "node:os";
+import { join } from "node:path";
+import { rotateLog } from "../shared/log/rotate";
+import { createBackupFiles } from "./modules/settings/adapter/backup-files";
+import { startBackup } from "./modules/settings/usecase/backup";
+import { systemClock } from "./modules/conversation/adapter/system-clock";
 import { startDatabase } from "../shared/db/startup";
 import { readEnvironment } from "../shared/env";
 import { createLogger } from "../shared/log";
 import { startRunnerApp } from "./app";
 
+const startedAt = systemClock.now();
 const environment = readEnvironment("runner", process.env, homedir(), (path) => {
   try {
     accessSync(path, constants.R_OK);
@@ -22,7 +28,21 @@ if (environment.isErr()) {
   log({ level: "error", component: "runner", message: environment.error.message });
   process.exit(1);
 }
-const database = await startDatabase({ homeDir: environment.value.home });
+try {
+  rotateLog(join(environment.value.home, "logs", "runner.log"));
+} catch (error) {
+  log({ level: "warn", component: "runner", message: "ログを整理できませんでした。", error });
+}
+const database = await startDatabase({
+  homeDir: environment.value.home,
+  restoreReceiptWarning: (error) =>
+    log({
+      level: "warn",
+      component: "runner.restore",
+      message: "補助の復元結果ファイルを処理できませんでした。",
+      error,
+    }),
+});
 if (database.isErr()) {
   log({ level: "error", component: "db.migrate", message: database.error.message });
   process.exit(1);
@@ -38,6 +58,20 @@ export const runnerApp = await startRunnerApp({
   openedDatabase.close();
   process.exit(1);
 });
+const backup = startBackup(
+  createBackupFiles(environment.value.home, openedDatabase.sqlite),
+  systemClock,
+  {
+    startedAt,
+    failure: (error) =>
+      log({
+        level: "warn",
+        component: "runner.backup",
+        message: "バックアップを保存できませんでした。",
+        error,
+      }),
+  },
+);
 const keepAlive = setInterval(() => {}, 60_000);
 let stopping = false;
 async function shutdown(signal: NodeJS.Signals): Promise<void> {
@@ -46,7 +80,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   clearInterval(keepAlive);
   const deadline = setTimeout(() => process.exit(1), 19_000);
   try {
-    await runnerApp.shutdown();
+    await Promise.all([runnerApp.shutdown(), backup.stop()]);
     openedDatabase.close();
     log({ level: "info", component: "runner", message: `received ${signal}` });
     clearTimeout(deadline);

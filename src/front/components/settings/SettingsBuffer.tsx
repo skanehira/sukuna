@@ -8,8 +8,10 @@ export function SettingsBuffer({
   view,
   lines,
   columns,
+  side = "main",
 }: {
-  view: "help" | "settings";
+  view: "help" | "settings" | "backups";
+  side?: "main" | "right";
   lines: LineInfo[];
   columns: ColumnDef[];
 }) {
@@ -22,7 +24,7 @@ export function SettingsBuffer({
   }, [lines]);
   return (
     <Buffer
-      side="main"
+      side={side}
       viewName={view}
       lines={lines}
       columns={columns}
