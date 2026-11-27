@@ -98,6 +98,8 @@ function columnStyle(line: LineInfo, def: ColumnDef | undefined, index: number):
   const parts: string[] = [];
   if (width !== null) parts.push(`width:${width}`);
   if (align === "right") parts.push("text-align:right");
+  if (def?.wrap) parts.push("vertical-align:top");
+  if (def?.wrap?.[index]) parts.push("white-space:pre-wrap", "overflow-wrap:anywhere");
   return parts.length === 0 ? null : parts.join(";");
 }
 
@@ -140,6 +142,17 @@ class EmptyColumn extends WidgetType {
   }
 }
 
+function progressStyle(parts: number[]): string {
+  let cursor = 0;
+  const colors = ["done", "doing", "wait", "line"];
+  const gradient = colors.map((color, index) => {
+    const from = cursor;
+    cursor = Math.min(100, cursor + Math.max(0, parts[index] ?? 0) * 100);
+    return `var(--color-${color}) ${from}% ${cursor}%`;
+  });
+  return `background:linear-gradient(to right,${gradient.join(",")}) center / 100% 6px no-repeat`;
+}
+
 function lineDecoration(
   lines: LineInfo[],
   index: number,
@@ -163,6 +176,7 @@ function lineDecoration(
 
   const style = [
     paddingStyle(lines, index),
+    line.progress ? progressStyle(line.progress) : null,
     line.kind === "pair" && (def?.widths[0] ?? 0) > 0
       ? `padding-left:calc(${def?.widths[0]}rem + 16px);text-indent:calc(-${def?.widths[0]}rem - 8px)`
       : null,

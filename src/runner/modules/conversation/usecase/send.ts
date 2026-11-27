@@ -1,4 +1,5 @@
 import { prepareAcceptance } from "./run-options";
+import { sameDraftReceipt } from "../../../../shared/conversation/api";
 import { err, ok, type Result } from "neverthrow";
 import type { ConversationRuntime, DeliveryError, InputAcceptance } from "./runtime";
 import type { ProjectRunReservation, SendResult } from "../domain/conversation-store";
@@ -22,17 +23,23 @@ export function send(
     }
     return Promise.resolve(err(conflict()));
   }
+  const change = input.restoreDraft;
+  const deadline = callerInputAcceptance(callerCancelled);
+  const acceptance: InputAcceptance | undefined = change
+    ? {
+        ...deadline,
+        events: [],
+        check: () =>
+          deadline?.check?.() ??
+          (sameDraftReceipt(this.store.draft(id), change.expected)
+            ? null
+            : conflict("別の端末で書きかけが変わりました。預け直す前の書きかけを残しました。")),
+        before: () => this.store.writeDraft(id, change.replacement),
+      }
+    : deadline;
   return this.serial(
     id,
-    () =>
-      sendUnlocked.call(
-        this,
-        id,
-        input,
-        callerInputAcceptance(callerCancelled),
-        accepted,
-        projectRun,
-      ),
+    () => sendUnlocked.call(this, id, input, acceptance, accepted, projectRun),
     callerCancelled,
   );
 }
@@ -85,6 +92,9 @@ export async function sendUnlocked(
           ...(input.timelineComments === undefined
             ? {}
             : { timelineComments: input.timelineComments }),
+          ...(input.timelineAnchors === undefined
+            ? {}
+            : { timelineAnchors: input.timelineAnchors }),
           position: (queue.at(-1)?.position ?? 0) + 1,
           clientId: input.clientId ?? null,
           createdAt: this.options.clock.now(),
@@ -96,7 +106,7 @@ export async function sendUnlocked(
         if (refused) throw new InputRefused(refused);
       },
     );
-    this.partsChanged(id, ["queue"]);
+    this.partsChanged(id, input.restoreDraft ? ["queue", "draft"] : ["queue"]);
     accepted?.(true);
     return ok({ result: "queued", queuedId });
   }
@@ -120,6 +130,7 @@ export async function sendUnlocked(
     );
     if (delivered.isOk()) {
       committed?.();
+      if (input.restoreDraft) this.partsChanged(id, ["draft"]);
       accepted?.(true);
     } else rejected?.();
     return delivered;

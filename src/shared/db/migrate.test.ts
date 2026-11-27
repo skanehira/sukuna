@@ -55,6 +55,50 @@ describe("マイグレーション", () => {
       removeTempHome(home);
     }
   });
+  it("相談の範囲を保存する列を追加しても、以前の下書きと預けた相談コメントを保つ", () => {
+    const home = createTempHome();
+    const opened = openDatabase(home);
+    const comments = JSON.stringify([{ task_id: "task", text: "相談本文" }]);
+    try {
+      expect(applyMigrations(opened.sqlite, migrations.slice(0, 2)).isOk()).toBe(true);
+      opened.sqlite.exec(
+        "INSERT INTO conversations (id, project_id, kind, cwd) VALUES ('c', 'p', 'chat', '/work')",
+      );
+      opened.sqlite
+        .prepare(
+          "INSERT INTO drafts (conversation_id, text, images, updated_at, updated_by) VALUES ('c', '下書き', ?, 20, 'tab')",
+        )
+        .run(JSON.stringify(["image"]));
+      opened.sqlite
+        .prepare(
+          "INSERT INTO queued_instructions (id, conversation_id, text, images, position, client_id, created_at, timeline_comments) VALUES ('q', 'c', '相談の指示', '[]', 1, 'client', 21, ?)",
+        )
+        .run(comments);
+      expect(applyMigrations(opened.sqlite, migrations).isOk()).toBe(true);
+      expect(
+        opened.sqlite
+          .prepare("SELECT text, images, updated_at, updated_by, timeline_anchors FROM drafts")
+          .all(),
+      ).toEqual([
+        {
+          text: "下書き",
+          images: '["image"]',
+          updated_at: 20,
+          updated_by: "tab",
+          timeline_anchors: null,
+        },
+      ]);
+      expect(
+        opened.sqlite
+          .prepare("SELECT text, timeline_comments, timeline_anchors FROM queued_instructions")
+          .all(),
+      ).toEqual([{ text: "相談の指示", timeline_comments: comments, timeline_anchors: null }]);
+    } finally {
+      opened.close();
+      removeTempHome(home);
+    }
+  });
+
   it("当て済みのデータベースにもう一度当てても、何も変わらない", () => {
     const home = createTempHome();
     const opened = openMigratedDatabase(home);

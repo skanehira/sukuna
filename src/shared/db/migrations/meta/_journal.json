@@ -15,6 +15,13 @@
       "when": 1795766053786,
       "tag": "0001_hard_maggott",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1795807288566,
+      "tag": "0002_material_aaron_stack",
+      "breakpoints": true
     }
   ]
 }

@@ -1,17 +1,18 @@
 import type { Answers, ConversationEvent, RunState, StopReason } from "../../../shared/events";
+import type {
+  ConversationContent,
+  ConversationDraft,
+  ConversationDraftRequest,
+  ConversationMessage,
+  ConversationQueueItem,
+} from "../../../shared/conversation/api";
 import type { StockSendInput } from "../../../shared/stock";
 
 export type Event = ConversationEvent & { seq: number; createdAt: number; missingImages?: number };
-export type DraftContent = { text: string; images: string[] };
-export type Draft = DraftContent & { updatedAt: number; updatedBy: string };
-export type DraftRequest = DraftContent & { clientId: string; editedAt: number };
-export type QueueItem = DraftContent & {
-  id: string;
-  position: number;
-  stockItemId: string | null;
-  clientId: string | null;
-  createdAt: number;
-};
+export type DraftContent = ConversationContent;
+export type Draft = ConversationDraft;
+export type DraftRequest = ConversationDraftRequest;
+export type QueueItem = ConversationQueueItem;
 export type Conversation = {
   id: string;
   projectId: string;
@@ -51,11 +52,7 @@ export type ConversationApi = {
   events(this: void, id: string, after: number): Promise<EventsPage>;
   projects(this: void): Promise<Project[]>;
   start(this: void, projectId: string, worktree: boolean): Promise<{ conversation: Conversation }>;
-  send(
-    this: void,
-    id: string,
-    body: DraftContent & { mode: "send" | "interrupt"; clientMessageId: string },
-  ): Promise<MessageResult>;
+  send(this: void, id: string, body: ConversationMessage): Promise<MessageResult>;
   saveDraft(
     this: void,
     id: string,

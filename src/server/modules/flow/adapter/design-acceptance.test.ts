@@ -29,6 +29,7 @@ describe("設計の操作を受理するときの競合", () => {
     images: [],
     updatedAt: 10,
     updatedBy: "tab",
+    timelineAnchors: null,
   };
   const readDraft = () =>
     f.db.select().from(drafts).where(eq(drafts.conversationId, "design")).get();
@@ -460,11 +461,29 @@ describe("設計の操作を受理するときの競合", () => {
 
   it("メニューから送った版の下書きを同じ保存で空にして更新を知らせる", async () => {
     await f.prepare();
-    f.db.insert(drafts).values(version).run();
+    f.db
+      .insert(drafts)
+      .values({
+        ...version,
+        timelineAnchors: [
+          {
+            from: 0,
+            to: version.text.length,
+            originalText: version.text,
+            comments: [{ task_id: "review", text: version.text }],
+          },
+        ],
+      })
+      .run();
 
     expect((await reject(version.text)).status).toBe(202);
 
-    expect(readDraft()).toMatchObject({ text: "", images: [], updatedBy: version.updatedBy });
+    expect(readDraft()).toMatchObject({
+      text: "",
+      images: [],
+      updatedBy: version.updatedBy,
+      timelineAnchors: null,
+    });
     await expect
       .poll(() => f.changes)
       .toContainEqual({ kind: "conversation_parts", conversation_id: "design", parts: ["draft"] });
@@ -474,7 +493,21 @@ describe("設計の操作を受理するときの競合", () => {
     await f.prepare();
     f.db.insert(drafts).values(version).run();
     const forward = f.link.forward.bind(f.link);
-    const newer = { ...version, text: "別タブで追記", updatedAt: 11, updatedBy: "other-tab" };
+    const text = "別タブで追記";
+    const newer = {
+      ...version,
+      text,
+      updatedAt: 11,
+      updatedBy: "other-tab",
+      timelineAnchors: [
+        {
+          from: 0,
+          to: text.length,
+          originalText: text,
+          comments: [{ task_id: "review", text }],
+        },
+      ],
+    };
     vi.spyOn(f.link, "forward").mockImplementation((method, path, input) => {
       f.db.update(drafts).set(newer).where(eq(drafts.conversationId, "design")).run();
       return forward(method, path, input);

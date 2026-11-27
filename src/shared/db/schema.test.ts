@@ -49,7 +49,7 @@ const expectedColumns: Record<string, string[]> = {
     "closed_at",
   ],
   conversation_events: ["conversation_id", "seq", "type", "payload", "sdk_uuid", "created_at"],
-  drafts: ["conversation_id", "text", "images", "updated_at", "updated_by"],
+  drafts: ["conversation_id", "text", "images", "updated_at", "updated_by", "timeline_anchors"],
   queued_instructions: [
     "id",
     "conversation_id",
@@ -60,6 +60,7 @@ const expectedColumns: Record<string, string[]> = {
     "client_id",
     "created_at",
     "timeline_comments",
+    "timeline_anchors",
   ],
   pending_answers: ["conversation_id", "question_seq", "answers", "updated_at"],
   stock_items: [

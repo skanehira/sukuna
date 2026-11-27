@@ -1,5 +1,25 @@
 import type { ActionInfo } from "../../buffer/keymap/registry";
-import { conversationAction, conversationActions, conversationCommands } from "./keymap";
+import {
+  conversationAction,
+  conversationActions,
+  conversationCommands,
+  timelineStopAction,
+} from "./keymap";
+import {
+  draftReceipt,
+  sameDraftReceipt,
+  type ConversationMessage,
+} from "../../../shared/conversation/api";
+import type { ChangeDesc } from "@codemirror/state";
+import {
+  commentsFromAnchors,
+  hasUnlocatedEdits,
+  joinDraftContent,
+  queueDraftContent,
+  unlocatedConsultationNotice,
+} from "../../../shared/progress/draft";
+import { consultationContent, mapTimelineAnchors, replaceRange } from "./timeline-draft";
+import { consultationPrefix, continueWork } from "../work-actions";
 import type { Answers } from "../../../shared/events";
 import { eventSchema } from "../../../shared/events";
 import type { ServerMessage } from "../../../shared/ws";
@@ -7,11 +27,26 @@ import type { BufferHandle } from "../../buffer/Buffer";
 import type { BufferController, PromptSpec } from "../../buffer/controller";
 import type { LineInfo } from "../../buffer/line";
 import { canPlaceCursor } from "../../buffer/no-cursor";
+import type { WorkMonitor } from "./work-monitor";
 import type { RecapSession } from "../recap/session";
-import { DraftSync } from "./draft-sync";
+import { DraftSync, sameDraftContent } from "./draft-sync";
+import {
+  appendCancelledDraft,
+  mapCancelledDraft,
+  ownsCancelledDraft,
+  removeCancelledDraft,
+  type CancelledDraft,
+} from "./queue-undo";
 import { ConversationApiError } from "./api";
 import { eventLines, stoppedText } from "./lines";
-import type { ConversationApi, DraftContent, Event, QueueItem, Snapshot } from "./types";
+import type {
+  ConversationApi,
+  DraftContent,
+  DraftRequest,
+  Event,
+  QueueItem,
+  Snapshot,
+} from "./types";
 
 export type ConversationEnvironment = {
   clientId: string;
@@ -21,8 +56,22 @@ export type ConversationEnvironment = {
 };
 type QuestionEvent = Extract<Event, { type: "question" }>;
 type Block = { event: Event; lines: LineInfo[] };
+type UndoRequest = { message: ConversationMessage; local: DraftSync };
+type DeferredDraftSave = {
+  local: DraftSync;
+  expected?: NonNullable<Snapshot["draft"]>;
+  conflicted: boolean;
+  saving?: Promise<boolean>;
+  pending?: DraftRequest;
+  queued?: boolean;
+};
+type QueueUndo = { item: QueueItem; draft: CancelledDraft | null; pending?: UndoRequest };
+const undoPending =
+  "預けた指示を戻しています。対象の編集や送信は、復帰の結果が出てから行ってください。";
+const undoConflict = "戻した指示を書きかけの中で確認できません。書きかけはそのまま残しました。";
 export class ConversationSession {
   recap?: RecapSession;
+  monitor?: WorkMonitor;
   unreadSeq: number | null = null;
   private tailLines: Record<string, LineInfo[]> = {};
   private state: { data: Snapshot | null; version: number } = { data: null, version: 0 };
@@ -40,10 +89,12 @@ export class ConversationSession {
   private appliedFetch = 0;
   private cancelSave: (() => void) | null = null;
   private messageId: string | null = null;
-  private undo: QueueItem | null = null;
-  private undoDraft: DraftContent | null = null;
+  private undo: QueueUndo | null = null;
+  private deferredDraftSave: DeferredDraftSave | null = null;
+  private queueOperation = false;
   private queueEditing: QueueItem | null = null;
   private online = true;
+  private connected = false;
   readonly id: string;
   readonly api: ConversationApi;
   readonly controller: BufferController;
@@ -85,14 +136,16 @@ export class ConversationSession {
     }
     this.refreshTail();
     this.recap?.loaded(this.state.data!, this.events);
+    this.monitor?.loaded();
     this.emit();
     return this.id;
   }
   private adopt(data: Snapshot, preserveDraft = false, readVersion?: number): void {
     this.state = { ...this.state, data };
-    const result = preserveDraft
-      ? { replaced: false, notice: null }
-      : this.draft.receive(data.draft, readVersion);
+    const result =
+      preserveDraft || this.undo?.pending
+        ? { replaced: false, notice: null }
+        : this.draft.receive(data.draft, readVersion);
     if (result.notice) this.controller.notify(result.notice);
     if (result.replaced && this.controller.snapshot().prompt?.label === "指示")
       this.controller.replacePromptText(this.draft.content().text);
@@ -117,6 +170,7 @@ export class ConversationSession {
     this.adopt(data, preserveDraft || this.draft !== draft, version);
   }
   connect(): () => void {
+    this.connected = true;
     let connecting = true;
     const conversation = this.state.data?.conversation;
     if (conversation?.kind === "chat" && conversation.closedAt !== null)
@@ -125,7 +179,7 @@ export class ConversationSession {
       });
     const oldPrompt = this.controller.options.prompt?.bind(this.controller.options);
     this.controller.options.prompt = () => this.prompt();
-    this.bindAction(conversationActions.stop, async () => {
+    this.bindAction(timelineStopAction, async () => {
       await this.api.stop(this.id);
       this.controller.notify(
         `会話: ${this.state.data!.conversation.title} の AI を止めました。作業は保存され、指示待ちになります`,
@@ -137,6 +191,7 @@ export class ConversationSession {
       await this.refresh();
     });
     this.bindAction(conversationActions.sendQueue, async () => {
+      this.requireUndoResult();
       await this.api.send(this.id, {
         text: "",
         images: [],
@@ -147,47 +202,7 @@ export class ConversationSession {
     });
     this.bindAction(conversationActions.deleteItem, () => this.deleteQueue());
     this.bindAction(conversationActions.editItem, () => this.editQueue());
-    this.bindAction(conversationActions.undoItem, async () => {
-      const item = this.undo;
-      if (!item) return;
-      if (item.stockItemId)
-        await this.api.sendStock(this.id, { kinds: "instructions", stockIds: [item.stockItemId] });
-      else {
-        if (this.undoDraft) {
-          const current = this.draft.content();
-          const restored = [this.undoDraft.text, item.text].filter(Boolean).join("\n\n");
-          const from = this.undoDraft.images.length;
-          const imageBlock = current.images.slice(from, from + item.images.length);
-          const hasImages =
-            imageBlock.length === item.images.length &&
-            imageBlock.every((id, index) => id === item.images[index]);
-          this.draft.edit(
-            {
-              text: current.text.startsWith(restored)
-                ? this.undoDraft.text + current.text.slice(restored.length)
-                : current.text,
-              images: hasImages
-                ? [
-                    ...current.images.slice(0, from),
-                    ...current.images.slice(from + item.images.length),
-                  ]
-                : current.images,
-            },
-            this.env.now(),
-          );
-          if (!(await this.saveDraft())) throw new Error("書きかけを保存できませんでした");
-        }
-        await this.api.send(this.id, {
-          text: item.text,
-          images: item.images,
-          mode: "send",
-          clientMessageId: this.env.id(),
-        });
-      }
-      this.undo = null;
-      this.undoDraft = null;
-      await this.refresh();
-    });
+    this.bindAction(conversationActions.undoItem, () => this.undoQueue());
     this.bindAction(conversationActions.expandDiff, () => this.fold(false));
     this.bindAction(conversationActions.collapseDiff, () => this.fold(true));
     this.bindAction(conversationActions.sendAnswers, () => this.sendAnswers(false));
@@ -217,9 +232,12 @@ export class ConversationSession {
       ["conversation.switch", "会話を切り替える"],
     ]);
     const disconnectRecap = this.recap?.connect();
+    const disconnectMonitor = this.monitor?.connect();
     return () => {
       connecting = false;
+      this.connected = false;
       disconnectRecap?.();
+      disconnectMonitor?.();
       this.cancelSave?.();
       this.controller.closePrompt();
       if (this.draft.dirty()) void this.saveDraft();
@@ -606,7 +624,8 @@ export class ConversationSession {
       images: content.images.length,
       commands: this.state.data!.commands,
       allowEmpty: true,
-      change: (text) => this.editDraft(text),
+      allowChange: (text, edits) => this.allowUndoEdit({ ...this.draft.content(), text }, edits),
+      change: (text, edits) => this.editDraft(text, undefined, edits),
       submit: (text) => this.send(text, false),
       interrupt: (text) => this.send(text, true),
       close: (text) => {
@@ -614,7 +633,11 @@ export class ConversationSession {
         this.queueEditing = null;
         void this.saveDraft();
         if (text || this.draft.content().images.length)
-          this.controller.notify("書きかけを残しました。i で続きを書けます");
+          this.controller.notify(
+            this.undo?.pending
+              ? "書きかけは預け直しが確定したあとに保存します。"
+              : "書きかけを残しました。i で続きを書けます",
+          );
       },
       paste: (files) => {
         void this.paste(files).catch((error: unknown) =>
@@ -623,15 +646,96 @@ export class ConversationSession {
       },
     };
   }
-  private editDraft(text: string, images = this.draft.content().images): void {
+  openConsultation(task: { id: string; title: string }): void {
+    this.controller.closePrompt();
+    const previous = this.draft.content();
+    if (
+      !this.updateDraft(
+        joinDraftContent(
+          previous,
+          consultationContent(consultationPrefix(task.id, task.title), task.id),
+        ),
+      )
+    )
+      return;
     this.messageId = null;
-    this.draft.edit({ text, images }, this.env.now());
+    this.controller.openPrompt(this.prompt());
+    void this.saveDraft();
+  }
+  async continueTimeline(title: string): Promise<void> {
+    this.requireUndoResult();
+    await continueWork(
+      title,
+      (text) =>
+        this.api.send(this.id, {
+          text,
+          images: [],
+          mode: "send",
+          clientMessageId: this.env.id(),
+          preserveDraft: true,
+          timeline_comments: [],
+        }),
+      (message) => this.controller.notify(message),
+    );
+    await this.refresh();
+  }
+  private editDraft(text: string, images = this.draft.content().images, edits?: ChangeDesc): void {
+    const previous = this.draft.content();
+    const anchors = previous.timeline_anchors;
+    const change = edits ?? replaceRange(previous.text, text);
+    if (
+      !this.updateDraft(
+        {
+          text,
+          images,
+          ...(anchors === undefined
+            ? {}
+            : { timeline_anchors: mapTimelineAnchors(anchors, previous.text, text, change) }),
+        },
+        change,
+      )
+    )
+      return;
+    this.messageId = null;
     this.cancelSave?.();
     this.cancelSave = this.env.schedule(() => {
       void this.saveDraft();
     }, 500);
     this.refreshPrompt();
     if (!text && !images.length) this.controller.patchPrompt({ unsent: undefined });
+  }
+  private movedCancelledDraft(content: DraftContent, edits: ChangeDesc): CancelledDraft | null {
+    const undo = this.undo;
+    if (!undo?.draft || undo.draft.version !== this.draft.version()) return null;
+    return mapCancelledDraft(
+      undo.draft,
+      edits,
+      content.images,
+      undo.item,
+      this.draft.version() + 1,
+    );
+  }
+  private allowUndoEdit(content: DraftContent, edits: ChangeDesc): boolean {
+    const undo = this.undo;
+    if (!undo?.pending) return true;
+    const moved = this.movedCancelledDraft(content, edits);
+    if (moved && ownsCancelledDraft(content, moved, undo.item)) return true;
+    this.controller.notify(undoPending, "error");
+    return false;
+  }
+  private updateDraft(content: DraftContent, edits?: ChangeDesc): boolean {
+    const previous = this.draft.content();
+    const change = edits ?? replaceRange(previous.text, content.text);
+    if (!this.allowUndoEdit(content, change)) return false;
+    const moved = this.movedCancelledDraft(content, change);
+    if (this.undo) this.undo.draft = moved;
+    if (this.deferredDraftSave?.conflicted && !sameDraftContent(content, previous))
+      this.deferredDraftSave = null;
+    this.draft.edit(content, this.env.now());
+    return true;
+  }
+  private requireUndoResult(): void {
+    if (this.undo?.pending) throw new Error(undoPending);
   }
   private refreshPrompt(): void {
     if (["指示", "預けた指示"].includes(this.controller.snapshot().prompt?.label ?? ""))
@@ -640,27 +744,91 @@ export class ConversationSession {
   async saveDraft(): Promise<boolean> {
     this.cancelSave?.();
     this.cancelSave = null;
-    if (!this.online) return false;
+    if (!this.online || this.undo?.pending) return false;
     if (!this.draft.dirty()) return true;
     const draft = this.draft;
-    const request = draft.request();
+    const deferred = this.deferredDraftSave?.local === draft ? this.deferredDraftSave : null;
+    if (deferred?.conflicted) return false;
+    if (!deferred) return this.persistDraft(draft, null);
+    if (deferred.saving) {
+      deferred.queued = true;
+      return deferred.saving;
+    }
+    const saving = this.persistDeferredDraft(draft, deferred);
+    deferred.saving = saving;
+    return saving;
+  }
+  private async persistDeferredDraft(
+    draft: DraftSync,
+    deferred: DeferredDraftSave,
+  ): Promise<boolean> {
+    let retried = false;
+    try {
+      while (deferred === this.deferredDraftSave && draft === this.draft) {
+        if (!this.online) return false;
+        if (await this.persistDraft(draft, deferred)) {
+          if (!draft.dirty()) return true;
+          continue;
+        }
+        if (!deferred.queued || retried || !deferred.pending || deferred.conflicted) return false;
+        retried = true;
+        deferred.queued = false;
+      }
+      return true;
+    } finally {
+      delete deferred.saving;
+      delete deferred.queued;
+    }
+  }
+  private async persistDraft(
+    draft: DraftSync,
+    deferred: DeferredDraftSave | null,
+  ): Promise<boolean> {
+    const request = deferred
+      ? (deferred.pending ??= { ...draft.request(), expectedDraft: deferred.expected })
+      : draft.request();
+    const version = draft.version();
+    const undo = this.undo;
     try {
       const result = await this.api.saveDraft(this.id, request);
-      if (draft.saved(request, result.draft) && this.draft === draft && !result.applied) {
+      const adopted = draft.saved(request, result.draft) && this.draft === draft;
+      const stored = deferred !== null || result.applied || sameDraftContent(request, result.draft);
+      if (deferred && deferred === this.deferredDraftSave) {
+        delete deferred.pending;
+        if (adopted || draft !== this.draft) this.deferredDraftSave = null;
+        else deferred.expected = draftReceipt(request);
+      }
+      if (adopted && this.undo === undo && undo?.draft?.version === version && stored) {
+        undo.draft.stored = result.draft;
+        undo.draft.version = this.draft.version();
+      }
+      if (adopted && !stored) {
         this.controller.replacePromptText(this.draft.content().text);
         this.controller.notify("別の端末で書いた内容に置き換わりました");
       }
       return true;
     } catch (error) {
+      if (
+        deferred &&
+        deferred === this.deferredDraftSave &&
+        error instanceof ConversationApiError &&
+        error.status < 500
+      ) {
+        delete deferred.pending;
+        if (error.status === 409) deferred.conflicted = true;
+      }
       this.controller.notify(this.reason(error), "error");
       return false;
     }
   }
   private async send(text: string, interrupt: boolean): Promise<boolean> {
+    this.requireUndoResult();
     const draft = this.draft;
     const version = draft.version();
     const images = [...draft.content().images];
     const editing = this.queueEditing;
+    const anchors = draft.content().timeline_anchors;
+    const structured = anchors === undefined ? {} : { timeline_anchors: anchors };
     const promptId = this.controller.snapshot().promptId;
     let sentMessageId: string | null = null;
     if (!text.trim() && !images.length && !this.state.data?.queue.length)
@@ -668,8 +836,9 @@ export class ConversationSession {
     this.cancelSave?.();
     try {
       if (!this.online) throw new Error("サーバーにつながりません");
+      if (hasUnlocatedEdits({ text, ...structured })) throw new Error(unlocatedConsultationNotice);
       if (editing) {
-        await this.api.editQueue(this.id, editing.id, { text, images });
+        await this.api.editQueue(this.id, editing.id, { text, images, ...structured });
       } else {
         this.messageId ??= this.env.id();
         sentMessageId = this.messageId;
@@ -681,6 +850,9 @@ export class ConversationSession {
           images,
           mode: interrupt ? "interrupt" : "send",
           clientMessageId: sentMessageId,
+          ...(anchors === undefined
+            ? {}
+            : { ...structured, timeline_comments: commentsFromAnchors(text, anchors) }),
         });
         this.controller.notify(
           reopening
@@ -740,19 +912,16 @@ export class ConversationSession {
   }
   private async deleteQueue(): Promise<void> {
     const item = this.selectedQueue();
-    if (!item) return;
+    if (!item || this.queueOperation) return;
+    this.requireUndoResult();
+    this.queueOperation = true;
     try {
+      if (!item.stockItemId && !(await this.saveDraft()))
+        throw new Error("書きかけを保存できませんでした");
+      const previous = this.draft.content();
       await this.api.deleteQueue(this.id, item.id);
-      this.undo = item;
-      this.undoDraft = item.stockItemId ? null : this.draft.content();
-      if (this.undoDraft)
-        this.draft.edit(
-          {
-            text: [this.undoDraft.text, item.text].filter(Boolean).join("\n\n"),
-            images: [...this.undoDraft.images, ...item.images],
-          },
-          this.env.now(),
-        );
+      const undo: QueueUndo = { item, draft: null };
+      this.undo = undo;
       if (this.state.data)
         this.state.data = {
           ...this.state.data,
@@ -760,20 +929,125 @@ export class ConversationSession {
         };
       this.refreshTail();
       this.emit();
+      if (!item.stockItemId) {
+        const stored = (await this.api.get(this.id)).draft;
+        const current = this.draft.content();
+        const { content, addition } = appendCancelledDraft(previous, item);
+        if (sameDraftContent(content, stored)) {
+          if (sameDraftContent(previous, current))
+            this.draft.edit(content, Math.max(this.env.now(), stored?.updatedAt ?? 0));
+          if (sameDraftContent(content, this.draft.content()))
+            undo.draft = { ...addition, version: this.draft.version(), stored };
+        } else if (sameDraftContent(previous, current)) {
+          this.draft = new DraftSync(this.env.clientId, stored);
+        }
+      }
       this.controller.notify("預けた指示を取り消しました。u で戻せます");
     } catch (error) {
       if (error instanceof ConversationApiError && error.status === 404) {
         await this.refresh();
         this.controller.notify("すでに届きました");
       } else throw error;
+    } finally {
+      this.queueOperation = false;
     }
   }
+  private async undoQueue(): Promise<void> {
+    const undo = this.undo;
+    if (!undo || this.queueOperation) return;
+    this.queueOperation = true;
+    try {
+      const { item } = undo;
+      if (item.stockItemId)
+        await this.api.sendStock(this.id, { kinds: "instructions", stockIds: [item.stockItemId] });
+      else {
+        undo.pending ??= await this.prepareUndoRequest(undo);
+        await this.api.send(this.id, undo.pending.message);
+        this.reconcileRestoredDraft(undo);
+      }
+      this.undo = null;
+      const failedSave = this.deferredDraftSave?.local === this.draft && !(await this.saveDraft());
+      await this.refresh(failedSave);
+    } catch (error) {
+      if (error instanceof ConversationApiError && error.status === 409 && undo.pending) {
+        this.deferredDraftSave = { local: this.draft, conflicted: true };
+        this.undo = null;
+      }
+      throw error;
+    } finally {
+      this.queueOperation = false;
+    }
+  }
+  private reconcileRestoredDraft(undo: QueueUndo): void {
+    const pending = undo.pending!;
+    const added = undo.draft;
+    if (this.draft !== pending.local || !added || added.version !== this.draft.version()) return;
+    const remaining = removeCancelledDraft(this.draft.content(), added, undo.item);
+    if (!remaining) return;
+    const replacement = pending.message.restoreDraft!.replacement;
+    this.draft = new DraftSync(this.env.clientId, replacement);
+    if (!sameDraftContent(remaining, replacement)) {
+      this.draft.edit(remaining, this.env.now());
+      this.deferredDraftSave = { local: this.draft, expected: replacement, conflicted: false };
+    }
+    if (this.connected && this.controller.snapshot().prompt?.label === "指示") {
+      this.controller.replacePromptText(this.draft.content().text);
+      this.refreshPrompt();
+    }
+  }
+  private async prepareUndoRequest(undo: QueueUndo): Promise<UndoRequest> {
+    const { draft: added, item } = undo;
+    const local = this.draft;
+    const version = local.version();
+    if (!added || added.version !== version) throw new Error(undoConflict);
+    const latest = (await this.api.get(this.id)).draft;
+    if (
+      this.draft !== local ||
+      local.version() !== version ||
+      !(
+        sameDraftReceipt(added.stored, latest) ||
+        (latest?.updatedBy === this.env.clientId && sameDraftContent(local.content(), latest))
+      )
+    )
+      throw new Error(undoConflict);
+    const remaining = removeCancelledDraft(local.content(), added, item);
+    if (!remaining) throw new Error(undoConflict);
+    this.cancelSave?.();
+    this.cancelSave = null;
+    return {
+      local,
+      message: {
+        text: item.text,
+        images: item.images,
+        mode: "send",
+        clientMessageId: this.env.id(),
+        ...(item.timeline_comments === undefined
+          ? {}
+          : { timeline_comments: item.timeline_comments }),
+        ...(item.timeline_anchors === undefined ? {} : { timeline_anchors: item.timeline_anchors }),
+        preserveDraft: true,
+        restoreDraft: {
+          expected: latest,
+          replacement: {
+            ...remaining,
+            updatedBy: this.env.clientId,
+            updatedAt: Math.max(
+              this.env.now(),
+              local.request().editedAt + 1,
+              (latest?.updatedAt ?? 0) + 1,
+            ),
+          },
+        },
+      },
+    };
+  }
   private editQueue(): void {
+    this.requireUndoResult();
     const item = this.selectedQueue();
     if (!item) return;
     this.controller.closePrompt();
     this.queueEditing = item;
-    this.draft.edit({ text: item.text, images: item.images }, this.env.now());
+    this.draft.edit(queueDraftContent(item), this.env.now());
     this.controller.openPrompt(this.prompt());
   }
   private fold(collapse: boolean): void {
@@ -800,6 +1074,13 @@ export class ConversationSession {
   }
   receive(message: ServerMessage): void {
     if (message.topic !== `conversation:${this.id}`) return;
+    this.monitor?.receive(message);
+    if (
+      message.type === "changed" &&
+      message.payload.parts?.length === 1 &&
+      message.payload.parts[0] === "timeline"
+    )
+      return;
     if (message.type === "changed" || message.type === "state") this.recap?.changed();
     if (message.type === "delta") this.delta(message.payload.text);
     else if (message.type === "event") {

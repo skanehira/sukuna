@@ -1,3 +1,5 @@
+import type { ConversationDraft } from "../../../../shared/conversation/api";
+import { readDraft, writeDraft } from "../../../../shared/conversation/sqlite-draft";
 import { statSync } from "node:fs";
 import {
   ConversationWorkspaceChanged,
@@ -24,6 +26,7 @@ import { err, ok, Result } from "neverthrow";
 import type Database from "better-sqlite3";
 import { eventSchema, type ConversationEvent, type StoredEvent } from "../../../../shared/events";
 import { nextRunState } from "../domain/run-state";
+import { timelineAnchorSchema } from "../../../../shared/progress/draft";
 import { timelineInputCommentSchema } from "../../../../shared/progress/schema";
 import type {
   AcceptedInstruction,
@@ -412,18 +415,31 @@ export class SqliteConversationStore implements ConversationStore {
       return restored;
     });
   }
+  draft(id: string): ConversationDraft | null {
+    return readDraft(this.sqlite, id);
+  }
+  writeDraft(id: string, draft: ConversationDraft): void {
+    writeDraft(this.sqlite, id, draft);
+  }
   queue(id: string): QueuedInstruction[] {
     const rows = this.sqlite
       .prepare(
-        "SELECT id, conversation_id AS conversationId, text, images, position, client_id AS clientId, created_at AS createdAt, timeline_comments AS timelineComments, stock_item_id AS stockItemId FROM queued_instructions WHERE conversation_id = ? ORDER BY position, rowid",
+        "SELECT id, conversation_id AS conversationId, text, images, position, client_id AS clientId, created_at AS createdAt, timeline_comments AS timelineComments, timeline_anchors AS timelineAnchors, stock_item_id AS stockItemId FROM queued_instructions WHERE conversation_id = ? ORDER BY position, rowid",
       )
-      .all(id) as (Omit<QueuedInstruction, "images" | "timelineComments" | "stockItemId"> & {
+      .all(id) as (Omit<
+      QueuedInstruction,
+      "images" | "timelineComments" | "timelineAnchors" | "stockItemId"
+    > & {
       images: string;
       timelineComments: string | null;
+      timelineAnchors: string | null;
       stockItemId: string | null;
     })[];
-    return rows.map(({ timelineComments, stockItemId, ...r }) => ({
+    return rows.map(({ timelineComments, timelineAnchors, stockItemId, ...r }) => ({
       ...r,
+      ...(timelineAnchors === null
+        ? {}
+        : { timelineAnchors: timelineAnchorSchema.array().parse(JSON.parse(timelineAnchors)) }),
       ...(stockItemId === null ? {} : { stockItemId }),
       images: JSON.parse(r.images) as string[],
       ...(timelineComments === null
@@ -438,7 +454,7 @@ export class SqliteConversationStore implements ConversationStore {
   enqueue(q: QueuedInstruction): void {
     this.sqlite
       .prepare(
-        "INSERT INTO queued_instructions (id, conversation_id, text, images, position, client_id, created_at, timeline_comments, stock_item_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO queued_instructions (id, conversation_id, text, images, position, client_id, created_at, timeline_comments, stock_item_id, timeline_anchors) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       )
       .run(
         q.id,
@@ -452,6 +468,7 @@ export class SqliteConversationStore implements ConversationStore {
           ? null
           : JSON.stringify(timelineInputCommentSchema.array().parse(q.timelineComments)),
         q.stockItemId ?? null,
+        q.timelineAnchors ? JSON.stringify(q.timelineAnchors) : null,
       );
   }
   dequeue(id: string, deliveredSeq: number): void {

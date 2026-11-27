@@ -1,3 +1,4 @@
+import type { ConversationMessage } from "../../../../shared/conversation/api";
 import type { Result } from "neverthrow";
 
 export type QueueItem = import("../../../../shared/conversation/api").ConversationQueueItem;
@@ -5,7 +6,7 @@ export type MessageDependencies = {
   receiptMetadata?: boolean;
   prepareAcceptance?: (
     id: string,
-    input: { text: string; images: string[] },
+    input: Pick<ConversationMessage, "text" | "images" | "preserveDraft">,
   ) => (duplicate: boolean) => void;
   runner: {
     call(

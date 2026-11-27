@@ -1,3 +1,7 @@
+import {
+  consultationBodySeparator,
+  consultationMarker as marker,
+} from "../../../../shared/progress/draft";
 import { objectOf, type ActivityEvent } from "../../../../shared/activity/stage";
 import {
   timelineInputCommentSchema,
@@ -5,8 +9,36 @@ import {
   type UnresolvedTimelineComment,
 } from "../../../../shared/progress/schema";
 
-const marker = "タイムラインのタスク ";
 type ConsultationStart = { at: number; bodyAt: number; taskId: string };
+
+function consultationInput(value: unknown) {
+  const payload = objectOf(value);
+  if (
+    !["developer", "queued", "interrupt", "stock", "answer_text"].includes(
+      String(payload.origin),
+    ) ||
+    typeof payload.text !== "string"
+  )
+    return { comments: [], texts: [] };
+  if (!Array.isArray(payload.timeline_comments)) return { comments: [], texts: [payload.text] };
+  return {
+    comments: payload.timeline_comments.flatMap((value: unknown) => {
+      const comment = timelineInputCommentSchema.safeParse(value);
+      return comment.success ? [comment.data] : [];
+    }),
+    texts: Array.isArray(payload.timeline_legacy_texts)
+      ? payload.timeline_legacy_texts.filter((text): text is string => typeof text === "string")
+      : [],
+  };
+}
+
+export function hasTimelineConsultation(payload: unknown): boolean {
+  const { comments, texts } = consultationInput(payload);
+  return (
+    comments.length > 0 ||
+    texts.some((text) => text.startsWith(marker) || text.includes("\n" + marker))
+  );
+}
 
 export function buildTimelineComments(
   tasks: readonly { id: string; title: string }[],
@@ -17,41 +49,19 @@ export function buildTimelineComments(
     ...new Map(
       tasks.map(({ id, title }) => [
         JSON.stringify([id, title]),
-        { prefix: `${marker}${id}「${title}」について: `, taskId: id },
+        { prefix: `${marker}${id}「${title}${consultationBodySeparator}`, taskId: id },
       ]),
     ).values(),
   ];
   const combined = [...comments];
   const unresolvedComments: UnresolvedTimelineComment[] = [];
   for (const event of events) {
-    const payload = objectOf(event.payload);
-    if (
-      event.type !== "user_message" ||
-      !["developer", "queued", "interrupt", "stock", "answer_text"].includes(
-        String(payload.origin),
-      ) ||
-      typeof payload.text !== "string"
-    )
-      continue;
-    const structured = payload.timeline_comments;
-    if (Array.isArray(structured)) {
-      for (const comment of structured) {
-        const parsed = timelineInputCommentSchema.safeParse(comment);
-        if (parsed.success)
-          combined.push({
-            at: event.createdAt,
-            taskId: parsed.data.task_id,
-            text: parsed.data.text,
-          });
-      }
+    if (event.type !== "user_message") continue;
+    const { comments, texts } = consultationInput(event.payload);
+    for (const comment of comments) {
+      combined.push({ at: event.createdAt, taskId: comment.task_id, text: comment.text });
     }
-    const texts = Array.isArray(structured)
-      ? Array.isArray(payload.timeline_legacy_texts)
-        ? payload.timeline_legacy_texts
-        : []
-      : [payload.text];
     for (const text of texts) {
-      if (typeof text !== "string") continue;
       const starts: ConsultationStart[] = [];
       let reason: UnresolvedTimelineComment["reason"] | undefined;
       let cursor = 0;

@@ -36,6 +36,7 @@ export type LineInfo = {
   danger?: boolean;
   done?: boolean;
   mark?: string;
+  progress?: number[];
   tone?: "wait" | "doing" | "done" | "muted";
   strong?: boolean;
   seq?: number;
@@ -47,6 +48,7 @@ export type ColumnDef = {
   widths: number[];
   heads?: string[];
   align?: ("left" | "right")[];
+  wrap?: boolean[];
   classes?: string[];
 };
 

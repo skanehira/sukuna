@@ -13,6 +13,7 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import { expect, it } from "vite-plus/test";
+import { migrations } from "../shared/db/migrate";
 import { createTempHome, removeTempHome, tableNames } from "../shared/db/test-helpers";
 
 it("開発用ランナーのコマンドを実行すると、全テーブルを用意して起動し、SIGTERM で終了する", async () => {
@@ -83,7 +84,7 @@ it("開発用ランナーのコマンドを実行すると、全テーブルを�
         "worktrees",
       ]);
       expect(sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get()).toEqual({
-        count: 2,
+        count: migrations.length,
       });
       expect(existsSync(join(home, "db.lock"))).toBe(false);
     } finally {
@@ -210,7 +211,7 @@ it.each([
       const sqlite = new Database(join(home, "sukuna.db"), { readonly: true });
       try {
         expect(sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get()).toEqual({
-          count: 2,
+          count: migrations.length,
         });
         expect(existsSync(join(home, "db.lock"))).toBe(false);
       } finally {

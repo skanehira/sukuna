@@ -2,11 +2,14 @@ import type Database from "better-sqlite3";
 import type { RunnerNotice } from "../shared/ipc";
 import { clientMessageSchema, type ServerMessage } from "../shared/ws";
 import type { RunState, StopReason } from "../shared/events";
+import type { TimelineWatch } from "./modules/conversation/adapter/timeline-watch";
 import { createNotificationRepository } from "./modules/inbox/adapter/notification-repository";
 import type { InboxDependencies } from "./modules/inbox/domain/ports";
 import { createNotifications } from "./modules/inbox/usecase/notify";
 import type { NotificationWithdrawal } from "./modules/inbox/domain/notification";
 import type { NotificationPush } from "./modules/inbox/domain/push-port";
+
+const conversationPrefix = "conversation:";
 
 export type HubClient = { bufferedAmount: number; send(data: string): unknown; close(): unknown };
 type Subscription = { after: number };
@@ -26,6 +29,15 @@ type EventRow = {
   created_at: number;
   sdk_uuid?: string | null;
 };
+type NotificationOptions = {
+  inbox: InboxDependencies;
+  now(): number;
+  id(): string;
+  onError?(error: unknown): void;
+  notificationPush?: NotificationPush;
+};
+type HubOptions = { timeline?: TimelineWatch } & (NotificationOptions | { inbox?: never });
+
 export class WsHub {
   private clients = new Map<HubClient, Connection>();
   private seq = 0;
@@ -34,45 +46,41 @@ export class WsHub {
   private notifications?: ReturnType<typeof createNotifications>;
   private snapshotPending = true;
   private notificationError?: (error: unknown) => void;
-  constructor(
-    database: Database.Database,
-    options?: {
-      inbox: InboxDependencies;
-      now(): number;
-      id(): string;
-      onError?(error: unknown): void;
-      notificationPush?: NotificationPush;
-    },
-  ) {
+  private timeline?: TimelineWatch;
+  constructor(database: Database.Database, options?: HubOptions) {
     this.database = database;
-    this.notificationError = (error) => options?.onError?.(error);
-    if (options)
-      this.notifications = createNotifications({
-        ...options,
-        inbox: {
-          ...options.inbox,
-          repository: {
-            load: database.transaction((id?: string) => options.inbox.repository.load(id)),
-          },
+    this.timeline = options?.timeline;
+    if (!options?.inbox) return;
+    const { inbox } = options;
+    this.notificationError = (error) => options.onError?.(error);
+    this.notifications = createNotifications({
+      notificationPush: options.notificationPush,
+      now: () => options.now(),
+      id: () => options.id(),
+      inbox: {
+        ...inbox,
+        repository: {
+          load: database.transaction((id?: string) => inbox.repository.load(id)),
         },
-        repository: createNotificationRepository(database),
-        shown: () => this.shownTopics(),
-        publish: (notification) => {
-          const { tag, title, body, url } = notification;
-          const message: ServerMessage = {
-            topic: "app",
-            seq: ++this.seq,
-            type: "notice",
-            payload: { level: "info", message: title + ": " + body, notification: { tag, url } },
-          };
-          for (const client of this.clients.keys()) this.send(client, message);
-          const push = options.notificationPush;
-          if (push)
-            void Promise.resolve()
-              .then(() => push(notification))
-              .catch((error: unknown) => this.notificationError?.(error));
-        },
-      });
+      },
+      repository: createNotificationRepository(database),
+      shown: () => this.shownTopics(),
+      publish: (notification) => {
+        const { tag, title, body, url } = notification;
+        const message: ServerMessage = {
+          topic: "app",
+          seq: ++this.seq,
+          type: "notice",
+          payload: { level: "info", message: title + ": " + body, notification: { tag, url } },
+        };
+        for (const client of this.clients.keys()) this.send(client, message);
+        const push = options.notificationPush;
+        if (push)
+          void Promise.resolve()
+            .then(() => push(notification))
+            .catch((error: unknown) => this.notificationError?.(error));
+      },
+    });
   }
   async withdrawNotifications(target: NotificationWithdrawal): Promise<void> {
     await this.notifications?.withdraw(target);
@@ -94,7 +102,9 @@ export class WsHub {
     this.clients.set(client, { topics: new Map(), shown: new Set(), visible: true });
   }
   remove(client: HubClient): void {
+    const connection = this.clients.get(client);
     this.clients.delete(client);
+    for (const topic of connection?.topics.keys() ?? []) this.releaseTimeline(topic);
   }
   receive(client: HubClient, input: unknown): void {
     const parsed = clientMessageSchema.safeParse(input);
@@ -103,6 +113,8 @@ export class WsHub {
     const message = parsed.data;
     if (message.op === "subscribe") {
       const subscription = { after: message.after ?? 0 };
+      if (message.topic.startsWith(conversationPrefix) && !connection.topics.has(message.topic))
+        this.timeline?.retain(message.topic.slice(conversationPrefix.length));
       connection.topics.set(message.topic, subscription);
       this.replay(client, message.topic, subscription);
       if (message.topic === "app")
@@ -112,8 +124,9 @@ export class WsHub {
           type: "runner",
           payload: { connected: this.runnerConnected },
         });
-    } else if (message.op === "unsubscribe") connection.topics.delete(message.topic);
-    else if (message.op === "shown") {
+    } else if (message.op === "unsubscribe") {
+      if (connection.topics.delete(message.topic)) this.releaseTimeline(message.topic);
+    } else if (message.op === "shown") {
       connection.shown = new Set(
         message.topics.filter(
           (topic) => topic.startsWith("conversation:") || topic.startsWith("issue:"),
@@ -133,6 +146,10 @@ export class WsHub {
           this.notifications?.seen();
         });
     }
+  }
+  private releaseTimeline(topic: string): void {
+    if (topic.startsWith(conversationPrefix))
+      this.timeline?.release(topic.slice(conversationPrefix.length));
   }
   shownTopics(): Set<string> {
     return new Set([...this.clients.values()].flatMap((c) => (c.visible ? [...c.shown] : [])));

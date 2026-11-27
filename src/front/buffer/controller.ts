@@ -1,4 +1,5 @@
 import { includesConflict, proposeKeymapChange } from "../lib/keymap-commands";
+import type { ChangeDesc } from "@codemirror/state";
 import { createContext } from "react";
 import {
   ActionRegistry,
@@ -31,7 +32,8 @@ export type PromptSpec = {
   candidates?: string[];
   commands?: { name: string; description: string }[];
   unsent?: string;
-  change?(text: string): void;
+  allowChange?(text: string, edits: ChangeDesc): boolean;
+  change?(text: string, edits?: ChangeDesc): void;
   quote?: string[];
   images?: number;
   submit(text: string): void | boolean | Promise<void | boolean>;

@@ -4,7 +4,8 @@ import { z } from "zod";
 import { recapStateSchema } from "./recap/api";
 import { answersSchema, originSchema, runStateSchema } from "./events";
 import { timelineInputCommentSchema } from "./progress/schema";
-import type { PublicConversation } from "./conversation/api";
+import { timelineAnchorSchema, validTimelineAnchors } from "./progress/draft";
+import { restoreConversationDraftSchema, type PublicConversation } from "./conversation/api";
 
 export const RUNNER_IPC_TIMEOUT_MS = 10_000;
 export const RUNNER_IPC_DEADLINE_HEADER = "x-sukuna-ipc-deadline";
@@ -37,15 +38,23 @@ export const startConversationSchema = z.object({
   issue_id: z.string().nullable().optional(),
   parent_conversation_id: z.string().nullable().optional(),
 });
-export const sendMessageSchema = z.object({
-  receipt_metadata: z.boolean().optional(),
-  text: z.string(),
-  images: z.array(z.string()),
-  interrupt: z.boolean(),
-  client_id: z.string().min(1),
-  origin: originSchema,
-  timeline_comments: z.array(timelineInputCommentSchema).optional(),
-});
+export const sendMessageSchema = z
+  .object({
+    receipt_metadata: z.boolean().optional(),
+    restore_draft: restoreConversationDraftSchema.optional(),
+    text: z.string(),
+    images: z.array(z.string()),
+    interrupt: z.boolean(),
+    client_id: z.string().min(1),
+    origin: originSchema,
+    timeline_comments: z.array(timelineInputCommentSchema).optional(),
+    timeline_anchors: z.array(timelineAnchorSchema).optional(),
+  })
+  .refine(validTimelineAnchors)
+  .refine(
+    ({ restore_draft, origin, interrupt }) =>
+      !restore_draft || (origin === "developer" && !interrupt),
+  );
 export const forkConversationSchema = z.object({ title: z.string(), kind: z.literal("thread") });
 export const answerSchema = z.object({ request_id: z.string(), answers: answersSchema });
 export const permissionSchema = z.object({

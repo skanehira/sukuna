@@ -25,14 +25,24 @@ export const conversationActions = {
   collapseDiff: conversationAction("diff.collapse", "差分を畳む"),
 };
 
+export const timelineStopAction: ScopedAction = {
+  ...conversationActions.stop,
+  where: "会話・タイムライン・タスクの詳細",
+  views: ["conversation", "timeline", "timeline-task"],
+};
+
 const itemLabels: Record<string, string> = {
   [conversationActions.deleteItem.name]: "選んだ項目を消す",
   [conversationActions.editItem.name]: "選んだ項目を直す",
   [conversationActions.undoItem.name]: "消した項目を戻す",
 };
 
-export function conversationActionHelp(additionalItems: ScopedAction[]): ActionInfo[] {
+export function conversationActionHelp(
+  additionalItems: ScopedAction[],
+  timeline = false,
+): ActionInfo[] {
   return Object.values(conversationActions).map((action) => {
+    if (timeline && action === conversationActions.stop) return timelineStopAction;
     const additional = additionalItems.filter((item) => item.name === action.name);
     if (additional.length === 0) return action;
     const places = [action, ...additional];

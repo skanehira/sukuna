@@ -1,3 +1,5 @@
+import type { ConversationDraft } from "../../../../shared/conversation/api";
+import type { TimelineAnchor } from "../../../../shared/progress/draft";
 import type { WorktreeActivityReservation } from "../../../../shared/workspace/worktree-activity";
 import type { Result } from "neverthrow";
 import type { WorkspaceSwitchAttempt } from "../../../../shared/ipc";
@@ -33,6 +35,7 @@ export type QueuedInstruction = {
   text: string;
   images: string[];
   timelineComments?: TimelineInputComment[];
+  timelineAnchors?: TimelineAnchor[];
   position: number;
   clientId: string | null;
   createdAt: number;
@@ -80,6 +83,8 @@ export interface ConversationStore {
   stageAccepted(instruction: AcceptedInstruction): void;
   removeAccepted(id: string): boolean;
   recoverAccepted(id?: string): boolean;
+  draft(id: string): ConversationDraft | null;
+  writeDraft(id: string, draft: ConversationDraft): void;
   queue(id: string): QueuedInstruction[];
   enqueue(instruction: QueuedInstruction): void;
   dequeue(id: string, deliveredSeq: number): void;

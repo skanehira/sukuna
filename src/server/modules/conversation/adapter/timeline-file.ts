@@ -9,6 +9,12 @@ const SHAPE_ERROR = "タイムラインのファイルの形式が正しくあ�
 const SIZE_ERROR = "タイムラインのファイルが 4 MiB を超えています。";
 type ReadFailure = "missing" | "shape" | "size" | "io";
 
+export function timelineFilePath(configDir: string, sessionId: string): string | null {
+  return /^[A-Za-z0-9_-]+$/.test(sessionId)
+    ? join(configDir, "timeline", "sessions", `${sessionId}.json`)
+    : null;
+}
+
 export function createTimelineFilePort(options: {
   configDir: string;
   sleep(milliseconds: number): Promise<void>;
@@ -16,9 +22,9 @@ export function createTimelineFilePort(options: {
   const cache = new Map<string, TimelineFile>();
   return {
     async read(sessionId) {
-      if (!/^[A-Za-z0-9_-]+$/.test(sessionId))
+      const path = timelineFilePath(options.configDir, sessionId);
+      if (path === null)
         return { file: null, readError: "タイムラインの session id が正しくありません。" };
-      const path = join(options.configDir, "timeline", "sessions", `${sessionId}.json`);
       let read = await readFile(path);
       if (read.isErr() && read.error === "shape") {
         await options.sleep(200);

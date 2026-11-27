@@ -1,3 +1,5 @@
+import { sameDraftReceipt } from "../../../shared/conversation/api";
+import { joinDraftContent } from "../../../shared/progress/draft";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { EditorView } from "@codemirror/view";
@@ -101,6 +103,44 @@ function fakeApi(overrides: Partial<ConversationApi> = {}): ConversationApi {
     ...overrides,
   };
 }
+function persistentQueueApi(queued: Snapshot["queue"][number], initial: Snapshot["draft"] = null) {
+  let draft = initial;
+  let queue = [queued];
+  return fakeApi({
+    get: async () => ({ ...snapshot, draft, queue }),
+    send: vi.fn<ConversationApi["send"]>(async (_id, body) => {
+      const restore = body.restoreDraft;
+      if (restore) {
+        if (!sameDraftReceipt(restore.expected, draft))
+          throw new Error("別の端末で書きかけが変わりました。");
+        draft =
+          restore.replacement.text || restore.replacement.images.length
+            ? restore.replacement
+            : null;
+      }
+      return { result: "delivered", queueItem: null };
+    }),
+    deleteQueue: vi.fn(async () => {
+      queue = [];
+      if (!queued.stockItemId)
+        draft = {
+          ...joinDraftContent(draft ?? { text: "", images: [] }, queued),
+          updatedAt: 1000,
+          updatedBy: draft?.updatedBy ?? "other",
+        };
+    }),
+    saveDraft: vi.fn(async (_id, body) => {
+      const { clientId, editedAt, ...content } = body;
+      if (draft && editedAt <= draft.updatedAt) return { draft, applied: false };
+      draft =
+        content.text || content.images.length
+          ? { ...content, updatedAt: editedAt, updatedBy: clientId }
+          : null;
+      return { draft, applied: true };
+    }),
+  });
+}
+
 async function mount(api = fakeApi(), events: Event[] = []) {
   const controller = new BufferController({ url: "/conversations/c1" });
   const session = new ConversationSession("c1", api, controller, {
@@ -1029,12 +1069,11 @@ describe("会話の画面", () => {
         clientId: null,
         createdAt: 0,
       };
-      const api = fakeApi({
-        get: async () => ({
-          ...snapshot,
-          draft: { text: "書きかけ", images: ["draft-image"], updatedAt: 10, updatedBy: "other" },
-          queue: [queued],
-        }),
+      const api = persistentQueueApi(queued, {
+        text: "書きかけ",
+        images: ["draft-image"],
+        updatedAt: 10,
+        updatedBy: "other",
       });
       const { controller } = await mount(api);
       const view = main();
@@ -1057,19 +1096,29 @@ describe("会話の画面", () => {
       key(view, "u");
       await flush();
       await waitFor(() =>
-        expect(api.saveDraft).toHaveBeenLastCalledWith("c1", {
-          text: `書きかけ${extra}`,
-          images: ["draft-image"],
-          clientId: "tab",
-          editedAt: extra ? 1002 : 1001,
+        expect(api.send).toHaveBeenCalledWith("c1", {
+          text: "後の指示",
+          images: ["queued-image"],
+          mode: "send",
+          clientMessageId: "message-id",
+          preserveDraft: true,
+          restoreDraft: {
+            expected: {
+              text: `書きかけ\n\n後の指示${extra}`,
+              images: ["draft-image", "queued-image"],
+              updatedAt: extra ? 1001 : 1000,
+              updatedBy: extra ? "tab" : "other",
+            },
+            replacement: {
+              text: `書きかけ${extra}`,
+              images: ["draft-image"],
+              updatedAt: extra ? 1002 : 1001,
+              updatedBy: "tab",
+            },
+          },
         }),
       );
-      expect(api.send).toHaveBeenCalledWith("c1", {
-        text: "後の指示",
-        images: ["queued-image"],
-        mode: "send",
-        clientMessageId: "message-id",
-      });
+      expect((await api.get("c1")).draft?.text).toBe(`書きかけ${extra}`);
       expect(controller.snapshot().prompt).toBeNull();
     },
   );
@@ -1250,7 +1299,7 @@ describe("会話の画面", () => {
         clientId: null,
         createdAt: 0,
       };
-      const api = fakeApi({ get: async () => ({ ...snapshot, queue: [queued] }) });
+      const api = persistentQueueApi(queued);
       const { controller } = await mount(api);
       const view = main();
       const row = Array.from({ length: view.state.doc.lines }, (_, i) =>
@@ -1278,6 +1327,11 @@ describe("会話の画面", () => {
           images: [],
           mode: "send",
           clientMessageId: "message-id",
+          preserveDraft: true,
+          restoreDraft: {
+            expected: { text: "後の指示", images: [], updatedAt: 1000, updatedBy: "other" },
+            replacement: { text: "", images: [], updatedAt: 1001, updatedBy: "tab" },
+          },
         });
     },
   );

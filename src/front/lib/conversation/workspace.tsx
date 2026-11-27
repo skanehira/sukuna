@@ -26,6 +26,14 @@ import { ConversationApiError } from "./api";
 import { ConversationSession, type ConversationEnvironment } from "./session";
 import type { ConversationApi, Conversation } from "./types";
 import type { InboxStore } from "../inbox-store";
+import {
+  isTimelineView,
+  MonitorPane,
+  WorkingActivity,
+  WorkMonitor,
+  type ProgressApi,
+} from "./work-monitor";
+import { timelineActions } from "../work-actions";
 
 export function createConversationWorkspace(
   api: ConversationApi,
@@ -40,7 +48,9 @@ export function createConversationWorkspace(
     inbox,
     notifications,
     verifyConnection,
+    progress,
   }: {
+    progress?: { api: ProgressApi; storage: TabStorage };
     recap?: { api: RecapApi; storage: TabStorage };
     lifecycle?: LifecycleOptions;
     settingsChanged?: () => void;
@@ -224,6 +234,11 @@ export function createConversationWorkspace(
           openAtTail={openAtTail}
           recordSeq={Number.isSafeInteger(seq) && seq > 0 ? seq : undefined}
           positionKey={`${screenKey(route)}:main`}
+          activity={
+            session.monitor ? (
+              <WorkingActivity monitor={session.monitor} session={session} />
+            ) : undefined
+          }
         />
       ),
     };
@@ -281,6 +296,12 @@ export function createConversationWorkspace(
           session.recap = new RecapSession(session, recap.api, recap.storage, (fn, ms) =>
             env.schedule(fn, ms),
           );
+        if (progress)
+          session.monitor = new WorkMonitor(session, {
+            ...progress,
+            now: () => env.now(),
+            schedule: (fn, ms) => env.schedule(fn, ms),
+          });
         sessions.set(route.id, session);
       }
       currentSession = session;
@@ -314,6 +335,16 @@ export function createConversationWorkspace(
     connection,
     renderRight: (view: RightView) => {
       if (view.view === "file-tree") return files?.tree(view.target) ?? null;
+      if (isTimelineView(view.view)) {
+        const monitor = sessions.get(view.target)?.monitor;
+        return monitor ? (
+          <MonitorPane
+            key={monitor.positionKey(view.view)}
+            monitor={monitor}
+            view={{ ...view, view: view.view }}
+          />
+        ) : null;
+      }
       if (["recent", "toc", "decisions", "recap-search"].includes(view.view)) {
         const recap = sessions.get(view.target)?.recap;
         return recap ? (
@@ -333,11 +364,32 @@ export function createConversationWorkspace(
     start() {
       const unregister = registerConversationSwitch(controller);
       const unregisterLifecycle = lifecycle?.start();
+      const unregisterTimeline = progress
+        ? controller.actions.register({
+            ...timelineActions.open,
+            group: "そのほか",
+            run: () => {
+              const route = parseRoute(controller.options.url ?? "/");
+              if (
+                currentSession?.monitor &&
+                route.kind === "conversation" &&
+                route.id === currentSession.id &&
+                !route.view
+              )
+                currentSession.monitor.open();
+              else controller.notify("会話か issue を開くと、タイムラインを使えます。");
+            },
+          })
+        : undefined;
       const removeActionHelp = controller.actions.declareHelp([
-        ...conversationActionHelp([
-          ...(recap ? Object.values(recapItemActions) : []),
-          ...(lifecycle ? [listDeleteAction] : []),
-        ]),
+        ...conversationActionHelp(
+          [
+            ...(recap ? Object.values(recapItemActions) : []),
+            ...(lifecycle ? [listDeleteAction] : []),
+          ],
+          progress !== undefined,
+        ),
+        ...(progress ? Object.values(timelineActions) : []),
         ...(recap ? Object.values(recapActions) : []),
       ]);
       const removeCommandHelp = controller.commands.declareHelp([
@@ -351,6 +403,7 @@ export function createConversationWorkspace(
       realtime.start();
       return () => {
         unregister();
+        unregisterTimeline?.();
         unregisterLifecycle?.();
         removeActionHelp();
         removeCommandHelp();

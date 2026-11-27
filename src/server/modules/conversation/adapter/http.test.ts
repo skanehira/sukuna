@@ -2735,7 +2735,13 @@ async function queueApiProcess(f: Awaited<ReturnType<typeof fixture>>) {
       reject(new Error(errors));
     });
   });
-  return (id: string, item: ConversationQueueItem, action: string, changedImage: string) => {
+  return (
+    id: string,
+    item: ConversationQueueItem,
+    action: string,
+    changedImage: string,
+    editedText: string,
+  ) => {
     const edit = action === "edit";
     const args = [
       "-sS",
@@ -2752,7 +2758,7 @@ async function queueApiProcess(f: Awaited<ReturnType<typeof fixture>>) {
         "-H",
         "Content-Type: application/json",
         "-d",
-        JSON.stringify({ text: "編集した本文", images: [changedImage] }),
+        JSON.stringify({ text: editedText, images: [changedImage] }),
       );
     const result = spawnSync("curl", args, { encoding: "utf8" });
     if (result.status !== 0) throw new Error(result.stderr);
@@ -2762,6 +2768,7 @@ async function queueApiProcess(f: Awaited<ReturnType<typeof fixture>>) {
   };
 }
 
+// cross-product: src/runner/modules/conversation/usecase/runtime.ts:541 配達経路が選んだキューを画像準備後に再照合する。別接続の編集、取消し、配達が確定する順で採用する本文と画像が変わる。
 it.each(
   ["send", "queue", "interrupt", "automatic"].flatMap((delivery) =>
     ["edit", "cancel-all-draft", "cancel-all-stock", "cancel-one"].flatMap((action) =>
@@ -2798,7 +2805,11 @@ it.each(
     const image = (await f.upload(id)).body.image.id;
     const gif = Buffer.from("GIF89a");
     const changedImage = (await f.upload(id, gif, "image/gif")).body.image.id;
-    const queued = await f.send(id, "古い本文", "race-original", "send", [image]);
+    const prefix = "タイムラインのタスク 1「確認」について: ";
+    const oldText = action === "edit" ? prefix + "相談1" : "古い本文";
+    const editedBody = "編集した相談";
+    const editedText = prefix + editedBody;
+    const queued = await f.send(id, oldText, "race-original", "send", [image]);
     const item = queued.body.queueItem!;
     const remaining =
       action === "cancel-one"
@@ -2838,7 +2849,7 @@ it.each(
     const operate = await queueApiProcess(f);
     let operation: { status: number; body: unknown } | undefined;
     const change = () => {
-      operation = operate(id, item, action, changedImage);
+      operation = operate(id, item, action, changedImage, editedText);
     };
     const imageFiles = f.runner().runtime.options.images;
     let reads = 0;
@@ -2879,7 +2890,7 @@ it.each(
             ? []
             : [item];
       const expectedInputs = retained.map((queuedItem) => ({
-        text: action === "edit" && !deliveredFirst ? "編集した本文" : queuedItem.text,
+        text: action === "edit" && !deliveredFirst ? editedText : queuedItem.text,
         images: [
           {
             data: queuedItem === item && (deliveredFirst || action !== "edit") ? png : gif,
@@ -2901,7 +2912,19 @@ it.each(
       const sent = messages.at(-1)!;
       const expectedDraft =
         !deliveredFirst && action === "cancel-all-draft"
-          ? { ...draft, text: "書きかけ\n\n古い本文", images: [changedImage, image] }
+          ? {
+              ...draft,
+              text: "書きかけ\n\n古い本文",
+              images: [changedImage, image],
+              timeline_anchors: [
+                {
+                  from: "書きかけ\n\n".length,
+                  to: "書きかけ\n\n古い本文".length,
+                  originalText: "古い本文",
+                  comments: [{ task_id: "1", text: "相談1" }],
+                },
+              ],
+            }
           : draft;
       const acceptedDraft =
         suffix && !noDelivery && !(action === "cancel-all-draft" && phase === "during-images")
@@ -2928,9 +2951,12 @@ it.each(
                 body: {
                   queueItem: {
                     ...item,
-                    text: "編集した本文",
+                    text: editedText,
                     images: [changedImage],
-                    timeline_comments: [{ task_id: "1", text: "相談1" }],
+                    timeline_comments: [{ task_id: "1", text: editedBody }],
+                    timeline_anchors: [
+                      { task_id: "1", from: 0, bodyFrom: prefix.length, to: editedText.length },
+                    ],
                   },
                 },
               }
@@ -2957,7 +2983,12 @@ it.each(
                 ? {
                     timeline_comments: retained.map((queuedItem) => ({
                       task_id: queuedItem === item ? "1" : "2",
-                      text: queuedItem === item ? "相談1" : "相談2",
+                      text:
+                        queuedItem === item
+                          ? action === "edit" && !deliveredFirst
+                            ? editedBody
+                            : "相談1"
+                          : "相談2",
                     })),
                     ...(suffix ? { timeline_legacy_texts: [suffix] } : {}),
                   }

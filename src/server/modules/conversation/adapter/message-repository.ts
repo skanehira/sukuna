@@ -19,9 +19,10 @@ export function createMessageRepository(
         )
         .get();
       if (!row) return null;
-      const { conversationId: _conversationId, timelineComments, ...item } = row;
+      const { conversationId: _conversationId, timelineComments, timelineAnchors, ...item } = row;
       return {
         ...item,
+        ...(timelineAnchors === null ? {} : { timeline_anchors: timelineAnchors }),
         ...(timelineComments === null ? {} : { timeline_comments: timelineComments }),
       };
     },
