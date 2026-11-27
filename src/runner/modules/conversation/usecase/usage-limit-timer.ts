@@ -8,7 +8,7 @@ export class UsageLimitTimer {
   schedule(
     id: string,
     resetsAt: number | null,
-    resume: (current: () => boolean) => void | Promise<void>,
+    resume: (current: () => boolean) => number | void | Promise<number | void>,
     recheckAfter?: () => number | null,
   ): void {
     this.cancel(id);
@@ -19,7 +19,7 @@ export class UsageLimitTimer {
       let next: number | null = null;
       try {
         next = recheckAfter?.() ?? null;
-        if (next === null) await resume(current);
+        if (next === null) next = (await resume(current)) ?? null;
       } finally {
         if (current()) {
           if (next === null) this.timers.delete(id);

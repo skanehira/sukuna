@@ -1,7 +1,12 @@
 import { statSync } from "node:fs";
-import { ConversationWorkspaceChanged } from "../domain/conversation-store";
+import {
+  ConversationWorkspaceChanged,
+  ProjectRunBlocked,
+  ProjectRunBusy,
+} from "../domain/conversation-store";
 import { createWorktreeActivity } from "../../../../shared/workspace/sqlite-worktree-activity";
 import type { WorktreeActivityReservation } from "../../../../shared/workspace/worktree-activity";
+import { reserveProjectActivity } from "../../../../shared/project/sqlite-project-run-activity";
 import {
   releaseReservationKey,
   RELEASE_RESERVATION_PREFIX,
@@ -22,6 +27,7 @@ import type {
   ConversationStore,
   ConversationWorkspace,
   QueuedInstruction,
+  ProjectRunReservation,
   SendResult,
 } from "../domain/conversation-store";
 const selectConversation = `SELECT id, project_id AS projectId, kind, issue_id AS issueId, parent_conversation_id AS parentConversationId, COALESCE(title, '') AS title, session_id AS sessionId, cwd, worktree_id AS worktreeId, run_state AS runState, stop_reason AS stopReason, resets_at AS resetsAt, last_seq AS lastSeq, last_activity_at AS lastActivityAt, closed_at AS closedAt FROM conversations`;
@@ -110,6 +116,23 @@ export class SqliteConversationStore implements ConversationStore {
         return operation(workspace.worktreeId);
       }
     });
+  }
+  reserveProjectRun(projectId: string): ProjectRunReservation {
+    const lease = reserveProjectActivity(this.sqlite.name, projectId, "run");
+    if (lease.isErr()) {
+      if (lease.error.code === "conflict") throw new ProjectRunBusy();
+      throw new Error(lease.error.message);
+    }
+    try {
+      const project = this.sqlite
+        .prepare("SELECT removed_at AS removedAt FROM projects WHERE id = ?")
+        .get(projectId) as { removedAt: number | null } | undefined;
+      if (project && project.removedAt !== null) throw new ProjectRunBlocked();
+      return { projectId, release: () => lease.value.release() };
+    } catch (error) {
+      lease.value.release();
+      throw error;
+    }
   }
   withWorkspace<T>(id: string, operation: (worktreeId: string | null) => T): T {
     return this.withValidWorkspace(() => this.get(id), operation);

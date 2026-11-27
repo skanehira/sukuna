@@ -1,3 +1,5 @@
+import { createProjectRoutes } from "./modules/workspace/adapter/project-routes";
+import type { ProjectDependencies } from "./modules/workspace/domain/project-settings";
 import { createInboxRoutes } from "./modules/inbox/adapter/routes";
 import type { InboxDependencies } from "./modules/inbox/domain/ports";
 import { createConversationWorktrees } from "./modules/conversation/adapter/worktrees";
@@ -38,6 +40,7 @@ import type { SettingsDependencies } from "./modules/settings/domain/ports";
 export type { IdentityOptions } from "./modules/identity/adapter/options";
 
 export type AppOptions = {
+  projects?: ProjectDependencies;
   pr?: PrDependencies;
   clientDir?: string;
   build: string;
@@ -87,6 +90,7 @@ export function createApp(options: AppOptions): Hono<IdentityEnv> {
 
   if (options.settings) app.route("/api", createSettingsRoutes(options.settings));
   if (options.inbox) app.route("/api", createInboxRoutes(options.inbox));
+  if (options.projects) app.route("/api", createProjectRoutes(options.projects));
 
   if (options.pr) app.route("/api", createPrRoutes(options.pr));
   if (options.issues) app.route("/api", createIssueRoutes(options.issues));

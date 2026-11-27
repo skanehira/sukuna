@@ -1,6 +1,6 @@
 import { err, ok, type Result } from "neverthrow";
 import type { ConversationRuntime, DeliveryError, InputAcceptance } from "./runtime";
-import type { SendResult } from "../domain/conversation-store";
+import type { ProjectRunReservation, SendResult } from "../domain/conversation-store";
 import type { SendInput } from "./runtime";
 import { activeStates, conflict } from "./runtime";
 export function send(
@@ -8,6 +8,7 @@ export function send(
   id: string,
   input: SendInput,
   accepted?: (fresh: boolean) => void,
+  projectRun?: ProjectRunReservation,
 ): Promise<Result<SendResult, DeliveryError>> {
   if (this.releases.has(id)) {
     if (input.clientId) {
@@ -19,7 +20,7 @@ export function send(
     }
     return Promise.resolve(err(conflict()));
   }
-  return this.serial(id, () => sendUnlocked.call(this, id, input, undefined, accepted));
+  return this.serial(id, () => sendUnlocked.call(this, id, input, undefined, accepted, projectRun));
 }
 export async function sendUnlocked(
   this: ConversationRuntime,
@@ -27,6 +28,7 @@ export async function sendUnlocked(
   input: SendInput,
   acceptance?: InputAcceptance,
   accepted?: (fresh: boolean) => void,
+  projectRun?: ProjectRunReservation,
 ): Promise<Result<SendResult, DeliveryError>> {
   let c = this.store.get(id);
   if (!c) return err({ code: "not_found", message: "会話が見つかりません。" });
@@ -78,7 +80,7 @@ export async function sendUnlocked(
       origin: input.interrupt && activeStates.includes(c.runState) ? "interrupt" : input.origin,
     },
     acceptance,
-    { interrupt: activeStates.includes(c.runState) },
+    { interrupt: activeStates.includes(c.runState), projectRun },
   );
   if (delivered.isOk()) accepted?.(true);
   return delivered;

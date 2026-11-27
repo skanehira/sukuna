@@ -1,10 +1,14 @@
 import { err, ok, type Result } from "neverthrow";
-import type { Conversation } from "../domain/conversation-store";
+import { ProjectRunBusy, type Conversation } from "../domain/conversation-store";
 import type { ConversationRuntime, DeliveryError, OperationError, SendInput } from "./runtime";
 import { conflict } from "./runtime";
 
 type ResumeSource = "developer" | "usage_limit" | "flow";
-type ResumeChecks = { callerCancelled?: () => boolean; usageTimerCurrent?: () => boolean };
+type ResumeChecks = {
+  callerCancelled?: () => boolean;
+  usageTimerCurrent?: () => boolean;
+  onProjectBusy?: () => void;
+};
 
 const unavailable: OperationError = {
   code: "runner_unavailable",
@@ -71,7 +75,10 @@ export function resume(
         checkBeforeCommit: () => (checks.callerCancelled?.() ? unavailable : null),
       },
       { includeQueued: false, reopensAfterAcceptance: by === "developer" },
-    );
+    ).catch((error: unknown) => {
+      if (error instanceof ProjectRunBusy) checks.onProjectBusy?.();
+      throw error;
+    });
     if (sent.isErr()) return err(sent.error);
     if (by === "usage_limit")
       this.options.notice(id, "利用枠が戻ったため、作業を再開しました。", "info");

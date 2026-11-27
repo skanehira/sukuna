@@ -25,6 +25,7 @@ import { ulid } from "ulid";
 import { createStockDependencies } from "./modules/stock/adapter/dependencies";
 
 import { createIssueDependencies } from "./modules/issue/adapter/dependencies";
+import { createProjectDependencies } from "./modules/workspace/adapter/project-dependencies";
 import { createWorktreeDependencies } from "./modules/workspace/adapter/worktree-dependencies";
 import { createWorkspaceDependencies } from "./modules/workspace/adapter/dependencies";
 
@@ -90,6 +91,10 @@ const server = serve(
         (issueId, projectId) =>
           getWsHub().notice({ kind: "issue", issue_id: issueId, project_id: projectId, seq: 0 }),
       ),
+      projects: createProjectDependencies(getDatabase, {
+        runner: getRunnerLink,
+        changed: (id) => getWsHub().notice({ kind: "project", project_id: id }),
+      }),
       worktrees: createWorktreeDependencies(getDatabase, { terminals: getPtySessions() }),
       recap: createRecapDependencies(
         () => getDatabase().db,
