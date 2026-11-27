@@ -113,13 +113,13 @@ flowchart LR
 | E2E | `vp run e2e` |
 | 変異テスト (全体) | `vp run mutation` |
 | 変異テスト (ファイルを指定) | `vp run mutation --mutate <パス>[,<パス>]` |
-| 変異テスト (基準から変えたファイル) | `vp run mutation:changed [<基準の ref>]` (既定は `origin/main`) |
+| 変異テスト (基準から変えた行) | `vp run mutation:changed [<基準の ref>]` (既定は `origin/main`) |
 | 本番の起動 | `PORT=<port> node dist/server/main.js` と `node dist/runner/main.js` |
 
 - コマンドは `vp` に揃え、`pnpm`・`vite`・`vitest` を直接実行しない
 - 入出力を持たない関数で入力の組み合わせが多いものは、fast-check の property テストで性質を確かめる。ファイルは対象の隣に `<対象>.prop.test.ts` の名前で置く。性質には、対象を何もしない処理に置き換えると落ちる正の性質を 1 つ以上入れる。不変条件だけでは、何もしない処理でも通るためである
 - property テストの seed は、いつものテストでは実行のたびに変わり、落ちたテストの名前に出る。Stryker が流すときだけ、`src/test/fast-check.ts` が seed を固定する。変異ごとに入力が変わると、同じ変異でも、捕まえたかどうかが実行のたびに変わるためである
-- 変異テストの設定は `stryker.config.json` に置き、レポートは `reports/mutation/mutation.html` に出る。`mutation:changed` は `scripts/mutation-changed.sh` を呼び、基準から変えた `src` のソース (テスト・`.d.ts`・`src/test/` を除く) だけを対象にする。対象が無ければ流さずに終わる
+- 変異テストの設定は `stryker.config.json` に置き、レポートは `reports/mutation/mutation.html` に出る。`mutation:changed` は `scripts/mutation-changed.sh` を呼び、基準から変えた `src` のソース (テスト・`.d.ts`・`src/test/` を除く) の、変えた行だけを対象にする。行の範囲は、Stryker の `--mutate` に `<パス>:<開始行>-<終了行>` の形で渡す。数行だけ変えたファイルでも、変えていない行は変異させない。対象の行が無ければ流さずに終わる
 - worktree のセットアップ: チェックアウトの直後に `vp install` を実行する。`.env` 系のファイルは使わず、設定は環境変数で渡す
 - Playwright のセットアップ: 初回だけ `vp exec playwright install chromium` を実行してブラウザを入れる。`vp run e2e` は `e2e/start-server.sh` で `vp dev` を起動し、既に動いているサーバーには相乗りしない (`reuseExistingServer: false`)。`SUKUNA_HOME` には実行ごとの一時ディレクトリを渡し、終了時に消す。並列で流すときは `PORT=5190 vp run e2e` のようにポートをずらす
 - ポートは `--port` (開発) と環境変数 `PORT` (本番と E2E) で外から指定する。指定したポートで起動できなければ失敗させる (`--strictPort`)。並列の検証で使う基準のポートは 5180 とし、worktree ごとに 10 ずつずらして使う (5180、5190、5200)

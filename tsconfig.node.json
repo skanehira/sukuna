@@ -25,6 +25,7 @@
     "e2e/**/*.ts",
     "src/server",
     "src/runner",
-    "src/shared"
+    "src/shared",
+    "scripts"
   ]
 }

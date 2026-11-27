@@ -257,6 +257,7 @@ export default defineConfig({
             "src/server/**/*.test.ts",
             "src/runner/**/*.test.ts",
             "src/shared/**/*.test.ts",
+            "scripts/**/*.test.ts",
           ],
         },
       },
