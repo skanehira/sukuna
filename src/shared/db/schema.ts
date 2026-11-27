@@ -1,4 +1,5 @@
 import { sql } from "drizzle-orm";
+import type { IssueState, IssueStopReason } from "../issue/state";
 import {
   index,
   integer,
@@ -29,23 +30,6 @@ type StockKind = "question" | "instruction";
 type StockState = "stocked" | "sent" | "cancelled";
 type QuestionKind = "choice" | "text";
 type IssueKind = "bug" | "enhancement" | "refactoring" | "question";
-type IssueState =
-  | "draft"
-  | "triage"
-  | "design"
-  | "design_review"
-  | "ready"
-  | "implementing"
-  | "stopped"
-  | "done"
-  | "withdrawn";
-type IssueStopReason =
-  | "question"
-  | "failed"
-  | "usage_limit"
-  | "ci_failed"
-  | "merge_confirm"
-  | "dependency_withdrawn";
 type IssuePriority = "high" | "medium" | "low";
 type WorktreeOrigin = "user" | "flow";
 type PermissionMode = "bypassPermissions" | "acceptEdits" | "default";
