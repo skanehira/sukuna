@@ -4,10 +4,30 @@ import { join } from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 import { healthResponseSchema } from "../shared/api";
 import { createApp } from "./app";
+import {
+  createClockFake,
+  createTailscaleFake,
+  incomingWith,
+} from "./modules/identity/test-support";
+
+function createTestApp(options: { clientDir?: string } = {}) {
+  return createApp({
+    build: "test-build",
+    clientDir: options.clientDir,
+    identity: {
+      login: "dev@example.com",
+      devIdentity: "dev@example.com",
+      tailscale: createTailscaleFake().api,
+      clock: createClockFake(),
+    },
+  });
+}
+
+const localConnection = () => incomingWith("127.0.0.1", 50000);
 
 describe("createApp", () => {
   it("GET /api/health は 200 と status ok を返す", async () => {
-    const response = await createApp().request("/api/health");
+    const response = await createTestApp().request("/api/health", undefined, localConnection());
 
     expect(response.status).toBe(200);
     expect(healthResponseSchema.parse(await response.json())).toEqual({ status: "ok" });
@@ -19,7 +39,11 @@ describe("createApp", () => {
     writeFileSync(join(clientDir, "index.html"), html);
 
     try {
-      const response = await createApp({ clientDir }).request("/");
+      const response = await createTestApp({ clientDir }).request(
+        "/",
+        undefined,
+        localConnection(),
+      );
 
       expect(response.status).toBe(200);
       expect(await response.text()).toBe(html);
@@ -34,7 +58,11 @@ describe("createApp", () => {
     writeFileSync(join(clientDir, "index.html"), html);
 
     try {
-      const response = await createApp({ clientDir }).request("/conversations/abc");
+      const response = await createTestApp({ clientDir }).request(
+        "/conversations/abc",
+        undefined,
+        localConnection(),
+      );
 
       expect(response.status).toBe(200);
       expect(await response.text()).toBe(html);
@@ -48,7 +76,11 @@ describe("createApp", () => {
     writeFileSync(join(clientDir, "index.html"), "<!doctype html><title>sukuna</title>");
 
     try {
-      const response = await createApp({ clientDir }).request("/api/unknown");
+      const response = await createTestApp({ clientDir }).request(
+        "/api/unknown",
+        undefined,
+        localConnection(),
+      );
 
       expect(response.status).toBe(404);
     } finally {
