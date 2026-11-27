@@ -71,6 +71,13 @@ afterEach(() => {
 });
 
 describe("回数の入力・ビジュアルモード・検索の入力の途中で追記しても、カーソルとその状態が保たれる", () => {
+  it("行の書き換えの直後のジャンプは、新しい行の末尾へ移る", () => {
+    const { handle, view } = mount({ lines: [text("読み込み中")] });
+    handle.replaceAll([text("最初"), text("途中"), text("末尾")]);
+    handle.jumpTo(Number.MAX_SAFE_INTEGER);
+    expect(view.state.doc.toString()).toBe("最初\n途中\n末尾");
+    expect(cursorLine(view)).toBe(2);
+  });
   it("回数を打ちかけのまま追記しても、カーソルと回数が残る", async () => {
     const { handle, view } = mount({ lines: [text("一"), text("二")], followTail: true });
     handle.jumpTo(1);

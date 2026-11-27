@@ -1,7 +1,7 @@
 import { BufferController } from "../buffer/controller";
 import { browserClipboard } from "../buffer/clipboard";
 import { PositionStore } from "../buffer/position-store";
-import { openRoute, parseRoute, type Route } from "./routes";
+import { parseRoute, type Route } from "./routes";
 import { z } from "zod";
 export function createBrowserController(
   browser: Window,
@@ -45,7 +45,6 @@ export function createBrowserController(
   );
   const display = (url: string, initial = false) => {
     const route = parseRoute(url);
-    controller.changeScreen(url);
     if (!initial) {
       const previous = controller.right.current;
       controller.right.navigate(route.view === "file" ? "file" : route.kind, route.id ?? "");
@@ -54,13 +53,15 @@ export function createBrowserController(
       if (previous && !controller.right.current && !route.thread) controller.focus("main");
     }
     if (route.thread) controller.openRight({ view: "thread", target: route.thread });
-    openRoute(url, open);
+    open(route);
   };
   const pop = () => {
     depth =
       z.object({ sukunaDepth: z.number().int().nonnegative() }).safeParse(browser.history.state)
         .data?.sukunaDepth ?? 0;
-    display(`${browser.location.pathname}${browser.location.search}`);
+    const url = `${browser.location.pathname}${browser.location.search}`;
+    controller.changeScreen(url);
+    display(url);
   };
   browser.addEventListener("pagehide", positions.flush);
   browser.addEventListener("popstate", pop);

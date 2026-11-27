@@ -93,7 +93,12 @@ test("API fixtureを使うUIブラウザ確認: 未読から目次を編集し�
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
-    if (path === "/api/me" || path === "/api/health" || path === "/api/settings")
+    if (
+      path === "/api/me" ||
+      path === "/api/health" ||
+      path === "/api/settings" ||
+      path === "/api/projects"
+    )
       return route.continue();
     if (path.endsWith("/read")) {
       readSeq = Math.max(readSeq, request.postDataJSON().readSeq ?? 0);

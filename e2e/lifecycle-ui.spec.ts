@@ -86,7 +86,9 @@ test("締めくくりをやめて指示を書き、一覧と検索からスレ�
       return route.continue();
     if (path === "/api/projects")
       return route.fulfill({
-        json: { projects: [{ id: "p1", name: project, conversations: [], issues: [] }] },
+        json: {
+          projects: [{ id: "p1", name: project, flowPaused: false, conversations: [], issues: [] }],
+        },
       });
     if (path === "/api/projects/p1/conversations")
       return route.fulfill({

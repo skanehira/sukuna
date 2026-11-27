@@ -16,7 +16,13 @@ import {
 } from "@codemirror/view";
 import { getCM, Vim, vim } from "@replit/codemirror-vim";
 import type { ColumnDef, LineInfo } from "./line";
-import { BufferControllerContext, windowId, type WindowHandle } from "./controller";
+import {
+  BufferControllerContext,
+  ScreenOpeningContext,
+  windowId,
+  type WindowHandle,
+} from "./controller";
+import type { SavedPosition } from "./position-store";
 import { menuAt, numberMenus, numberMenuOperation } from "./menu";
 import { FrameContext } from "./Frame";
 import { applyVim, vimCount, vimMode } from "./keymap/apply-vim";
@@ -52,7 +58,7 @@ export type BufferHandle = {
   append(lines: LineInfo[], clearTail?: TailPart[]): void;
   replace(from: number, to: number, lines: LineInfo[]): void;
   setTail(part: TailPart, lines: LineInfo[]): void;
-  replaceAll(lines: LineInfo[], missingCursorTarget?: string): void;
+  replaceAll(lines: LineInfo[], options?: { missingCursorTarget?: string; ready?: boolean }): void;
   jumpTo(line: number, options?: { remember?: boolean; topLine?: number; column?: number }): void;
   cursorRevision?(): number;
   pushJump(line: number): void;
@@ -70,6 +76,7 @@ export type BufferProps = {
   followTail?: boolean;
   scrollPastEnd?: boolean;
   temporary?: boolean;
+  ready?: boolean;
   onReady: (handle: BufferHandle) => void;
 };
 
@@ -80,6 +87,7 @@ type CursorIntent =
   | { kind: "replaceAll"; missingCursorTarget?: string };
 
 type Batch = {
+  ready?: boolean;
   changes: ChangeSet;
   content: BufferContent;
   rebuild: LineRange;
@@ -176,10 +184,12 @@ export function Buffer({
   followTail = false,
   scrollPastEnd = false,
   temporary = false,
+  ready = true,
   onReady,
 }: BufferProps) {
   const controller = useContext(BufferControllerContext);
   const frameTitle = useContext(FrameContext);
+  const opening = useContext(ScreenOpeningContext);
   useSyncExternalStore(
     controller?.subscribe ?? (() => () => {}),
     controller?.snapshot ?? (() => null),
@@ -188,6 +198,8 @@ export function Buffer({
   const viewRef = useRef<EditorView | null>(null);
   const batchRef = useRef<Batch | null>(null);
   const frameRef = useRef<number | null>(null);
+  const identity = useRef({});
+  const previousAttachment = useRef<SavedPosition | null>(null);
   const configRef = useRef({
     side,
     lines,
@@ -202,6 +214,7 @@ export function Buffer({
     const host = hostRef.current;
     if (host === null) return;
     const config = configRef.current;
+    let contentReady = ready;
     const content = createContent(numberMenus(config.lines));
     const initial = initialLine(config.lines, config.startLine);
     let rememberSelection = () => {};
@@ -285,11 +298,19 @@ export function Buffer({
         if (cm) Vim.handleKey(cm, "<Esc>", "mapping");
         if (controller?.snapshot().active === logicalSide) controller.update({ number: "" });
       }
+      contentReady = batch.ready ?? contentReady;
+      controller?.windowChanged(logicalSide, window);
+    };
+    const flushNow = (): void => {
+      if (batchRef.current === null) return;
+      if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+      flush();
     };
 
     const enqueue = (
       intent: CursorIntent | ((base: BufferContent) => CursorIntent),
       build: (base: BufferContent) => BufferOp,
+      ready?: boolean,
     ): void => {
       if (viewRef.current !== view) return;
       const batch = batchRef.current;
@@ -302,6 +323,7 @@ export function Buffer({
         changes,
       };
       batchRef.current = {
+        ready: ready ?? batch?.ready,
         changes: batch === null ? changes : batch.changes.compose(changes),
         content: op.content,
         rebuild:
@@ -319,10 +341,13 @@ export function Buffer({
 
     const logicalSide = windowId(side);
     const window: WindowHandle = {
+      identity: identity.current,
+      ready: () => contentReady,
       name: name ?? frameTitle ?? side,
       url: controller?.options.url ?? "/",
-      view: viewName ?? side,
+      opening: logicalSide === "main" ? (opening ?? controller?.screenOpening()) : undefined,
       temporary,
+      view: viewName ?? side,
       posKey: posKey ?? `${controller?.options.url ?? "/"}:${logicalSide}:${viewName ?? side}`,
       focus: () => {
         view.focus();
@@ -359,29 +384,18 @@ export function Buffer({
       scrollCursor: () =>
         view.dispatch({ effects: EditorView.scrollIntoView(view.state.selection.main.head) }),
     };
-    const unregister = controller?.registerWindow(logicalSide, window);
-    const unmap = controller
-      ? applyVim(view, controller, logicalSide, viewName ?? side)
-      : undefined;
     const remember = () => {
       if (!temporary) controller?.positions.setPosition(window.posKey, window.position());
     };
-    rememberSelection = () => {
-      remember();
-      controller?.update({});
-    };
-    const focus = () => {
+    const focus = (event: FocusEvent) => {
+      if (event.target !== view.contentDOM) return;
       controller?.positions.setActive(logicalSide);
       controller?.update({ active: logicalSide, mode: vimMode(view), number: vimCount(view) });
     };
     const doubleClick = () => {
       controller?.open();
     };
-    view.dom.addEventListener("focusin", focus);
-    view.dom.addEventListener("dblclick", doubleClick);
-    view.dom.addEventListener("keyup", remember);
-    view.scrollDOM.addEventListener("scroll", remember);
-    config.onReady({
+    const handle: BufferHandle = {
       append(appendLines_, clearTail) {
         enqueue({ kind: "append" }, (base) => appendLines(base, appendLines_, clearTail ?? []));
       },
@@ -396,18 +410,17 @@ export function Buffer({
           (base) => setTailLines(base, part, tailLines),
         );
       },
-      replaceAll(allLines, missingCursorTarget) {
-        enqueue({ kind: "replaceAll", missingCursorTarget }, (base) =>
-          replaceAllLines(base, allLines),
+      replaceAll(allLines, { ready = true, missingCursorTarget } = {}) {
+        enqueue(
+          { kind: "replaceAll", missingCursorTarget },
+          (base) => replaceAllLines(base, allLines),
+          ready,
         );
       },
       jumpTo(line, options) {
-        if (batchRef.current) {
-          if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
-          flush();
-        }
-        if (options?.remember !== false) controller?.pushJump(logicalSide, window.position().line);
         if (viewRef.current !== view) return;
+        flushNow();
+        if (options?.remember !== false) controller?.pushJump(logicalSide, window.position().line);
         const currentLines = view.state.field(bufferField).lines;
         if (currentLines.length === 0) return;
         const index = Math.max(0, Math.min(line, currentLines.length - 1));
@@ -426,22 +439,35 @@ export function Buffer({
       },
       cursorRevision: () => cursorRevision,
       pushJump(line) {
-        if (batchRef.current) {
-          if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
-          flush();
-        }
+        flushNow();
         controller?.pushJump(logicalSide, line);
       },
       findSeq(seq, seqLine) {
-        if (batchRef.current) {
-          if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
-          flush();
-        }
+        flushNow();
         return findSeqLine(view.state.field(bufferField).lines, seq, seqLine);
       },
-    });
+    };
+    const initialize = () => {
+      config.onReady(handle);
+      flushNow();
+      if (previousAttachment.current) window.place(previousAttachment.current);
+    };
+    const unregister = controller?.registerWindow(logicalSide, window, initialize);
+    if (!controller) initialize();
+    const unmap = controller
+      ? applyVim(view, controller, logicalSide, viewName ?? side)
+      : undefined;
+    rememberSelection = () => {
+      remember();
+      controller?.update({});
+    };
+    view.dom.addEventListener("focusin", focus);
+    view.dom.addEventListener("dblclick", doubleClick);
+    view.dom.addEventListener("keyup", remember);
+    view.scrollDOM.addEventListener("scroll", remember);
 
     return () => {
+      if (!temporary) previousAttachment.current = window.position();
       unregister?.();
       unmap?.();
       view.dom.removeEventListener("focusin", focus);
