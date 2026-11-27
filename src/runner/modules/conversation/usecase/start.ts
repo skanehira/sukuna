@@ -1,8 +1,9 @@
 import { ConversationWorkspaceChanged } from "../domain/conversation-store";
 import { WorktreeActivityBusy } from "../../../../shared/workspace/worktree-activity";
 import { err, ok, type Result } from "neverthrow";
-import type { ConversationRuntime, DeliveryError } from "./runtime";
-import type { ConversationKind } from "../domain/conversation-store";
+import type { ConversationRuntime, DeliveryError, InputAcceptance, SendInput } from "./runtime";
+import type { Conversation, ConversationKind } from "../domain/conversation-store";
+
 export async function start(
   this: ConversationRuntime,
   input: {
@@ -16,28 +17,35 @@ export async function start(
     parentConversationId?: string | null;
     sessionId?: string;
   },
+  firstInput?: { message: SendInput; acceptance(id: string): InputAcceptance },
 ): Promise<Result<{ conversationId: string }, DeliveryError>> {
   const id = this.options.id();
+  const conversation: Conversation = {
+    id,
+    projectId: input.projectId,
+    kind: input.kind,
+    issueId: input.issueId ?? null,
+    parentConversationId: input.parentConversationId ?? null,
+    title: input.title,
+    sessionId: input.sessionId ?? null,
+    cwd: input.cwd,
+    worktreeId: input.worktreeId ?? null,
+    runState: "idle",
+    stopReason: null,
+    resetsAt: null,
+    lastSeq: 0,
+    lastActivityAt: null,
+    closedAt: null,
+  };
   try {
-    this.store.transaction(() =>
-      this.store.create({
-        id,
-        projectId: input.projectId,
-        kind: input.kind,
-        issueId: input.issueId ?? null,
-        parentConversationId: input.parentConversationId ?? null,
-        title: input.title,
-        sessionId: input.sessionId ?? null,
-        cwd: input.cwd,
-        worktreeId: input.worktreeId ?? null,
-        runState: "idle",
-        stopReason: null,
-        resetsAt: null,
-        lastSeq: 0,
-        lastActivityAt: null,
-        closedAt: null,
-      }),
-    );
+    if (firstInput) {
+      const delivered = await this.deliver(id, firstInput.message, firstInput.acceptance(id), {
+        newConversation: conversation,
+        includeQueued: false,
+      });
+      return delivered.map(() => ({ conversationId: id }));
+    }
+    this.store.transaction(() => this.store.create(conversation));
   } catch (error) {
     if (error instanceof WorktreeActivityBusy || error instanceof ConversationWorkspaceChanged)
       return err({ code: "conflict", message: error.message });

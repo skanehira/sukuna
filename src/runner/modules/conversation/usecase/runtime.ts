@@ -2,7 +2,7 @@ import { RunOptions } from "./run-options";
 import type { CommandCache } from "../domain/agent-port";
 import { ConversationWorkspaceChanged } from "../domain/conversation-store";
 import { WorktreeActivityBusy } from "../../../../shared/workspace/worktree-activity";
-import { RUNNER_IPC_TIMEOUT_MS } from "../../../../shared/ipc";
+import { RUNNER_IPC_TIMEOUT_MS, STOCK_SEND_SETTLEMENT_TIMEOUT_MS } from "../../../../shared/ipc";
 import { deliverQueue } from "./deliver-queue";
 import { start } from "./start";
 import { send } from "./send";
@@ -45,7 +45,7 @@ export type RuntimeSignal = { conversationId: string } & (
   | { type: "stopped"; reason: string; previousRunState?: RunState }
   | { type: "inputRecorded"; seq: number; eventType: string }
   | { type: "delta"; text: string }
-  | { type: "parts"; parts: ("queue" | "answers")[] }
+  | { type: "parts"; parts: ("queue" | "answers" | "stock" | "threads")[] }
 );
 export type RuntimeOptions = {
   store: ConversationStore;
@@ -224,7 +224,7 @@ export class ConversationRuntime {
     if (recorded.some((event) => event.type === "answer")) this.partsChanged(id, ["answers"]);
     return recorded;
   }
-  partsChanged(id: string, parts: ("queue" | "answers")[]): void {
+  partsChanged(id: string, parts: ("queue" | "answers" | "stock" | "threads")[]): void {
     this.signal({ type: "parts", conversationId: id, parts });
   }
   deliverQueue = deliverQueue.bind(this);
@@ -267,9 +267,12 @@ export class ConversationRuntime {
       interrupt?: boolean;
       omitMissingImages?: boolean;
       reopensAfterAcceptance?: boolean;
+      newConversation?: Conversation;
+      recordOpeningFailure?: boolean;
     } = {},
   ): Promise<Result<SendResult, OperationError>> {
-    if (!this.store.get(id)) throw new Error("会話がありません。");
+    const { newConversation } = options;
+    if (!newConversation && !this.store.get(id)) throw new Error("会話がありません。");
     const prepare = () => {
       const includeQueued = options.includeQueued ?? true;
       const queued = includeQueued ? this.store.queue(id) : [];
@@ -319,7 +322,7 @@ export class ConversationRuntime {
           let refusal = acceptance?.check?.() ?? null;
           if (refusal) return err(refusal);
           if (this.closing) return err(conflict());
-          const c = this.store.get(id);
+          const c = this.store.get(id) ?? newConversation;
           if (!c) throw new Error("会話がありません。");
           const opened = this.executions.get(id);
           if (opened && (opened.cwd !== c.cwd || opened.worktreeId !== worktreeId)) return opened;
@@ -383,11 +386,14 @@ export class ConversationRuntime {
               id,
               [...(acceptance?.events ?? []), event],
               () => {
+                if (newConversation) this.store.create(newConversation);
                 acceptance?.before?.();
                 if (options.reopensAfterAcceptance)
                   resumeClosedAt = this.store.get(id)?.closedAt ?? null;
                 try {
-                  execution = this.execution(c, worktreeId);
+                  execution = newConversation
+                    ? this.store.withWorkspace(id, (actualId) => this.execution(c, actualId))
+                    : this.execution(c, worktreeId);
                 } catch (error) {
                   openingError = { cause: error };
                   throw error;
@@ -402,9 +408,12 @@ export class ConversationRuntime {
                 this.store.withWorkspace(id, (actualWorktreeId) => {
                   const current = this.store.get(id);
                   refusal = acceptance?.check?.() ?? null;
+                  if (refusal !== null || this.closing) return false;
+                  if (newConversation) {
+                    if (current) refusal = conflict();
+                    return current === null;
+                  }
                   return (
-                    refusal === null &&
-                    !this.closing &&
                     current?.cwd === c.cwd &&
                     actualWorktreeId === worktreeId &&
                     (!includeQueued ||
@@ -426,7 +435,7 @@ export class ConversationRuntime {
               }
             }
             if (error instanceof InputRefused) return err(error.refusal);
-            if (openingError)
+            if (openingError && !newConversation && options.recordOpeningFailure !== false)
               this.record(id, [
                 {
                   type: "stopped",
@@ -446,7 +455,11 @@ export class ConversationRuntime {
           if (!execution) throw new Error("実行がありません。");
           const activeExecution = execution;
           if (!opened) activeExecution.consuming = this.consume(id, activeExecution);
-          if (queued.length) this.partsChanged(id, ["queue"]);
+          if (queued.length)
+            this.partsChanged(
+              id,
+              queued.some((entry) => entry.stockItemId) ? ["queue", "stock"] : ["queue"],
+            );
           const record = records.at(-1);
           if (!record) throw new Error("指示を記録できません。");
           this.timers.cancel(id);
@@ -458,7 +471,14 @@ export class ConversationRuntime {
           activeExecution.reopening =
             resumeClosedAt === null
               ? null
-              : { closedAt: resumeClosedAt, until: record.createdAt + reopenWaitMs };
+              : {
+                  closedAt: resumeClosedAt,
+                  until:
+                    record.createdAt +
+                    (input.origin === "stock"
+                      ? RUNNER_IPC_TIMEOUT_MS + STOCK_SEND_SETTLEMENT_TIMEOUT_MS
+                      : reopenWaitMs),
+                };
           activeExecution.ended = new Promise((resolve) => {
             activeExecution.end = resolve;
           });

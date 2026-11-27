@@ -1,6 +1,12 @@
+import { sendStock } from "../usecase/send-stock";
 import { Hono, type Context } from "hono";
 import type { Result } from "neverthrow";
-import { addStockSchema, finishThreadSchema, patchStockSchema } from "../../../../shared/stock";
+import {
+  addStockSchema,
+  finishThreadSchema,
+  patchStockSchema,
+  stockSendSchema,
+} from "../../../../shared/stock";
 import type { StockDependencies, StockError } from "../domain/ports";
 import { add } from "../usecase/add";
 import { list } from "../usecase/list";
@@ -9,12 +15,13 @@ import { cancel } from "../usecase/cancel";
 import { restore } from "../usecase/restore";
 import { listThreads } from "../usecase/list-threads";
 import { finishThread } from "../usecase/finish-thread";
-function response<T>(c: Context, result: Result<T, StockError>, success: 200 | 201 = 200) {
+function response<T>(c: Context, result: Result<T, StockError>, success: 200 | 201 | 202 = 200) {
   const statuses = {
     invalid_input: 400,
     not_found: 404,
     conflict: 409,
     internal: 500,
+    worktree_failed: 500,
     runner_unavailable: 503,
   } as const;
   return result.isErr()
@@ -48,10 +55,18 @@ export function createStockRoutes(deps: StockDependencies): Hono {
     );
   });
   app.delete("/stock/:id", async (c) => response(c, await cancel(c.req.param("id"), deps)));
+  app.post("/conversations/:id/stock/send", async (c) => {
+    const input = stockSendSchema.safeParse(await c.req.json().catch(() => null));
+    return input.success
+      ? response(c, await sendStock(c.req.param("id"), input.data, deps))
+      : invalid(c);
+  });
   app.get("/conversations/:id/threads", (c) => response(c, listThreads(c.req.param("id"), deps)));
   app.post("/threads/:id/finish", async (c) => {
     const input = finishThreadSchema.safeParse(await c.req.json().catch(() => null));
-    return input.success ? response(c, await finishThread(c.req.param("id"), deps)) : invalid(c);
+    if (!input.success) return invalid(c);
+    const result = await finishThread(c.req.param("id"), input.data, deps);
+    return response<unknown>(c, result, input.data.action === "propose" ? 202 : 200);
   });
   return app;
 }

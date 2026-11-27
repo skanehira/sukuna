@@ -11,7 +11,10 @@ export class ReleaseReservations {
   has(id: string): boolean {
     return this.pending.has(id);
   }
-  reserve(id: string): Promise<Result<{ token: string }, OperationError>> {
+  reserve(
+    id: string,
+    beforeRelease?: () => OperationError | null,
+  ): Promise<Result<{ token: string }, OperationError>> {
     if (this.pending.has(id)) return Promise.resolve(err(conflict()));
     const runtime = this.runtime;
     let ready: (result: Result<{ token: string }, OperationError>) => void;
@@ -24,6 +27,7 @@ export class ReleaseReservations {
     });
     const token = runtime.options.uuid();
     let cancel = () => {};
+    const beforeReservation = runtime.store.get(id);
     const reservation: Reservation = {
       token,
       finish: () => {
@@ -32,12 +36,22 @@ export class ReleaseReservations {
         cancel();
         this.pending.delete(id);
         finish();
+        const current = runtime.store.get(id);
+        if (
+          beforeReservation?.kind === "thread" &&
+          current?.closedAt === null &&
+          current.runState !== beforeReservation.runState &&
+          current.parentConversationId
+        )
+          runtime.partsChanged(current.parentConversationId, ["stock", "threads"]);
         return removed.mapErr((error) => ({ code: "internal" as const, message: error.message }));
       },
     };
     this.pending.set(id, reservation);
     void runtime
       .serial(id, async () => {
+        const refused = beforeRelease?.();
+        if (refused) return err(refused);
         const released = await releaseUnlocked.call(runtime, id);
         if (released.isErr()) return err(released.error);
         if (runtime.closing) return err(conflict());

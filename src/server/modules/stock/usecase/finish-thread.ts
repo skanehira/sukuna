@@ -1,17 +1,38 @@
 import { err, ok } from "neverthrow";
+import type { FinishThreadInput } from "../../../../shared/stock";
 import type { StockDependencies } from "../domain/ports";
-export async function finishThread(id: string, deps: StockDependencies) {
+import { present } from "./present";
+
+export async function finishThread(id: string, input: FinishThreadInput, deps: StockDependencies) {
   const current = deps.repository.conversation(id);
   if (current.isErr()) return err(current.error);
   if (!current.value || current.value.kind !== "thread")
     return err({ code: "not_found" as const, message: "スレッドがありません" });
-  const conflict = { code: "conflict" as const, message: "このスレッドはすでに終えています" };
-  if (current.value.closedAt !== null) return err(conflict);
-  const released = await deps.release(id);
+  if (current.value.closedAt !== null)
+    return err({ code: "conflict" as const, message: "このスレッドはすでに終えています" });
+
+  if (input.action === "propose") return deps.propose(id);
+  const released = await deps.release(id, input.action === "stock");
   if (released.isErr()) return err(released.error);
   try {
     const closedAt = deps.now();
-    const closed = deps.repository.close(id, closedAt, released.value.token);
+    const token = released.value.token;
+    const closed =
+      input.action === "stock"
+        ? deps.repository.finishTransaction((store) => {
+            const source = store.sourceQuestion(id);
+            if (!source || !store.close(id, closedAt, token)) return undefined;
+            const item = store.addInstruction(
+              deps.id(),
+              source.conversationId,
+              id,
+              input.text,
+              source.quote,
+            );
+            store.deleteDraft(id);
+            return item;
+          })
+        : deps.repository.close(id, closedAt, token);
     if (closed.isErr()) return err(closed.error);
     if (!closed.value)
       return err({
@@ -21,7 +42,8 @@ export async function finishThread(id: string, deps: StockDependencies) {
     if (current.value.parentConversationId)
       deps.changed(current.value.parentConversationId, ["stock", "threads"]);
     deps.changed(id, ["threads"]);
-    return ok({ thread: { id, closedAt } });
+    if (typeof closed.value === "boolean") return ok({ thread: { id, closedAt } });
+    return ok({ item: await present(closed.value, deps), thread: { id, closedAt } });
   } finally {
     await released.value.complete();
   }

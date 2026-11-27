@@ -1,3 +1,4 @@
+import { createStockSender } from "./modules/stock/adapter/dependencies";
 import { CommandCache } from "./modules/conversation/adapter/command-cache";
 import { issueInstructions } from "./modules/issue/domain/issue-instructions";
 import { createRunnerAllowMerge } from "./modules/flow/adapter/allow-merge-dependencies";
@@ -146,6 +147,18 @@ export async function startRunnerApp(options: {
           issue_id: conversation.issueId,
         });
       }
+      if (
+        conversation?.kind === "thread" &&
+        conversation.parentConversationId &&
+        !runtime.releases.has(conversation.id) &&
+        (signal.type === "runStateChanged" ||
+          (signal.type === "event" &&
+            signal.event.seq === 1 &&
+            signal.event.type === "user_message" &&
+            signal.event.payload.origin === "stock"))
+      ) {
+        runtime.partsChanged(conversation.parentConversationId, ["stock", "threads"]);
+      }
       if (signal.type === "stopped")
         log({
           level: signal.reason === "restarted" ? "info" : "warn",
@@ -189,6 +202,7 @@ export async function startRunnerApp(options: {
             cancelled,
             input.attempt,
           ),
+        sendStock: createStockSender(database.db, runtime),
         ...options.ipc,
         flow: createIssueOpsHandler(issueOps),
         rebuildRecap: (id) => recap.rebuild(id),

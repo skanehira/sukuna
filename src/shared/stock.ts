@@ -1,10 +1,31 @@
 import { z } from "zod";
 import { runStateSchema } from "./events";
 
-export type StockSendInput = {
-  kinds: "all" | "questions" | "instructions";
-  stockIds?: string[];
-};
+export const stockSendSchema = z.strictObject({
+  kinds: z.enum(["all", "questions", "instructions"]),
+  stockIds: z.array(z.string().min(1)).optional(),
+});
+export type StockSendInput = z.infer<typeof stockSendSchema>;
+export const stockSendResponseSchema = z.strictObject({
+  instructions: z.strictObject({
+    count: z.number().int().nonnegative(),
+    delivery: z.enum(["delivered", "queued"]).nullable(),
+  }),
+  questions: z.array(
+    z.discriminatedUnion("ok", [
+      z.strictObject({ stockId: z.string(), ok: z.literal(true), threadId: z.string() }),
+      z.strictObject({
+        stockId: z.string(),
+        ok: z.literal(false),
+        error: z.strictObject({
+          code: z.enum(["no_session", "fork_failed"]),
+          message: z.string(),
+        }),
+      }),
+    ]),
+  ),
+});
+export type StockSendResponse = z.infer<typeof stockSendResponseSchema>;
 
 const textWithin = (min: number, max: number) =>
   z.string().refine((text) => {
@@ -66,7 +87,15 @@ export const patchStockSchema = z.union([
   z.strictObject({ text: stockTextSchema }),
   z.strictObject({ state: z.literal("stocked") }),
 ]);
-export const finishThreadSchema = z.strictObject({ action: z.literal("close") });
+export const finishThreadSchema = z.discriminatedUnion("action", [
+  z.strictObject({ action: z.literal("close") }),
+  z.strictObject({ action: z.literal("propose") }),
+  z.strictObject({
+    action: z.literal("stock"),
+    text: stockTextSchema.refine((text) => text.trim().length > 0),
+  }),
+]);
+export type FinishThreadInput = z.infer<typeof finishThreadSchema>;
 export const stockThreadSchema = z.strictObject({
   id: z.string(),
   title: z.string().nullable(),
@@ -102,4 +131,8 @@ export type Thread = z.infer<typeof threadSchema>;
 export const threadsResponseSchema = z.strictObject({ threads: z.array(threadSchema) });
 export const finishThreadResponseSchema = z.strictObject({
   thread: z.strictObject({ id: z.string(), closedAt: z.number().int() }),
+});
+
+export const finishThreadWithStockResponseSchema = finishThreadResponseSchema.extend({
+  item: stockItemSchema,
 });
