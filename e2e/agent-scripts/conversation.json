@@ -57,5 +57,12 @@
         }
       ]
     }
+  ],
+  "completions": [
+    {
+      "purpose": "recap",
+      "match": "引き当ての期限は 30 分にしてください。",
+      "text": "{\"chapter\":{\"kind\":\"continue\"},\"decisions\":[],\"changes\":[],\"questions\":[],\"answered\":[\"recap-navigation-conversation-question\"]}"
+    }
   ]
 }
