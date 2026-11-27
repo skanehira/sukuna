@@ -3,10 +3,12 @@ import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
+  restoreGenerationSchema,
   restoreReceiptSchema,
   restoreRequestSchema,
   restoreStatusSchema,
   type RestoreRequest,
+  type RestoreGeneration,
   type RestoreStatus,
 } from "../settings/restore-schema";
 
@@ -53,6 +55,20 @@ export function putRestoreStatus(sqlite: Database.Database, value: RestoreStatus
   sqlite
     .prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('last_restore', ?)")
     .run(JSON.stringify(value));
+}
+
+export function putRestoreGeneration(sqlite: Database.Database, request: RestoreRequest): void {
+  const generation: RestoreGeneration = { id: randomUUID(), requestId: request.requestId };
+  sqlite
+    .prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('restore_generation', ?)")
+    .run(JSON.stringify(generation));
+}
+
+export function readRestoreGeneration(sqlite: Database.Database): RestoreGeneration | undefined {
+  const row = sqlite
+    .prepare("SELECT value FROM settings WHERE key='restore_generation' AND json_valid(value)")
+    .get() as { value: string } | undefined;
+  return row ? restoreGenerationSchema.safeParse(JSON.parse(row.value)).data : undefined;
 }
 
 export function recoverRestore(

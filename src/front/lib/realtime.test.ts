@@ -21,13 +21,14 @@ class Socket implements RealtimeSocket {
     this.onmessage?.({ data: JSON.stringify(message) });
   }
 }
-function setup() {
+function setup(verifyConnection?: (signal: AbortSignal) => Promise<boolean>) {
   const sockets: Socket[] = [];
   const states: boolean[] = [];
   const gaps: string[] = [];
   const read: string[] = [];
   const received: unknown[] = [];
   const realtime = new Realtime({
+    verifyConnection,
     connect: () => {
       const s = new Socket();
       sockets.push(s);
@@ -44,6 +45,78 @@ function setup() {
   });
   return { realtime, sockets, states, gaps, read, received };
 }
+it("接続先のDBを確認してから購読し、復元後のDBへは旧版の連番を送らない", async () => {
+  vi.useFakeTimers();
+  let confirm!: (verified: boolean) => void;
+  const verify = () =>
+    new Promise<boolean>((resolve) => {
+      confirm = resolve;
+    });
+  const s = setup(verify);
+  try {
+    s.realtime.subscribe("conversation:a", 7);
+    s.realtime.start();
+    s.sockets[0]!.open();
+    expect(s.sockets[0]!.sent).toEqual([]);
+    confirm(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(s.sockets[0]!.sent).toContainEqual({
+      op: "subscribe",
+      topic: "conversation:a",
+      after: 7,
+    });
+    s.sockets[0]!.close();
+    await vi.advanceTimersByTimeAsync(500);
+    s.sockets[1]!.open();
+    confirm(false);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(s.sockets[1]!.sent).toEqual([]);
+    expect(s.read).toEqual(["conversation:a"]);
+  } finally {
+    s.realtime.stop();
+    vi.useRealTimers();
+  }
+});
+it("接続先の確認が失敗したり切断されたらやり直し、接続先が同じDBなら続きから受け取る", async () => {
+  vi.useFakeTimers();
+  let resolveObsolete!: (verified: boolean) => void;
+  let obsolete!: AbortSignal;
+  const verify = vi
+    .fn<(signal: AbortSignal) => Promise<boolean>>()
+    .mockRejectedValueOnce(new Error("offline"))
+    .mockImplementationOnce((signal) => {
+      obsolete = signal;
+      return new Promise((resolve) => {
+        resolveObsolete = resolve;
+      });
+    })
+    .mockResolvedValue(true);
+  const s = setup(verify);
+  try {
+    s.realtime.subscribe("conversation:a", 7);
+    s.realtime.start();
+    s.sockets[0]!.open();
+    await vi.advanceTimersByTimeAsync(500);
+    s.sockets[1]!.open();
+    s.sockets[1]!.close();
+    expect(obsolete.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(1000);
+    s.sockets[2]!.open();
+    resolveObsolete(false);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(s.sockets[0]!.sent).toEqual([]);
+    expect(s.sockets[1]!.sent).toEqual([]);
+    expect(s.sockets[2]!.sent).toContainEqual({
+      op: "subscribe",
+      topic: "conversation:a",
+      after: 7,
+    });
+    expect(s.read).toEqual(["conversation:a"]);
+  } finally {
+    s.realtime.stop();
+    vi.useRealTimers();
+  }
+});
 it.each([0, 1000, 2999])(
   "切断から%dミリ秒で停止して再開しても、次の切断を3秒後に通知する",
   (elapsed) => {

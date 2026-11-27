@@ -14,6 +14,13 @@ import {
 } from "../../../../shared/db/test-helpers";
 import { conversations, projects, settings } from "../../../../shared/db/schema";
 import type { ServerMessage } from "../../../../shared/ws";
+import {
+  initialRestoreGeneration,
+  restoreGenerationCheckHeader,
+  restoreGenerationHeader,
+  restoreRequestHeader,
+  type RestoreGeneration,
+} from "../../../../shared/settings/restore-schema";
 import { createApp } from "../../../app";
 import { attachUpgradeHandler } from "../../../runtime";
 import { WsHub } from "../../../ws-hub";
@@ -41,7 +48,7 @@ describe("設定と配信", () => {
     for (const dispose of cleanup.splice(0).reverse()) await dispose();
   });
 
-  async function fixture() {
+  async function fixture(restoreGeneration?: RestoreGeneration) {
     const home = createTempHome();
     const database = openMigratedDatabase(home);
     cleanup.push(
@@ -64,6 +71,7 @@ describe("設定と配信", () => {
     });
     const app = createApp({
       build: "settings-test",
+      restoreGeneration,
       resolveIdentity: resolve,
       settings: createSettingsDependencies(
         () => database.db,
@@ -94,12 +102,13 @@ describe("設定と配信", () => {
       expect(response.status).toBe(200);
       return response.json();
     };
-    const save = (body: unknown, revision?: string) =>
+    const save = (body: unknown, revision?: string, generation?: string) =>
       fetch(owner + "/api/settings/keymap", {
         method: "PUT",
         headers: {
           "content-type": "application/json",
           ...(revision ? { "if-match": revision } : {}),
+          ...(generation ? { [restoreGenerationCheckHeader]: generation } : {}),
         },
         body: JSON.stringify(body),
       });
@@ -217,6 +226,24 @@ describe("設定と配信", () => {
     const matched = await f.save({ entries: [] }, latest ?? undefined);
     expect(matched.status).toBe(200);
     expect(await matched.json()).toEqual(initial.keymap);
+    expect(await f.read()).toEqual(initial);
+  });
+
+  it("復元前の画面の設定変更を拒み、復元を読み直した画面と従来のAPIからは保存できる", async () => {
+    const generation = { id: "new-generation", requestId: "restore-request" };
+    const f = await fixture(generation);
+
+    const blocked = await f.save({ entries: keymap.entries }, undefined, initialRestoreGeneration);
+    expect(blocked.status).toBe(409);
+    expect(blocked.headers.get(restoreGenerationHeader)).toBe(generation.id);
+    expect(blocked.headers.get(restoreRequestHeader)).toBe(generation.requestId);
+    expect(await f.read()).toEqual(initial);
+
+    const current = await f.save({ entries: keymap.entries }, undefined, generation.id);
+    expect(current.status).toBe(200);
+    expect(await f.read()).toEqual({ ...initial, keymap });
+
+    expect((await f.save({ entries: [] })).status).toBe(200);
     expect(await f.read()).toEqual(initial);
   });
 

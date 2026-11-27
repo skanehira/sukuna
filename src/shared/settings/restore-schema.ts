@@ -3,6 +3,15 @@ import { backupFileName } from "./backup-paths";
 
 export const restoreBackupIdSchema = z.string().refine((id) => backupFileName(id) !== undefined);
 export const restoreIdSchema = z.uuid();
+export const restoreGenerationHeader = "X-Sukuna-Restore-Generation";
+export const restoreRequestHeader = "X-Sukuna-Restore-Request";
+export const restoreGenerationCheckHeader = "If-Sukuna-Restore-Generation";
+export const initialRestoreGeneration = "initial";
+export const restoreGenerationSchema = z.object({
+  id: restoreIdSchema,
+  requestId: restoreIdSchema.optional(),
+});
+export type RestoreGeneration = z.infer<typeof restoreGenerationSchema>;
 export const restoreRequestSchema = z.strictObject({
   backupId: restoreBackupIdSchema,
   requestedAt: z.number().int().nonnegative(),

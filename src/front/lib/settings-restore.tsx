@@ -2,6 +2,7 @@ import { useMemo, useSyncExternalStore } from "react";
 import { z } from "zod";
 import {
   restoreAcceptedSchema,
+  restoreIdSchema,
   restoreLookupSchema,
   type RestoreLookup,
 } from "../../shared/settings/restore-schema";
@@ -16,6 +17,9 @@ import type { SettingsStore } from "./settings-store";
 export const restoreAction = "settings.restore";
 export const restorePendingNotice = "復元しています。再起動のあと自動でつながります。";
 const selectAction = "settings.restore-select";
+const pendingRestoreKey = "sukuna:restore:pending";
+const pendingRestoreSchema = z.object({ id: restoreIdSchema, createdAt: z.number().finite() });
+type PendingRestore = z.infer<typeof pendingRestoreSchema>;
 
 function linesFor(items: BackupItem[], formatTime: (at: number) => string): LineInfo[] {
   if (items.length === 0) return [{ kind: "text", text: "復元できるバックアップはありません。" }];
@@ -82,6 +86,7 @@ export function createRestoreWorkspace({
   getResult,
   schedule,
   finish,
+  storage,
 }: {
   controller: BufferController;
   store: SettingsStore;
@@ -90,8 +95,10 @@ export function createRestoreWorkspace({
   getResult: (id: string) => Promise<RestoreLookup | null>;
   schedule: (callback: () => void, ms: number) => () => void;
   finish: (message: string, kind: "info" | "error") => void;
+  storage?: Pick<Storage, "getItem" | "setItem" | "removeItem">;
 }) {
-  let pending: { item: BackupItem; id: string } | null = null;
+  let pending: PendingRestore | null = null;
+  let lastRequest: PendingRestore | null = null;
   let cancel: (() => void) | undefined;
   let active = false;
   const listeners = new Set<() => void>();
@@ -128,18 +135,44 @@ export function createRestoreWorkspace({
     }
     finish(
       result.status === "done"
-        ? `${formatTime(request.item.createdAt)} のバックアップから戻しました。自動フローを一時停止しています。:resume で再開します。`
+        ? `${formatTime(request.createdAt)} のバックアップから戻しました。自動フローを一時停止しています。:resume で再開します。`
         : (result.message ?? "復元に失敗しました。"),
       result.status === "done" ? "info" : "error",
     );
   };
+  const resumePolling = (request: PendingRestore) => {
+    pending = lastRequest = request;
+    controller.notify(restorePendingNotice);
+    emit();
+    void poll();
+  };
   return {
     restarting,
+    prepareReload(requestId: string | null) {
+      const request = pending ?? (lastRequest?.id === requestId ? lastRequest : null);
+      if (!request) return;
+      try {
+        storage?.setItem(pendingRestoreKey, JSON.stringify(request));
+      } catch {
+        return;
+      }
+    },
     right(view: RightView) {
       return view.view === "backups" ? <RestoreList store={store} formatTime={formatTime} /> : null;
     },
     start() {
       active = true;
+      let resumed: PendingRestore | undefined;
+      try {
+        const saved = storage?.getItem(pendingRestoreKey);
+        if (saved) {
+          storage?.removeItem(pendingRestoreKey);
+          resumed = pendingRestoreSchema.safeParse(JSON.parse(saved)).data;
+        }
+      } catch {
+        resumed = undefined;
+      }
+      if (resumed) resumePolling(resumed);
       const dispose = [
         controller.actions.register({
           name: restoreAction,
@@ -174,11 +207,8 @@ export function createRestoreWorkspace({
               async () => {
                 const requestId = await post(id);
                 if (!active) return;
-                pending = { item, id: requestId };
                 controller.closeRight();
-                controller.notify(restorePendingNotice);
-                emit();
-                void poll();
+                resumePolling({ id: requestId, createdAt: item.createdAt });
               },
             );
           },
@@ -187,6 +217,7 @@ export function createRestoreWorkspace({
       return () => {
         active = false;
         pending = null;
+        lastRequest = null;
         cancel?.();
         dispose.forEach((unregister) => unregister());
       };

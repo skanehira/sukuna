@@ -97,6 +97,9 @@ it.each([false, true])(
               },
         );
         expect(result.status).toBe(corrupt ? "failed" : "done");
+        expect(values(opened.sqlite).restore_generation).toEqual(
+          corrupt ? undefined : { id: expect.any(String) },
+        );
         expect(existsSync(join(home, "restore.json"))).toBe(false);
         expect(readdirSync(join(home, "backups")).sort()).toEqual([
           "before-restore-20261128-101500.db",
@@ -511,6 +514,7 @@ it.each([null, "server", "runner"] as const)(
               sample: "saved",
               flow_paused: true,
               last_restore: { status: "failed", requestId },
+              restore_generation: { id: expect.any(String), requestId },
             });
           } finally {
             staged.close();
@@ -539,6 +543,7 @@ it.each([null, "server", "runner"] as const)(
           sample: "saved",
           flow_paused: true,
           last_restore: result,
+          restore_generation: { id: expect.any(String), requestId },
         });
       } finally {
         reopened.close();

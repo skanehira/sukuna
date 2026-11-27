@@ -11,7 +11,7 @@ import { SettingsPage } from "./settings";
 const requestId = "11111111-1111-4111-8111-111111111111";
 const otherId = "22222222-2222-4222-8222-222222222222";
 
-function fixture() {
+function fixture(storage?: Storage, initialResult: RestoreLookup | null = { status: "pending" }) {
   let current: Settings = {
     keymap: { version: 1, entries: [] },
     flowPaused: false,
@@ -38,7 +38,7 @@ function fixture() {
     replace: async () => current.keymap,
   });
   const post = vi.fn(async (_id: string) => requestId);
-  let result: RestoreLookup | null = { status: "pending" };
+  let result = initialResult;
   const getResult = vi.fn(async (_id: string) => result);
   let timer: (() => void) | undefined;
   const schedule = (callback: () => void) => {
@@ -58,6 +58,7 @@ function fixture() {
     getResult,
     schedule,
     finish: notice,
+    storage,
   });
   const dispose = restore.start();
   render(
@@ -198,4 +199,40 @@ it("通信中断後に別の復元結果に置き換わっていたら、成功�
     "error",
   );
   f.dispose();
+});
+
+it("復元で再読込する前後で受付番号を保ち、すでに届いた結果も依頼した画面に表示する", async () => {
+  const storage = window.sessionStorage;
+  storage.clear();
+  const before = fixture(storage);
+  await openMenu(before);
+  await act(async () =>
+    before.controller.run("settings.restore-select", { window: "right", view: "backups", line: 0 }),
+  );
+  await act(async () => before.controller.answer(new KeyboardEvent("keydown", { key: "y" })));
+  const result = {
+    status: "done",
+    message: null,
+    backupId: "2026-11-26",
+    at: 30,
+    requestId,
+  } as const;
+  before.next(result);
+  await before.tick();
+  expect(before.restore.restarting.snapshot()).toBe(false);
+  before.restore.prepareReload(requestId);
+  before.dispose();
+
+  const after = fixture(storage, result);
+  expect(after.post).not.toHaveBeenCalled();
+  expect(after.getResult).toHaveBeenCalledWith(requestId);
+  await waitFor(() => expect(after.restore.restarting.snapshot()).toBe(false));
+  expect(after.notice).toHaveBeenCalledWith(
+    "11/26 03:00 のバックアップから戻しました。自動フローを一時停止しています。:resume で再開します。",
+    "info",
+  );
+  after.dispose();
+  const later = fixture(storage);
+  expect(later.getResult).not.toHaveBeenCalled();
+  later.dispose();
 });

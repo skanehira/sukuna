@@ -10,6 +10,7 @@ import { accessSync, constants } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { rotateLog } from "../shared/log/rotate";
+import { readRestoreGeneration } from "../shared/db/restore-state";
 import { launchdEnvironment } from "./modules/settings/adapter/launchd-environment";
 import { fileURLToPath } from "node:url";
 import { readEnvironment } from "../shared/env";
@@ -82,6 +83,7 @@ const server = serve(
     fetch: createApp({
       clientDir,
       build: buildId,
+      restoreGeneration: readRestoreGeneration(getDatabase().sqlite),
       resolveIdentity: getRuntimeIdentity(),
       settings: createSettingsDependencies(
         () => getDatabase().db,

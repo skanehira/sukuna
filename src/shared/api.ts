@@ -1,5 +1,9 @@
 import { z } from "zod";
 
+export function isReadOnlyHttpMethod(method: string): boolean {
+  return ["GET", "HEAD", "OPTIONS", "TRACE"].includes(method.toUpperCase());
+}
+
 export const healthResponseSchema = z.strictObject({
   status: z.literal("ok"),
 });

@@ -24,7 +24,14 @@ import type { MessageDependencies } from "./modules/conversation/domain/message-
 import { createMessageHandler } from "./modules/conversation/adapter/message-routes";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
-import type { HealthResponse } from "../shared/api";
+import { isReadOnlyHttpMethod, type HealthResponse } from "../shared/api";
+import {
+  initialRestoreGeneration,
+  restoreGenerationCheckHeader,
+  restoreGenerationHeader,
+  restoreRequestHeader,
+  type RestoreGeneration,
+} from "../shared/settings/restore-schema";
 import { createIdentityMiddleware, type IdentityEnv } from "./modules/identity/adapter/middleware";
 import { createMeHandler } from "./modules/identity/adapter/routes";
 import { defaultIdentityOptions, type IdentityOptions } from "./modules/identity/adapter/options";
@@ -56,6 +63,7 @@ export type AppOptions = {
   pr?: PrDependencies;
   clientDir?: string;
   build: string;
+  restoreGeneration?: RestoreGeneration;
   identity?: IdentityOptions;
   resolveIdentity?: ResolveIdentity;
   settings?: SettingsDependencies;
@@ -79,6 +87,29 @@ export function createApp(options: AppOptions): Hono<IdentityEnv> {
   const app = new Hono<IdentityEnv>();
 
   app.use("*", createIdentityMiddleware({ resolve: resolveIdentity }));
+  const restoreGeneration = options.restoreGeneration;
+  const currentGeneration = restoreGeneration?.id ?? initialRestoreGeneration;
+  app.use("/api/*", async (c, next) => {
+    const expected = c.req.header(restoreGenerationCheckHeader);
+    if (
+      isReadOnlyHttpMethod(c.req.method) ||
+      expected === undefined ||
+      expected === currentGeneration
+    )
+      return next();
+    c.header("Cache-Control", "no-store");
+    c.header(restoreGenerationHeader, currentGeneration);
+    if (restoreGeneration?.requestId) c.header(restoreRequestHeader, restoreGeneration.requestId);
+    return c.json(
+      {
+        error: {
+          code: "conflict",
+          message: "データベースが復元されました。画面を開き直してください。",
+        },
+      },
+      409,
+    );
+  });
   if (options.conversations)
     app.route(
       "/api",
@@ -95,7 +126,7 @@ export function createApp(options: AppOptions): Hono<IdentityEnv> {
     app.get("/api/issues/:id/progress", createIssueProgressHandler(options.progress));
   }
 
-  app.get("/api/me", createMeHandler(options.build));
+  app.get("/api/me", createMeHandler(options.build, restoreGeneration));
 
   app.get("/api/health", (c) => {
     const body: HealthResponse = { status: "ok" };

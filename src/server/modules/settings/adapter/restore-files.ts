@@ -16,6 +16,7 @@ import Database from "better-sqlite3";
 import type { RestoreRequest, RestoreStatus } from "../../../../shared/settings/restore-schema";
 import { acquireLock } from "../../../../shared/db/startup";
 import {
+  putRestoreGeneration,
   putRestoreStatus,
   readRestoreRequest,
   readRestoreReceipt,
@@ -159,6 +160,7 @@ export function createRestoreFiles(
               )
               .run();
             putRestoreStatus(restored, status);
+            putRestoreGeneration(restored, request);
             restored.exec("COMMIT");
           } finally {
             restored.close();
