@@ -1,3 +1,7 @@
+import { setTimeout as sleep } from "node:timers/promises";
+import { createProgressRepository } from "./modules/conversation/adapter/progress-repository";
+import { createTimelineFilePort } from "./modules/conversation/adapter/timeline-file";
+import type { ProgressDependencies } from "./modules/conversation/domain/progress-port";
 import { WebSocketServer } from "ws";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -117,4 +121,17 @@ export function getRunnerLink(): RunnerLink {
 export function getWsHub(): WsHub {
   if (!hub) throw new Error("配信が初期化されていません");
   return hub;
+}
+
+let progressDependencies: ProgressDependencies | undefined;
+
+export function getProgressDependencies(): ProgressDependencies {
+  progressDependencies ??= {
+    repository: createProgressRepository(getDatabase().db),
+    timeline: createTimelineFilePort({
+      configDir: process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"),
+      sleep,
+    }),
+  };
+  return progressDependencies;
 }

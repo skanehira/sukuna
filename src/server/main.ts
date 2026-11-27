@@ -6,7 +6,7 @@ import { readEnvironment } from "../shared/env";
 import { createLogger } from "../shared/log";
 import { createApp } from "./app";
 import { buildId } from "./build-id";
-import { attachUpgradeHandler, getDatabase, initializeRuntime } from "./runtime";
+import { attachUpgradeHandler, getDatabase, initializeRuntime, getProgressDependencies } from "./runtime";
 import { createWorkspaceDependencies } from "./modules/workspace/adapter/dependencies";
 
 const environment = readEnvironment("server", process.env, homedir(), (path) => {
@@ -39,6 +39,7 @@ const server = serve(
       clientDir,
       build: buildId,
       workspace: createWorkspaceDependencies(() => getDatabase().db),
+      progress: getProgressDependencies(),
     }).fetch,
     port: env.port,
     hostname: "0.0.0.0",
