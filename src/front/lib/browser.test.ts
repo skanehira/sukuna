@@ -9,7 +9,7 @@ describe("ブラウザのタブ", () => {
     const open = vi.fn();
     const { controller, dispose } = createBrowserController(window, open);
     expect(open.mock.calls).toEqual([[{ kind: "conversation", id: "c1", thread: "t1" }]]);
-    expect(controller.right.current).toEqual({ view: "thread", target: "t1" });
+    expect(controller.right.current).toEqual({ view: "thread", target: "t1", parent: "c1" });
     void controller.navigate("/issues/i1");
     expect(window.location.pathname).toBe("/issues/i1");
     expect(open.mock.calls.at(-1)).toEqual([{ kind: "issue", id: "i1" }]);

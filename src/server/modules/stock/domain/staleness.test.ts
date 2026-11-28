@@ -63,3 +63,25 @@ it("引用の最後の行が消えたときは、残った行が同じでも古�
   expect(isStale(saved, "a\nb\n")).toBe(false);
   expect(isStale({ ...saved, text: "a\nb" }, "a\nb")).toBe(true);
 });
+
+it("矩形の桁に絵文字がかかった行だけを補正し、全文と比較する", () => {
+  const start = { line: 1, col: 2 };
+  const end = { line: 3, col: 3 };
+  const saved = { ...quote, mode: "block" as const, text: "W\n😀\nK", start, end };
+  expect(isStale(saved, "abWXYZ\nab😀cd\nabKLM")).toBe(false);
+  expect(isStale(saved, "abXYZW\nab😀cd\nabKLM")).toBe(true);
+  const legacy = { ...saved, text: "W\n\uD83D\nK" };
+  expect(isStale(legacy, "abWXYZ\nab😀cd\nabKLM")).toBe(false);
+});
+
+it("丸め前の左端が同じ矩形を行ごとの絵文字補正で照合する", () => {
+  const saved = {
+    ...quote,
+    mode: "block" as const,
+    text: "X\n😀\nL",
+    start: { line: 1, col: 3 },
+    end: { line: 3, col: 4 },
+  };
+  expect(isStale(saved, "abWXYZ\nab😀cd\nabKLM")).toBe(false);
+  expect(isStale(saved, "abWXYZ\nab😁cd\nabKLM")).toBe(true);
+});

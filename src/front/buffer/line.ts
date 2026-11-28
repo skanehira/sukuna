@@ -41,6 +41,7 @@ export type LineInfo = {
   strong?: boolean;
   seq?: number;
   seqLine?: number;
+  noQuote?: true;
 };
 
 export type ColumnDef = {

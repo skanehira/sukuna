@@ -118,7 +118,10 @@ export type RunnerNotice = z.infer<typeof runnerNoticeSchema>;
 export const STOCK_SEND_SETTLEMENT_TIMEOUT_MS = 20_000;
 export const sendStockIpcSchema = stockSendSchema.extend({ attempt_id: z.uuid().optional() });
 export type StockSendIpcInput = z.infer<typeof sendStockIpcSchema>;
-export const threadProposalIpcResponseSchema = z.strictObject({ run_state: z.literal("working") });
+export const threadProposalIpcResponseSchema = z.strictObject({
+  run_state: z.literal("working"),
+  proposal_seq: z.number().int().positive().optional(),
+});
 export const reserveReleaseSchema = z.preprocess(
   (input) => (input === undefined ? {} : input),
   z.strictObject({ idle_only: z.boolean().optional(), only_idle: z.boolean().optional() }),

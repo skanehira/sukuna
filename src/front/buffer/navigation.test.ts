@@ -136,3 +136,33 @@ describe("コピー", () => {
     ]);
   });
 });
+
+it("同じ会話のファイルと再読込で右のスレッドを保ち、別の親に移すと古い履歴を除く", () => {
+  const thread = { view: "stock-thread", target: "t1", parent: "c1" };
+  const list = { view: "stock-thread-list", target: "c1" };
+  const right = new RightWindow();
+  right.open(list);
+  right.open(thread);
+  right.navigate("file", "c1");
+  expect(right.state()).toEqual({ current: thread, stack: [list] });
+  const values = new Map<string, string>();
+  const store = new PositionStore({
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => {
+      values.set(key, value);
+    },
+  });
+  store.setRight(right.state());
+  store.flush();
+  const restored = new RightWindow(
+    new PositionStore({ getItem: (key) => values.get(key) ?? null, setItem: () => {} }).right(),
+  );
+  restored.navigate("conversation", "c1");
+  expect(restored.current).toEqual(thread);
+  restored.open({ view: "stock-list", target: "c1" });
+  restored.navigate("conversation", "c2");
+  expect(restored.state()).toEqual({
+    current: { view: "stock-list", target: "c2" },
+    stack: [{ view: "stock-thread-list", target: "c2" }],
+  });
+});

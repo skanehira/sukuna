@@ -3,24 +3,29 @@ import { useRef } from "react";
 import { useEffect } from "react";
 import type { Extension } from "@codemirror/state";
 import { Buffer, type BufferHandle } from "../../buffer/Buffer";
-import type { LineInfo } from "../../buffer/line";
+import type { BufferMarks } from "../../buffer/marks";
+import type { ColumnDef, LineInfo } from "../../buffer/line";
 
 export function FileBuffer({
   lines,
+  columns,
   viewName,
   side = "main",
   posKey,
   startLine,
   display,
+  marks,
   placement,
   ready = true,
 }: {
   lines: LineInfo[];
+  columns?: ColumnDef[];
   viewName: string;
   side?: "main" | "right" | "table";
   posKey?: string;
   startLine?: number;
   display?: Extension;
+  marks?: BufferMarks;
   placement?: { id: string };
   ready?: boolean;
 }) {
@@ -50,11 +55,13 @@ export function FileBuffer({
   return (
     <Buffer
       lines={lines}
+      columns={columns}
       side={side}
       viewName={viewName}
       posKey={posKey}
       startLine={startLine}
       display={display}
+      marks={marks}
       ready={ready}
       onReady={(handle) => {
         buffer.current = handle;

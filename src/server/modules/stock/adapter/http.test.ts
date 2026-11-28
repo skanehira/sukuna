@@ -1376,6 +1376,12 @@ describe("ストックとスレッド API", () => {
     const again = await finish(id, { action: "propose" });
     expect(again.status).toBe(202);
     expect(await again.json()).toEqual({ runState: "working" });
+    const recorded = runner.runtime.store
+      .events(id)
+      .find((event) => event.type === "user_message" && event.payload.origin === "finish_proposal");
+    expect(recorded).toBeDefined();
+    expect(proposal.headers.get("X-Sukuna-Proposal-Seq")).toBe(String(recorded!.seq));
+    expect(again.headers.get("X-Sukuna-Proposal-Seq")).toBe(String(recorded!.seq));
     const history = runner.runtime.store.events(id);
     expect(
       history.flatMap((entry) =>

@@ -64,6 +64,10 @@ test("API fixtureを使うUIブラウザ確認: キーだけで会話を始め�
     async (route) => {
       const request = route.request();
       const path = new URL(request.url()).pathname;
+      if (path === "/api/conversations/ui-conversation/stock")
+        return route.fulfill({ json: { items: [] } });
+      if (path === "/api/conversations/ui-conversation/threads")
+        return route.fulfill({ json: { threads: [] } });
       if (path === "/api/me" || path === "/api/health" || path === "/api/settings")
         return route.continue();
       if (path === "/api/inbox")

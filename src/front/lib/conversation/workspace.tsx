@@ -25,6 +25,9 @@ import { parseRoute, requestsConversationTail, screenKey, type Route } from "../
 import { ConversationApiError } from "./api";
 import { ConversationSession, type ConversationEnvironment } from "./session";
 import type { ConversationApi, Conversation, Snapshot } from "./types";
+import type { StockApi } from "../stock/api";
+import { conversationSource } from "../stock/quote";
+import { createStockWorkspace } from "../stock/workspace";
 import type { InboxStore } from "../inbox-store";
 import {
   isTimelineView,
@@ -49,6 +52,7 @@ export function createConversationWorkspace(
     notifications,
     verifyConnection,
     progress,
+    stock: stockApi,
   }: {
     progress?: { api: ProgressApi; storage: TabStorage };
     recap?: { api: RecapApi; storage: TabStorage };
@@ -58,6 +62,7 @@ export function createConversationWorkspace(
     notifications?: { receive(message: ServerMessage): void };
     files?: FilesApi;
     verifyConnection?: (signal: AbortSignal) => Promise<boolean>;
+    stock?: StockApi;
   } = {},
 ) {
   const sessions = new Map<string, ConversationSession>();
@@ -151,6 +156,25 @@ export function createConversationWorkspace(
       }
     };
   };
+  type OpenFile = (id: string, path: string, line: number, col: number) => void | Promise<void>;
+  let openStockFile: OpenFile | undefined;
+  const stock =
+    stockApi &&
+    createStockWorkspace({
+      api: stockApi,
+      controller,
+      conversations: api,
+      env,
+      subscribe: subscribeChanges,
+      showConversation,
+      lookup: (id) => storedConversation(id),
+      openFile: (id, path, line, col) => openStockFile?.(id, path, line, col),
+      queuedId: (id, item) =>
+        sessions
+          .get(id)
+          ?.snapshot()
+          .data?.queue.find((queued) => queued.stockItemId === item)?.id,
+    });
   const lifecycle =
     lifecycleOptions &&
     createLifecycleWorkspace({
@@ -206,7 +230,9 @@ export function createConversationWorkspace(
       readStart: fileRealtime.readStart,
       refreshScope: getConversation,
       entryId: () => env.id(),
+      stock: stock?.session,
     });
+  openStockFile = files?.openFile;
   const connection = {
     snapshot: () => connected,
     subscribe: (listener: () => void) => {
@@ -254,7 +280,7 @@ export function createConversationWorkspace(
   const sessionFor = (id: string, initial?: Snapshot) => {
     const existing = sessions.get(id);
     if (existing) return existing;
-    const session = new ConversationSession(id, api, controller, env, initial);
+    const session = new ConversationSession(id, api, controller, env, { initial });
     if (recap)
       session.recap = new RecapSession(session, recap.api, recap.storage, (fn, ms) =>
         env.schedule(fn, ms),
@@ -277,7 +303,13 @@ export function createConversationWorkspace(
     route: Route,
     openAtTail = requestsConversationTail(route),
   ): ReadyScreen => {
-    const seq = Number(new URLSearchParams(route.query).get("seq"));
+    const params = new URLSearchParams(route.query);
+    const seq = Number(params.get("seq"));
+    const nonnegative = (name: string) => {
+      const value = params.get(name);
+      const n = Number(value);
+      return value !== null && Number.isSafeInteger(n) && n >= 0 ? n : undefined;
+    };
     return {
       kind: "ready",
       title: `会話: ${session.snapshot().data!.conversation.title}`,
@@ -289,6 +321,9 @@ export function createConversationWorkspace(
           subscribe={subscribe}
           openAtTail={openAtTail}
           recordSeq={Number.isSafeInteger(seq) && seq > 0 ? seq : undefined}
+          recordLine={nonnegative("quoteLine")}
+          recordColumn={nonnegative("quoteColumn")}
+          marks={stock?.session(session.id).bufferMarks(conversationSource)}
           positionKey={`${screenKey(route)}:main`}
           activity={
             session.monitor ? (
@@ -300,6 +335,9 @@ export function createConversationWorkspace(
     };
   };
   const loadScreen: ScreenLoader = async (route) => {
+    const openingId = controller.screenOpening();
+    const onScreen = () => controller.screenOpening() === openingId;
+    if (route.kind !== "conversation") stock?.leave();
     if (
       currentSession &&
       (route.kind !== "conversation" || route.id !== currentSession.id || route.view)
@@ -357,13 +395,17 @@ export function createConversationWorkspace(
         const restoreTimeline = hasTimelineFile && hasSavedTimeline(id);
         const fileResolved = (initial?: Snapshot) =>
           hasTimelineFile ? (available: boolean) => resolveFile(available, initial) : undefined;
-        if (opening && (!restoreTimeline || sessions.has(id)))
+        if (opening && (!restoreTimeline || sessions.has(id))) {
+          const root = storedConversation(opening.scope.id);
+          if (root && onScreen()) stock?.enter(root);
           return files.render(route, opening.scope, opening, fileResolved());
+        }
         const initial = await getSnapshot(id);
         const conversation = initial.conversation;
         const root = conversation.parentConversationId
           ? await getConversation(conversation.parentConversationId)
           : conversation;
+        if (onScreen()) stock?.enter(root);
         controller.update({});
         return files.render(route, root, opening, fileResolved(initial));
       }
@@ -374,6 +416,11 @@ export function createConversationWorkspace(
       const parent = session.snapshot().data?.conversation.parentConversationId;
       if (files && parent && !storedConversation(parent)) await getConversation(parent);
       if (files) controller.update({});
+      if (onScreen()) {
+        const conversation = session.snapshot().data!.conversation;
+        if (conversation.kind !== "thread") stock?.enter(conversation);
+        else stock?.leave();
+      }
       loadedSessions.add(session);
       return conversationScreen(session, route);
     } catch (error) {
@@ -399,6 +446,8 @@ export function createConversationWorkspace(
     loadScreen,
     connection,
     renderRight: (view: RightView) => {
+      const stockPanel = stock?.right(view);
+      if (stockPanel) return stockPanel;
       if (view.view === "file-tree") return files?.tree(view.target) ?? null;
       if (isTimelineView(view.view)) {
         const route = parseRoute(controller.options.url ?? "/");
@@ -477,6 +526,7 @@ export function createConversationWorkspace(
         settingsChanged || notifications ? realtime.subscribe("app") : undefined;
       const unsubscribeInbox = inbox ? realtime.subscribe("inbox") : undefined;
       const stopFiles = files?.start();
+      const stopStock = stock?.start();
       realtime.start();
       return () => {
         unregister();
@@ -488,6 +538,7 @@ export function createConversationWorkspace(
         unsubscribeApp?.();
         unsubscribeInbox?.();
         stopFiles?.();
+        stopStock?.();
         realtime.stop();
       };
     },

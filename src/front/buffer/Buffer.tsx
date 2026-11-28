@@ -53,6 +53,7 @@ import {
   type TailPart,
 } from "./tail";
 import { bufferGutters } from "./gutters";
+import { refreshMarks, type BufferMarks } from "./marks";
 import { bufferTheme, type BufferSide } from "./theme";
 
 type LinePosition = { line: number; column?: number };
@@ -82,6 +83,7 @@ export type BufferProps = {
   columns?: ColumnDef[];
   startLine?: number;
   display?: Extension;
+  marks?: BufferMarks;
   followTail?: boolean;
   scrollPastEnd?: boolean;
   restorePosition?: boolean;
@@ -201,6 +203,7 @@ export function Buffer({
   columns,
   startLine,
   display,
+  marks,
   followTail = false,
   scrollPastEnd = false,
   restorePosition = true,
@@ -227,6 +230,7 @@ export function Buffer({
     columns: columns ?? [],
     startLine,
     display,
+    marks,
     followTail,
     scrollPastEnd,
     onReady,
@@ -264,7 +268,7 @@ export function Buffer({
       bufferCursorFilter,
       bufferColumns.of(config.columns),
       bufferField.init((state) => initialBufferView(state, content, config.columns)),
-      ...bufferGutters(config.side),
+      ...bufferGutters(config.side, config.marks),
       bufferTheme(config.side),
       display.of(config.display ?? []),
       EditorView.contentAttributes.of({ tabindex: "0", "aria-label": "バッファ" }),
@@ -501,6 +505,9 @@ export function Buffer({
         return findSeqLine(view.state.field(bufferField).lines, seq, seqLine);
       },
     };
+    const unsubscribeMarks = config.marks?.subscribe(() =>
+      view.dispatch({ effects: refreshMarks.of(null) }),
+    );
     const initialize = () => {
       config.onReady(handle);
       flushNow();
@@ -523,6 +530,7 @@ export function Buffer({
     return () => {
       if (!temporary) previousAttachment.current = window.position();
       unregister?.();
+      unsubscribeMarks?.();
       unmap?.();
       view.dom.removeEventListener("focusin", focus);
       view.dom.removeEventListener("dblclick", doubleClick);

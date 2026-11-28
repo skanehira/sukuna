@@ -14,6 +14,7 @@ import { createConversationApi } from "./lib/conversation/api";
 import { createLifecycleApi } from "./lib/lifecycle/api";
 import { createProgressApi } from "./lib/conversation/work-monitor";
 import { createConversationWorkspace } from "./lib/conversation/workspace";
+import { createStockApi } from "./lib/stock/api";
 import { createFilesApi } from "./lib/files/api";
 import type { RealtimeSocket } from "./lib/realtime";
 import { createProjectSettingsApi } from "./lib/project-settings-api";
@@ -127,6 +128,7 @@ const conversations = createConversationWorkspace(
     verifyConnection: (signal) => restoreConnection.verify(signal, buildCheck.observe),
     recap: { api: createRecapApi(request), storage: window.sessionStorage },
     progress: { api: createProgressApi(request), storage: window.sessionStorage },
+    stock: createStockApi(request),
     lifecycle: {
       api: createLifecycleApi(request),
       openExternal: (url) => {

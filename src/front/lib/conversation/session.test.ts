@@ -771,3 +771,117 @@ it("欠番回復後もツールの行先、質問の回答と展開済みの差�
     "発言6",
   ]);
 });
+
+async function answeringFixture() {
+  const f = fixture();
+  f.data.conversation.lastSeq = 2;
+  f.data.conversation.runState = "waiting_answer";
+  f.events.push({
+    seq: 2,
+    createdAt: 2,
+    type: "question",
+    payload: {
+      request_id: "q",
+      questions: [{ question: "どちらですか", header: "確認", options: [], multi_select: false }],
+    },
+  });
+  await f.session.load();
+  const disconnect = f.session.connect();
+  const controller = f.session.controller;
+  const openAnswer = () =>
+    controller.run("conversation.answer.0", { view: "conversation", window: "main", line: 0 });
+  return { f, controller, disconnect, openAnswer };
+}
+
+it("別の端末から届いた指示の下書きは回答欄に反映せず、次の指示入力で使う", async () => {
+  const { f, controller, disconnect, openAnswer } = await answeringFixture();
+  const answers: unknown[] = [];
+  f.api.saveAnswers = async (_id, seq, value) => {
+    answers.push({ seq, value });
+    return { pendingAnswers: null };
+  };
+  try {
+    await openAnswer();
+    controller.setPromptDraft("この質問への答え");
+    f.data.draft = {
+      text: "別端末の指示",
+      images: ["other-image"],
+      updatedAt: 10,
+      updatedBy: "other",
+    };
+    await f.session.refresh();
+    expect({ text: controller.promptText(), images: controller.snapshot().prompt?.images }).toEqual(
+      {
+        text: "この質問への答え",
+        images: undefined,
+      },
+    );
+    await controller.submitPrompt(controller.promptText());
+    expect(answers).toEqual([
+      { seq: 2, value: { "0": { choices: [], text: "この質問への答え" } } },
+    ]);
+    controller.openPrompt(controller.options.prompt!()!);
+    expect({ text: controller.promptText(), images: controller.snapshot().prompt?.images }).toEqual(
+      {
+        text: "別端末の指示",
+        images: 1,
+      },
+    );
+  } finally {
+    disconnect();
+  }
+});
+
+it("指示の保存応答が遅れて他端末の下書きを返しても、後から開いた回答欄を変更しない", async () => {
+  const { f, controller, disconnect, openAnswer } = await answeringFixture();
+  const gate = deferred();
+  try {
+    f.api.saveDraft = async () => {
+      await gate.promise;
+      return {
+        draft: { text: "別端末の指示", images: [], updatedAt: 10, updatedBy: "other" },
+        applied: false,
+      };
+    };
+    controller.openPrompt(controller.options.prompt!()!);
+    controller.setPromptDraft("保存を待つ指示");
+    controller.snapshot().prompt!.change!("保存を待つ指示");
+    const saving = f.session.saveDraft();
+    controller.update({ active: "main" });
+    await openAnswer();
+    expect(controller.snapshot().prompt?.label).toBe("Q1 への回答");
+    controller.setPromptDraft("保存中に書いた回答");
+    gate.resolve();
+    expect(await saving).toBe(true);
+    expect(controller.promptText()).toBe("保存中に書いた回答");
+  } finally {
+    gate.resolve();
+    disconnect();
+  }
+});
+
+it("確定事項の編集欄は同じスレッドの共有下書きを受け取っても編集中の文章を保つ", async () => {
+  const f = fixture();
+  f.data.draft = { text: "先に用意した確定事項", images: [], updatedAt: 1, updatedBy: "other" };
+  await f.session.load();
+  const disconnect = f.session.connect();
+  const controller = f.session.controller;
+  try {
+    f.session.proposeFinish("AIの案", async () => {});
+    f.data.draft = {
+      text: "別端末の返信",
+      images: ["other-image"],
+      updatedAt: 10,
+      updatedBy: "other",
+    };
+    await f.session.refresh();
+    expect({ text: controller.promptText(), images: controller.snapshot().prompt?.images }).toEqual(
+      {
+        text: "先に用意した確定事項",
+        images: undefined,
+      },
+    );
+  } finally {
+    disconnect();
+  }
+});

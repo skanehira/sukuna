@@ -87,6 +87,7 @@ export const patchStockSchema = z.union([
   z.strictObject({ text: stockTextSchema }),
   z.strictObject({ state: z.literal("stocked") }),
 ]);
+export const threadProposalSequenceHeader = "X-Sukuna-Proposal-Seq";
 export const finishThreadSchema = z.discriminatedUnion("action", [
   z.strictObject({ action: z.literal("close") }),
   z.strictObject({ action: z.literal("propose") }),

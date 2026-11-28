@@ -11,6 +11,8 @@ import { fileSyntax, isMarkdown, singleLine, sizeLabel } from "../../lib/files/d
 import { markdownPreview } from "../../lib/files/markdown-decorations";
 import { relativeFilePath } from "../../lib/files/path-at-cursor";
 import { fileDiff } from "../../lib/files/realtime";
+import { fileSource } from "../../lib/stock/quote";
+import type { StockSession } from "../../lib/stock/session";
 import { FileBuffer } from "./FileBuffer";
 
 function contentLines(data?: FileContentResponse, error?: unknown): LineInfo[] {
@@ -55,6 +57,7 @@ export function FileView({
   startLine,
   initialContent,
   onResolved,
+  stock,
 }: {
   files: FileViewContext;
   scope: FileScope;
@@ -63,6 +66,7 @@ export function FileView({
   startLine: number;
   initialContent?: FileContentResponse;
   onResolved?: (available: boolean) => void;
+  stock?: StockSession;
 }) {
   const { id, cwd } = scope;
   const watchedPath = relativeFilePath(path, cwd) ?? path;
@@ -172,10 +176,11 @@ export function FileView({
           dismissCheck(checksRequested);
           setChanged(false);
           void mutate().catch(() => undefined);
+          void stock?.load("stock");
         },
         toggle: () => setPreview((current) => !current),
       }),
-    [files, url, mutate, checksRequested],
+    [files, url, mutate, checksRequested, stock],
   );
 
   const updateNotice = changed
@@ -199,6 +204,7 @@ export function FileView({
           viewName={view}
           startLine={initial}
           display={markdown && preview ? markdownPreview : syntax}
+          marks={stock?.bufferMarks((lines) => fileSource(watchedPath, lines))}
         />
       ) : (
         <p className="px-4 py-2 text-muted" role="status">

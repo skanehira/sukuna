@@ -1,4 +1,5 @@
 import type { LineInfo } from "../line";
+import type { BufferSelection } from "../selection";
 import type { KeymapConfig, KeymapEntry } from "../../../shared/settings/keymap-schema";
 export type { KeymapConfig, KeymapEntry } from "../../../shared/settings/keymap-schema";
 
@@ -15,6 +16,7 @@ export type ActionContext = {
   line: number;
   text?: string;
   selectedLines?: readonly LineInfo[];
+  selection?: BufferSelection;
 };
 export type ActionInfo = {
   name: string;

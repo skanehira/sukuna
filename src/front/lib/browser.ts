@@ -1,5 +1,6 @@
 import { BufferController } from "../buffer/controller";
 import { browserClipboard } from "../buffer/clipboard";
+import { isThreadRight } from "../buffer/right-window";
 import { PositionStore } from "../buffer/position-store";
 import { openRoute, parseRoute, type Route } from "./routes";
 import { z } from "zod";
@@ -54,7 +55,11 @@ export function createBrowserController(
   const display = (url: string, entry?: string, initial = false) => {
     const route = parseRoute(url);
     const destination = route.kind === "conversation" && route.view ? route.view : route.kind;
-    if (!initial || ["grep", "files", "changes"].includes(destination)) {
+    const storedRight = controller.right.state();
+    const restoringThread =
+      (storedRight.current !== null && isThreadRight(storedRight.current)) ||
+      storedRight.stack.some(isThreadRight);
+    if (!initial || restoringThread || ["grep", "files", "changes"].includes(destination)) {
       const previous = controller.right.current;
       controller.right.navigate(destination, route.id ?? "");
       controller.positions.setRight(controller.right.state());
@@ -67,7 +72,18 @@ export function createBrowserController(
         controller.focus("main");
       }
     }
-    if (route.thread) controller.openRight({ view: "thread", target: route.thread });
+    if (route.kind === "conversation" && route.id && route.thread) {
+      const current = controller.right.current;
+      if (
+        !(
+          current &&
+          isThreadRight(current) &&
+          current.target === route.thread &&
+          current.parent === route.id
+        )
+      )
+        controller.openRight({ view: "thread", target: route.thread, parent: route.id });
+    }
     openRoute(url, open, entry);
   };
   const pop = () => {

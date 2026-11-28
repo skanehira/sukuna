@@ -6,6 +6,7 @@ import {
   finishThreadSchema,
   patchStockSchema,
   stockSendSchema,
+  threadProposalSequenceHeader,
 } from "../../../../shared/stock";
 import type { StockDependencies, StockError } from "../domain/ports";
 import { add } from "../usecase/add";
@@ -66,7 +67,12 @@ export function createStockRoutes(deps: StockDependencies): Hono {
     const input = finishThreadSchema.safeParse(await c.req.json().catch(() => null));
     if (!input.success) return invalid(c);
     const result = await finishThread(c.req.param("id"), input.data, deps);
-    return response<unknown>(c, result, input.data.action === "propose" ? 202 : 200);
+    if (result.isOk() && "runState" in result.value) {
+      const { runState, proposalSeq } = result.value;
+      if (proposalSeq !== undefined) c.header(threadProposalSequenceHeader, String(proposalSeq));
+      return c.json({ runState }, 202);
+    }
+    return response<unknown>(c, result);
   });
   return app;
 }
