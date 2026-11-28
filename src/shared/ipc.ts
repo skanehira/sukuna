@@ -23,6 +23,7 @@ export function runnerCallerCancelled(request: Request, now: () => number) {
 export const designRejectionDraftSchema = z.strictObject({
   text: z.string(),
   images: z.array(z.string()),
+  timeline_anchors: z.array(timelineAnchorSchema).optional(),
   updatedAt: z.number().int(),
   updatedBy: z.string(),
 });
@@ -42,6 +43,7 @@ export const sendMessageSchema = z
   .object({
     receipt_metadata: z.boolean().optional(),
     restore_draft: restoreConversationDraftSchema.optional(),
+    stock_ids: z.array(z.string().min(1)).min(1).optional(),
     text: z.string(),
     images: z.array(z.string()),
     interrupt: z.boolean(),

@@ -1,5 +1,5 @@
 import { codePointEdge, sliceStockBlockLine } from "../../../shared/stock-columns";
-import type { Quote } from "../../../shared/stock";
+import type { DesignQuotePosition, Quote } from "../../../shared/stock";
 import type { LineInfo } from "../../buffer/line";
 import type { BufferSelection, SelectedRange } from "../../buffer/selection";
 
@@ -9,7 +9,8 @@ type PrPosition = Position & { side: "old" | "new" };
 type Positions<T> = { positions: readonly (T | undefined)[] };
 export type QuoteSource =
   | ({ kind: "conversation" } & Positions<ConversationPosition>)
-  | ({ kind: "file" | "design_diff"; path: string } & Positions<Position>)
+  | ({ kind: "file"; path: string } & Positions<Position>)
+  | ({ kind: "design_diff"; path: string } & Positions<Omit<DesignQuotePosition, "col">>)
   | ({ kind: "pr_diff"; path: string; commit: string } & Positions<PrPosition>)
   | { kind: "terminal" };
 
@@ -33,6 +34,39 @@ export function fileSource(path: string, lines: readonly LineInfo[]): QuoteSourc
     path,
     positions: lines.map((line, index) => (line.kind === "code" ? { line: index + 1 } : undefined)),
   };
+}
+
+export function designSource(path: string, lines: readonly LineInfo[]): QuoteSource {
+  return {
+    kind: "design_diff",
+    path,
+    positions: lines.map(({ designDiff }) =>
+      designDiff?.path === path && designDiff.newNo !== undefined
+        ? { line: designDiff.newNo, ...(designDiff.row ? { row: designDiff.row } : {}) }
+        : undefined,
+    ),
+  };
+}
+
+export function sameDesignPosition(
+  current: Omit<DesignQuotePosition, "col">,
+  saved: Omit<DesignQuotePosition, "col">,
+): boolean {
+  return (
+    current.line === saved.line &&
+    (!saved.row || (current.row?.side === saved.row.side && current.row.line === saved.row.line))
+  );
+}
+
+export function matchesQuotedLine(
+  text: string,
+  firstLine: string,
+  column: number,
+  blockEnd?: number,
+): boolean {
+  return blockEnd === undefined
+    ? text.startsWith(firstLine, column)
+    : sliceStockBlockLine(text, column, blockEnd) === firstLine;
 }
 
 export function makeQuote(
@@ -88,6 +122,14 @@ export function makeQuote(
       kind: source.kind,
       path: source.path,
       commit: source.commit,
+      start: { ...source.positions[first.line]!, ...start },
+      end: { ...source.positions[last.line]!, ...end },
+    };
+  if (source.kind === "design_diff")
+    return {
+      ...base,
+      kind: source.kind,
+      path: source.path,
       start: { ...source.positions[first.line]!, ...start },
       end: { ...source.positions[last.line]!, ...end },
     };

@@ -3,6 +3,7 @@ import { useRef } from "react";
 import { useEffect } from "react";
 import { Buffer, type BufferHandle } from "../buffer/Buffer";
 import type { BufferController } from "../buffer/controller";
+import type { BufferMarks } from "../buffer/marks";
 import type { ColumnDef, LineInfo } from "../buffer/line";
 import type { BufferSide } from "../buffer/theme";
 
@@ -15,6 +16,8 @@ export function ListingBuffer({
   controller,
   status = "",
   ready = true,
+  marks,
+  initialPosition,
 }: {
   lines: LineInfo[];
   columns?: ColumnDef[];
@@ -24,11 +27,16 @@ export function ListingBuffer({
   controller?: BufferController;
   status?: string;
   ready?: boolean;
+  marks?: BufferMarks;
+  initialPosition?: { line: number; column: number };
 }) {
   const handle = useRef<BufferHandle | null>(null);
+  const placed = useRef(false);
   useEffect(() => {
-    handle.current?.replaceAll(lines, { ready });
-  }, [lines, ready]);
+    const position = !placed.current ? initialPosition : undefined;
+    if (position) placed.current = true;
+    handle.current?.replaceAll(lines, { ready, position });
+  }, [initialPosition, lines, ready]);
   useEffect(() => {
     const remove = status
       .split("|")
@@ -44,6 +52,7 @@ export function ListingBuffer({
       posKey={posKey}
       lines={lines}
       columns={columns}
+      marks={marks}
       onReady={(value) => {
         handle.current = value;
       }}

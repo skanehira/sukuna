@@ -1,9 +1,9 @@
 import { z } from "zod";
 import { answersSchema, type Answers, type RunState, type StopReason } from "../events";
 import { timelineInputCommentSchema } from "../progress/schema";
-import { timelineAnchorSchema, validTimelineAnchors } from "../progress/draft";
+import { queueDraftContent, timelineAnchorSchema, validTimelineAnchors } from "../progress/draft";
 
-const draftReceiptSchema = z
+export const draftReceiptSchema = z
   .strictObject({
     text: z.string(),
     images: z.array(z.string()),
@@ -31,6 +31,7 @@ export const sendConversationMessageSchema = z
     timeline_comments: z.array(timelineInputCommentSchema).optional(),
     timeline_anchors: z.array(timelineAnchorSchema).optional(),
     preserveDraft: z.literal(true).optional(),
+    stockIds: z.array(z.string().min(1)).min(1).optional(),
     restoreDraft: restoreConversationDraftSchema.optional(),
   })
   .refine(validTimelineAnchors)
@@ -148,10 +149,59 @@ export type ConversationEventsPage = {
   hasMore: boolean;
 };
 
+export const queueDeliveryContextSchema = z.object({
+  stockIds: z.array(z.string()).optional(),
+  original: z
+    .object({
+      text: z.string(),
+      images: z.array(z.string()),
+      timeline_anchors: z.array(timelineAnchorSchema).optional(),
+    })
+    .refine(validTimelineAnchors)
+    .optional(),
+  receipts: z
+    .array(
+      z.object({
+        clientId: z.string(),
+        queuedId: z.string(),
+        createdAt: z.number().int(),
+      }),
+    )
+    .optional(),
+  legacyTexts: z.array(z.string()).optional(),
+  queuedIds: z.array(z.string()).optional(),
+  originalRanges: z
+    .array(
+      z.object({
+        from: z.number().int().nonnegative(),
+        to: z.number().int().nonnegative(),
+      }),
+    )
+    .optional(),
+});
+export type QueueDeliveryContext = z.infer<typeof queueDeliveryContextSchema>;
+
+export function queuedStockIds(item: {
+  deliveryContext?: QueueDeliveryContext;
+  stockItemId?: string | null;
+}): readonly string[] {
+  return item.deliveryContext?.stockIds ?? (item.stockItemId ? [item.stockItemId] : []);
+}
+
+export function queuedDraftContent(item: ConversationQueueItem): ConversationContent | null {
+  const draft = item.deliveryContext
+    ? item.deliveryContext.original
+    : item.stockItemId
+      ? undefined
+      : queueDraftContent(item);
+  return draft && (draft.text || draft.images.length) ? draft : null;
+}
+
 export type ConversationQueueItem = ConversationContent & {
   id: string;
   position: number;
   stockItemId: string | null;
+  deliveryContext?: QueueDeliveryContext;
   clientId: string | null;
   createdAt: number;
   timeline_comments?: import("../progress/schema").TimelineInputComment[];

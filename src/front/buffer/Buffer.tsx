@@ -220,6 +220,7 @@ export function Buffer({
   );
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
+  const gutters = useRef(new Compartment()).current;
   const batchRef = useRef<Batch | null>(null);
   const frameRef = useRef<number | null>(null);
   const identity = useRef({});
@@ -230,7 +231,6 @@ export function Buffer({
     columns: columns ?? [],
     startLine,
     display,
-    marks,
     followTail,
     scrollPastEnd,
     onReady,
@@ -268,7 +268,7 @@ export function Buffer({
       bufferCursorFilter,
       bufferColumns.of(config.columns),
       bufferField.init((state) => initialBufferView(state, content, config.columns)),
-      ...bufferGutters(config.side, config.marks),
+      gutters.of(bufferGutters(config.side)),
       bufferTheme(config.side),
       display.of(config.display ?? []),
       EditorView.contentAttributes.of({ tabindex: "0", "aria-label": "バッファ" }),
@@ -505,9 +505,6 @@ export function Buffer({
         return findSeqLine(view.state.field(bufferField).lines, seq, seqLine);
       },
     };
-    const unsubscribeMarks = config.marks?.subscribe(() =>
-      view.dispatch({ effects: refreshMarks.of(null) }),
-    );
     const initialize = () => {
       config.onReady(handle);
       flushNow();
@@ -530,7 +527,6 @@ export function Buffer({
     return () => {
       if (!temporary) previousAttachment.current = window.position();
       unregister?.();
-      unsubscribeMarks?.();
       unmap?.();
       view.dom.removeEventListener("focusin", focus);
       view.dom.removeEventListener("dblclick", doubleClick);
@@ -543,6 +539,13 @@ export function Buffer({
       view.destroy();
     };
   }, []);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({ effects: gutters.reconfigure(bufferGutters(side, marks)) });
+    return marks?.subscribe(() => view.dispatch({ effects: refreshMarks.of(null) }));
+  }, [gutters, marks, side]);
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">

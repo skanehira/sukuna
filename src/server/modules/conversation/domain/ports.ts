@@ -2,6 +2,7 @@ import type { Result } from "neverthrow";
 import type { WorkspaceSwitchAttempt, WorkspaceSwitchReceipt } from "../../../../shared/ipc";
 import type {
   ConversationContent,
+  QueueDeliveryContext,
   ConversationDraft,
   PublicConversation,
   PendingAnswers,
@@ -39,7 +40,12 @@ export interface ConversationRepository {
   draft(id: string): ConversationDraft | null;
   writeDraft(id: string, draft: ConversationDraft): void;
   queue(id: string): QueueItem[];
-  editQueue(id: string, itemId: string, input: ConversationContent): QueueItem | null;
+  editQueue(
+    id: string,
+    itemId: string,
+    input: ConversationContent,
+    context?: QueueDeliveryContext,
+  ): QueueItem | null;
   removeQueue(id: string, itemId: string): QueueItem | null;
   returnStock(id: string): void;
   events(id: string, after?: number, limit?: number): StoredEvent[];

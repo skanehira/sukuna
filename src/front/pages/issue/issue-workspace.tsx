@@ -10,6 +10,7 @@ import { IssueForm, issueFormUrl } from "./issue-form";
 import { issueFormTitle } from "./issue-form-lines";
 import { issueDisplays } from "./issue-head-lines";
 import { IssuePage } from "./issue-page";
+import type { IssueDesign } from "./design-view";
 
 const lastProjectKey = "sukuna:issue:last-project";
 const newIssueView = "issue-new";
@@ -17,6 +18,7 @@ const newIssueView = "issue-new";
 export function createIssueWorkspace({
   controller,
   api,
+  design,
   storage,
   id,
   subscribe,
@@ -30,6 +32,7 @@ export function createIssueWorkspace({
 }: {
   controller: BufferController;
   api: IssueApi;
+  design?: IssueDesign;
   storage: IssueTabStorage;
   id: () => string;
   subscribe: LifecycleFeed;
@@ -94,8 +97,10 @@ export function createIssueWorkspace({
               initialDisplay={display}
               projectName={project.name}
               api={api}
+              design={design}
               controller={controller}
               subscribe={subscribeIssue}
+              subscribeDesign={subscribe}
               subscribeConversation={subscribeConversation}
               loadConversation={loadConversation}
               monitorConversation={monitorConversation}

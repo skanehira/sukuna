@@ -1,3 +1,4 @@
+import type { QueueDeliveryContext } from "../conversation/api";
 import type { TimelineAnchor } from "../progress/draft";
 import { sql } from "drizzle-orm";
 import type { IssueState, IssueStopReason } from "../issue/state";
@@ -141,6 +142,7 @@ export const queuedInstructions = sqliteTable("queued_instructions", {
     .default(sql`'[]'`),
   position: integer("position").notNull(),
   stockItemId: text("stock_item_id"),
+  deliveryContext: text("delivery_context", { mode: "json" }).$type<QueueDeliveryContext>(),
   clientId: text("client_id"),
   createdAt: integer("created_at").notNull(),
   timelineAnchors: text("timeline_anchors", { mode: "json" }).$type<TimelineAnchor[]>(),

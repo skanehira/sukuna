@@ -1,4 +1,4 @@
-import type { ConversationDraft } from "../../../../shared/conversation/api";
+import type { ConversationDraft, QueueDeliveryContext } from "../../../../shared/conversation/api";
 import type { TimelineAnchor } from "../../../../shared/progress/draft";
 import type { WorktreeActivityReservation } from "../../../../shared/workspace/worktree-activity";
 import type { Result } from "neverthrow";
@@ -40,6 +40,7 @@ export type QueuedInstruction = {
   clientId: string | null;
   createdAt: number;
   stockItemId?: string;
+  deliveryContext?: QueueDeliveryContext;
 };
 export type AcceptedInstruction = Omit<QueuedInstruction, "position" | "stockItemId">;
 export type SendResult =
@@ -81,13 +82,14 @@ export interface ConversationStore {
   latestStopSeq(id: string): number | null;
   append(id: string, event: ConversationEvent, now: number): StoredEvent | null;
   stageAccepted(instruction: AcceptedInstruction): void;
-  removeAccepted(id: string): boolean;
+  removeAccepted(id: string, deliveredSeq?: number): boolean;
   recoverAccepted(id?: string): boolean;
   draft(id: string): ConversationDraft | null;
   writeDraft(id: string, draft: ConversationDraft): void;
   queue(id: string): QueuedInstruction[];
   enqueue(instruction: QueuedInstruction): void;
-  dequeue(id: string, deliveredSeq: number): void;
+  recordStockDelivery(id: string, stocks: readonly string[], seq: number): void;
+  dequeue(id: string, deliveredSeq?: number): void;
   duplicate(id: string, clientId: string, since: number): SendResult | null;
   isUnanswered(id: string, questionSeq: number): boolean;
   finishAnswers(id: string, questionSeq: number): void;

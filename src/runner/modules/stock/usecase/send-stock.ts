@@ -131,6 +131,27 @@ async function sendInstructions(
     }
     verify();
     current = runtime.store.get(id)!;
+    const rejection = runtime.runOptions.rejectReviewedDesign(
+      current,
+      input,
+      {
+        events: [],
+        check,
+        checkBeforeCommit: check,
+        before: () => {
+          const now = runtime.options.clock.now();
+          items.forEach((item) => markSent(item, now));
+          receipt?.instructions({ count: items.length, delivery: "delivered" }, current.closedAt);
+        },
+      },
+      { ids: items.map(({ id }) => id) },
+    );
+    if (rejection) {
+      const result = await rejection;
+      if (result.isErr()) return err(result.error);
+      runtime.partsChanged(id, ["stock"]);
+      return ok("delivered");
+    }
     if (activeStates.includes(current.runState)) {
       const queuedIds = messages.map(() => runtime.options.id());
       const prepared = runtime.runOptions.prepareQueue(current, input, cancelled, queuedIds);

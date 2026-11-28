@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { draftReceiptSchema } from "../conversation/api";
 import { issueStateSchema } from "../issue/state";
 
 export const designCommitSchema = z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/);
@@ -98,7 +99,10 @@ export const designResponseSchema = z.object({
   unsentInstructionCount: z.number().int().nonnegative(),
 });
 export const approveDesignInputSchema = z.strictObject({ headCommit: designCommitSchema });
-export const rejectDesignInputSchema = z.strictObject({ text: z.string().max(20_000) });
+export const rejectDesignInputSchema = z.strictObject({
+  text: z.string().max(20_000),
+  draft: draftReceiptSchema.nullable().optional(),
+});
 export const approveDesignResponseSchema = z.object({ status: z.literal("reflecting") });
 export const rejectDesignResponseSchema = z.object({ deliveredStockIds: z.array(z.string()) });
 export type DesignResponse = z.infer<typeof designResponseSchema>;

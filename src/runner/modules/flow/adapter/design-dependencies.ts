@@ -1,3 +1,5 @@
+import { createStockQuoteCheck } from "../../stock/adapter/dependencies";
+import { createOutgoingStockRepository } from "../../stock/adapter/outgoing-stock-repository";
 import type { OpenedDatabase } from "../../../../shared/db/open";
 import type { GhRunner } from "../../../../shared/gh/gh-runner";
 import { createWorktreeActivity } from "../../../../shared/workspace/sqlite-worktree-activity";
@@ -62,7 +64,13 @@ export function createDesignFlow(
     workspace,
     attachWorkspace,
     submit: createSubmitDesign(deps),
-    reject: createRejectDesign(deps, runtime, reflect.reflecting),
+    reject: createRejectDesign(
+      deps,
+      runtime,
+      reflect.reflecting,
+      createOutgoingStockRepository(database.db),
+      createStockQuoteCheck(database.db),
+    ),
     approve: reflect.approve,
     completePr: reflect.completePr,
     recoverApproval: reflect.recoverApproval,

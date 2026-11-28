@@ -42,6 +42,10 @@ const conversationPosition = z.strictObject({
   line: z.number().int().nonnegative(),
   seq: z.number().int().positive(),
 });
+const designPosition = filePosition.extend({
+  row: z.strictObject({ side: z.enum(["old", "new"]), line: position.line }).optional(),
+});
+export type DesignQuotePosition = z.infer<typeof designPosition>;
 const diffPosition = z.strictObject({ ...position, side: z.enum(["old", "new"]) });
 export const quoteSchema = z.discriminatedUnion("kind", [
   z.strictObject({
@@ -61,8 +65,8 @@ export const quoteSchema = z.discriminatedUnion("kind", [
     ...base,
     kind: z.literal("design_diff"),
     path: z.string(),
-    start: filePosition,
-    end: filePosition,
+    start: designPosition,
+    end: designPosition,
   }),
   z.strictObject({
     ...base,

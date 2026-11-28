@@ -110,6 +110,31 @@ it("通知付きnoticeを既存のお知らせとして4秒表示する", () => 
   }
 });
 
+it("通知用メタデータが無い issue の反映失敗もエラーのお知らせに出す", () => {
+  const notify = vi.fn();
+  const app = createBrowserNotifications({ notify, title: () => {} });
+  app.receive({
+    topic: "app",
+    seq: 1,
+    type: "notice",
+    payload: { level: "info", message: "読み込みました", issue_id: "issue" },
+  });
+  app.receive({
+    topic: "app",
+    seq: 2,
+    type: "notice",
+    payload: {
+      level: "error",
+      message: "既定ブランチと設計書の変更がぶつかりました",
+      issue_id: "issue",
+    },
+  });
+  expect(notify).toHaveBeenCalledExactlyOnceWith(
+    "既定ブランチと設計書の変更がぶつかりました",
+    "error",
+  );
+});
+
 it("未読の判断待ちと指示待ちだけをタイトルに数え、更新を1秒にまとめる", async () => {
   vi.useFakeTimers();
   let inbox = data([

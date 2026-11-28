@@ -2,6 +2,7 @@ import type { Quote, StockItem } from "../../../shared/stock";
 import type { ServerMessage } from "../../../shared/ws";
 import type { BufferController } from "../../buffer/controller";
 import type { ActionContext, ActionDef } from "../../buffer/keymap/registry";
+import type { LineInfo } from "../../buffer/line";
 import { isThreadRight, type RightView } from "../../buffer/right-window";
 import { StockWindow, stockView } from "../../components/stock/StockWindow";
 import { ThreadList, threadListView } from "../../components/stock/ThreadList";
@@ -14,12 +15,22 @@ import { relativeFilePath } from "../files/path-at-cursor";
 import { parseRoute, routeUrl } from "../routes";
 import type { StockApi } from "./api";
 import type { StockMark } from "./marks";
-import { conversationSource, fileSource, makeQuote } from "./quote";
+import { conversationSource, designSource, fileSource, makeQuote } from "./quote";
 import { StockSession } from "./session";
 
-const quoteViews = ["conversation", "file", "markdown-file"];
+const designView = "issue-design";
+const quoteViews = ["conversation", "file", "markdown-file", designView];
 const undoViews = [stockView, ...quoteViews];
-type Scope = Pick<Conversation, "id" | "title" | "issueId" | "cwd">;
+type Scope = Pick<Conversation, "id" | "title" | "issueId"> & { cwd?: string };
+export function designMarks(stock: StockSession, lines: readonly LineInfo[]) {
+  const paths = new Set(lines.flatMap(({ designDiff }) => (designDiff ? [designDiff.path] : [])));
+  return new Map(
+    [...paths].flatMap((path) => [
+      ...stock.marks((viewLines) => designSource(path, viewLines), lines),
+    ]),
+  );
+}
+
 type UndoEntry = {
   order: number;
   stock: StockSession;
@@ -54,7 +65,7 @@ export function createStockWorkspace({
   const scopes = new Map<string, Scope>();
   const sessions = new Map<string, StockSession>();
   const threadSessions = new WeakMap<StockSession, Map<string, ConversationSession>>();
-  let active: { id: string; leave: () => void } | undefined;
+  let active: { id: string; issueId?: string; leave: () => void } | undefined;
   let cancellation = 0;
   let latestCancellation = 0;
   let undo: UndoEntry | undefined;
@@ -77,12 +88,19 @@ export function createStockWorkspace({
     return value;
   };
   const route = () => parseRoute(controller.options.url ?? "/");
+  const onIssue = (route: ReturnType<typeof parseRoute>) =>
+    active?.issueId !== undefined &&
+    route.kind === "issue" &&
+    route.id === active.issueId &&
+    route.view !== "edit";
   const current = () => {
     const value = route();
     const scope =
-      value.kind === "conversation" && value.id
-        ? (lookup?.(value.id) ?? scopes.get(value.id))
-        : undefined;
+      onIssue(value) && active
+        ? scopes.get(active.id)
+        : value.kind === "conversation" && value.id
+          ? (lookup?.(value.id) ?? scopes.get(value.id))
+          : undefined;
     return scope && active?.id === scope.id ? { stock: session(scope.id), scope } : undefined;
   };
   const context = () => {
@@ -109,9 +127,9 @@ export function createStockWorkspace({
     previous?.leave();
   }
 
-  function enter(value: Scope) {
+  function enter(value: Scope, issueId?: string) {
     scopes.set(value.id, value);
-    if (active?.id === value.id) return;
+    if (active?.id === value.id && active.issueId === issueId) return;
     leave();
     const store = session(value.id);
     let previous: string | undefined;
@@ -131,6 +149,7 @@ export function createStockWorkspace({
     const stopStatus = store.subscribe(status);
     active = {
       id: value.id,
+      issueId,
       leave: () => {
         stopReceiving();
         stopStatus();
@@ -141,12 +160,20 @@ export function createStockWorkspace({
     void store.load();
   }
 
+  function enterIssue(value: Scope, issueId: string) {
+    enter(value, issueId);
+    const entered = active;
+    return () => {
+      if (active === entered) leave();
+    };
+  }
+
   function scopeSource(view: string) {
     if (view === "conversation") return conversationSource;
     if (view === "file" || view === "markdown-file") {
       const file = new URLSearchParams(route().query).get("path");
       const scope = current()?.scope;
-      if (file && scope) {
+      if (file && scope?.cwd) {
         const path = relativeFilePath(file, scope.cwd) ?? file;
         return (lines: Parameters<typeof fileSource>[1]) => fileSource(path, lines);
       }
@@ -154,8 +181,10 @@ export function createStockWorkspace({
   }
 
   function marks(ctx: ActionContext, stock: StockSession): ReadonlyMap<number, StockMark> {
+    const lines = controller.windowLines(ctx.window);
+    if (ctx.view === designView) return designMarks(stock, lines);
     const source = scopeSource(ctx.view);
-    return source ? stock.marks(source, controller.windowLines(ctx.window)) : new Map();
+    return source ? stock.marks(source, lines) : new Map();
   }
 
   function markedItem(ctx: ActionContext, stock: StockSession) {
@@ -174,8 +203,7 @@ export function createStockWorkspace({
 
   function compose(kind: StockItem["kind"], ctx: ActionContext) {
     const value = context();
-    const source = scopeSource(ctx.view);
-    if (!value || !source) return;
+    if (!value) return;
     const { stock, scope } = value;
     const previous = ctx.selection ? undefined : markedItem(ctx, stock);
     if (previous?.state === "stocked") {
@@ -183,14 +211,24 @@ export function createStockWorkspace({
       return;
     }
     const lines = controller.windowLines(ctx.window);
-    const quote = makeQuote(
-      source(lines),
-      lines.map((line) => line.text),
-      ctx.selection ?? {
-        mode: "line",
-        ranges: [{ line: ctx.line, from: 0, to: lines[ctx.line]?.text.length ?? 0 }],
-      },
-    );
+    const selection = ctx.selection ?? {
+      mode: "line" as const,
+      ranges: [{ line: ctx.line, from: 0, to: lines[ctx.line]?.text.length ?? 0 }],
+    };
+    const designPath =
+      ctx.view === designView
+        ? selection.ranges
+            .map(({ line }) => lines[line]?.designDiff)
+            .find((entry) => entry?.newNo !== undefined)?.path
+        : undefined;
+    const source = designPath ? designSource(designPath, lines) : scopeSource(ctx.view)?.(lines);
+    const quote =
+      source &&
+      makeQuote(
+        source,
+        lines.map((line) => line.text),
+        selection,
+      );
     if (!quote) return controller.notify("この行には質問と指示を付けられません");
     if (Array.from(quote.text).length > 20_000)
       return controller.notify("選んだ範囲が長すぎます。20,000 文字以内で選んでください", "error");
@@ -239,6 +277,18 @@ export function createStockWorkspace({
             path: quote.path,
             line: String(quote.start.line),
             col: String(quote.start.col),
+            ...(quote.kind === "design_diff"
+              ? {
+                  quote: quote.text.split("\n", 1)[0],
+                  ...(quote.start.row
+                    ? {
+                        quoteSide: quote.start.row.side,
+                        quoteRow: String(quote.start.row.line),
+                      }
+                    : {}),
+                  ...(quote.mode === "block" ? { quoteBlockEnd: String(quote.end.col) } : {}),
+                }
+              : {}),
           }).toString(),
         }),
       );
@@ -343,7 +393,8 @@ export function createStockWorkspace({
   function start() {
     const stopRoute = controller.subscribe(() => {
       const value = route();
-      if (active && (value.kind !== "conversation" || value.id !== active.id)) leave();
+      if (active && !onIssue(value) && (value.kind !== "conversation" || value.id !== active.id))
+        leave();
       prepareThread();
     });
     const oldOpen = controller.options.openMarked;
@@ -467,6 +518,7 @@ export function createStockWorkspace({
   return {
     start,
     enter,
+    enterIssue,
     leave,
     session,
     right(view: RightView) {

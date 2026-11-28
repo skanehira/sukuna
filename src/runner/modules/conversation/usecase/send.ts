@@ -1,3 +1,5 @@
+import { joinDraftContent } from "../../../../shared/progress/draft";
+import { inputContent } from "./accepted-delivery";
 import { prepareAcceptance } from "./run-options";
 import { sameDraftReceipt } from "../../../../shared/conversation/api";
 import { err, ok, type Result } from "neverthrow";
@@ -73,8 +75,51 @@ export async function sendUnlocked(
   c = this.store.get(id);
   if (!c) return err({ code: "not_found", message: "会話が見つかりません。" });
   if (this.closing) return err(conflict());
-  if (input.text.length === 0 && input.images.length === 0 && this.store.queue(id).length === 0)
+  const hasMessage = input.text.length > 0 || input.images.length > 0;
+  if (!hasMessage && !input.stockIds?.length && this.store.queue(id).length === 0)
     return err({ code: "invalid_input", message: "入力を確認してください。" });
+  if (input.stockIds?.length) {
+    const batch = await this.runOptions.prepareStockBatch(c, input.stockIds);
+    if (batch.isErr()) return err(batch.error);
+    const original = inputContent(input);
+    const formatted = joinDraftContent({ text: batch.value.text, images: [] }, original);
+    input = {
+      ...input,
+      text: formatted.text,
+      timelineAnchors: formatted.timeline_anchors,
+      deliveryContext: {
+        stockIds: batch.value.ids,
+        original,
+        originalRanges: [
+          { from: formatted.text.length - original.text.length, to: formatted.text.length },
+        ],
+      },
+    };
+    const previous = acceptance;
+    acceptance = {
+      ...previous,
+      events: previous?.events ?? [],
+      check: () => previous?.check?.() ?? batch.value.check(),
+      before: () => {
+        previous?.before?.();
+        batch.value.commit();
+      },
+    };
+  }
+  const hasStocks = Boolean(input.deliveryContext?.stockIds?.length);
+  const rejection =
+    input.origin === "developer"
+      ? this.runOptions.rejectReviewedDesign(c, input, acceptance)
+      : undefined;
+  if (rejection) {
+    const result = await rejection;
+    if (result.isOk()) {
+      if (input.restoreDraft) this.partsChanged(id, ["draft"]);
+      if (hasStocks) this.partsChanged(id, ["stock"]);
+      accepted?.(true);
+    }
+    return result;
+  }
   if (activeStates.includes(c.runState) && !input.interrupt) {
     for (const imageId of input.images) {
       const image = this.options.images.read(id, imageId);
@@ -107,6 +152,7 @@ export async function sendUnlocked(
               ? {}
               : { timelineAnchors: input.timelineAnchors }),
             position: (queue.at(-1)?.position ?? 0) + 1,
+            deliveryContext: input.deliveryContext,
             clientId: input.clientId ?? null,
             createdAt: this.options.clock.now(),
           });
@@ -122,7 +168,11 @@ export async function sendUnlocked(
       throw error;
     }
     prepared.value.committed?.();
-    this.partsChanged(id, input.restoreDraft ? ["queue", "draft"] : ["queue"]);
+    this.partsChanged(id, [
+      "queue",
+      ...(input.restoreDraft ? ["draft" as const] : []),
+      ...(hasStocks ? ["stock" as const] : []),
+    ]);
     accepted?.(true);
     return ok({ result: "queued", queuedId });
   }
@@ -154,6 +204,7 @@ export async function sendUnlocked(
     if (delivered.isOk()) {
       committed?.();
       if (input.restoreDraft) this.partsChanged(id, ["draft"]);
+      if (hasStocks) this.partsChanged(id, ["stock"]);
       accepted?.(true);
     } else rejected?.();
     return delivered;

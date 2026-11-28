@@ -1,6 +1,16 @@
 {
   "rules": [
     {
+      "match": "^設計レビューで差し戻されました。[\\s\\S]*E2E-6701 の指摘",
+      "steps": [
+        {
+          "tool": "mcp__sukuna__report_design",
+          "input": { "number": 6701, "policy": "指摘を反映した新しい修正方針", "checks": [] }
+        },
+        { "end": "success" }
+      ]
+    },
+    {
       "match": "^#6601「設計レビューの一覧確認」を精査してください。",
       "steps": [
         {

@@ -155,13 +155,13 @@ describe("設計の操作を受理するときの競合", () => {
         ).isOk(),
       ).toBe(true);
       await expect.poll(() => f.runner.runtime.store.get("design")?.runState).toBe(state);
-      expect((await f.submit()).isOk()).toBe(true);
       const queued = await f.runner.runtime.send("design", {
         text: "後続の指示",
         origin: "developer",
         images: [],
       });
       expect(queued._unsafeUnwrap().result).toBe("queued");
+      expect((await f.submit()).isOk()).toBe(true);
 
       expect((await reject("設計の指摘")).status).toBe(202);
       await f.runner.design.drain();

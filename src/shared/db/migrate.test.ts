@@ -99,6 +99,31 @@ describe("マイグレーション", () => {
     }
   });
 
+  it("複数のストック対応を追加しても既存の単数の対応を保つ", () => {
+    const home = createTempHome();
+    const opened = openDatabase(home);
+    try {
+      expect(applyMigrations(opened.sqlite, migrations.slice(0, -1)).isOk()).toBe(true);
+      opened.sqlite.exec(
+        "INSERT INTO conversations (id, project_id, kind, cwd) VALUES ('c','p','chat','/work');" +
+          "INSERT INTO queued_instructions (id, conversation_id, text, position, stock_item_id, created_at) VALUES ('q','c','確認する',1,'stock',10)",
+      );
+      expect(applyMigrations(opened.sqlite, migrations).isOk()).toBe(true);
+      expect(
+        opened.sqlite
+          .prepare("SELECT text, stock_item_id, delivery_context FROM queued_instructions")
+          .get(),
+      ).toEqual({
+        text: "確認する",
+        stock_item_id: "stock",
+        delivery_context: null,
+      });
+    } finally {
+      opened.close();
+      removeTempHome(home);
+    }
+  });
+
   it("当て済みのデータベースにもう一度当てても、何も変わらない", () => {
     const home = createTempHome();
     const opened = openMigratedDatabase(home);

@@ -1,8 +1,15 @@
+import type { SendResult } from "../domain/conversation-store";
 import type { AppToolRegistry } from "./app-tool-registry";
-import { ok, type Result } from "neverthrow";
+import { err, ok, type Result } from "neverthrow";
 import type { Conversation, ConversationStore } from "../domain/conversation-store";
 import type { OpenParams } from "../domain/agent-port";
-import type { DeliveryError, InputAcceptance, OperationError, SendInput } from "./runtime";
+import {
+  conflict,
+  type DeliveryError,
+  type InputAcceptance,
+  type OperationError,
+  type SendInput,
+} from "./runtime";
 export type PreparedDelivery = {
   input: SendInput;
   prefix?: string;
@@ -12,6 +19,23 @@ export type PreparedDelivery = {
   committed?: () => void;
   rejected?: () => void;
 };
+export type PreparedStockBatch = {
+  text: string;
+  ids: string[];
+  check(): OperationError | null;
+  commit(): void;
+};
+type StockBatchPreparer = (
+  conversation: Conversation,
+  ids: readonly string[],
+) => Promise<Result<PreparedStockBatch, OperationError>>;
+type DesignReviewDelivery = (
+  conversation: Conversation,
+  input: SendInput,
+  acceptance: InputAcceptance | undefined,
+  stock?: { ids: readonly string[] },
+) => Promise<Result<SendResult, DeliveryError>> | undefined;
+
 type DeliveryPreparer = (
   conversation: Conversation,
   input: SendInput,
@@ -42,6 +66,8 @@ export class RunOptions {
   private startGuard?: (conversation: Conversation, checkOwner: boolean) => OperationError | null;
   private preparer?: DeliveryPreparer;
   private queuePreparer?: QueuePreparer;
+  private designReview?: DesignReviewDelivery;
+  private stockBatch?: StockBatchPreparer;
   private providers: ((conversation: Conversation) => string)[] = [];
   private directories: ((conversation: Conversation) => string[])[] = [];
   private guards: ((
@@ -67,6 +93,26 @@ export class RunOptions {
     ) => Result<void, DeliveryError> | Promise<Result<void, DeliveryError>>,
   ): void {
     this.guards.push(guard);
+  }
+  registerStockBatch(preparer: StockBatchPreparer): void {
+    this.stockBatch = preparer;
+  }
+  prepareStockBatch(conversation: Conversation, ids: readonly string[]) {
+    return (
+      this.stockBatch?.(conversation, ids) ??
+      Promise.resolve(err<PreparedStockBatch, OperationError>(conflict("ストックを送れません。")))
+    );
+  }
+  registerDesignReview(delivery: DesignReviewDelivery): void {
+    this.designReview = delivery;
+  }
+  rejectReviewedDesign(
+    conversation: Conversation,
+    input: SendInput,
+    acceptance?: InputAcceptance,
+    stock?: { ids: readonly string[] },
+  ) {
+    return this.designReview?.(conversation, input, acceptance, stock);
   }
   registerDeliveryPreparer(preparer: DeliveryPreparer): void {
     this.preparer = preparer;

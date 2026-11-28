@@ -14,6 +14,8 @@ import { ScriptedAgent } from "../../../runner/modules/conversation/adapter/scri
 import { createApp } from "../../app";
 import { RunnerLink } from "../../runner-link";
 import { createTailscaleFake, incomingWith } from "../identity/test-support";
+import { createStockDependencies } from "../stock/adapter/dependencies";
+import { createWorkspaceDependencies } from "../workspace/adapter/dependencies";
 import { createDesignDependencies } from "./adapter/design-dependencies";
 import { createConversationDependencies } from "../conversation/adapter/dependencies";
 import {
@@ -258,6 +260,14 @@ export function designFixture() {
         () => link,
         () => {},
       ),
+      stock: createStockDependencies({
+        database: () => serverDb,
+        workspace: createWorkspaceDependencies(() => serverDb.db),
+        runner: () => link,
+        changed: () => {},
+        id: randomUUID,
+        now: () => time,
+      }),
       build: "test",
       identity: {
         login: "dev@example.test",

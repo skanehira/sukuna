@@ -1,5 +1,6 @@
 import { ChangeSet, type ChangeDesc } from "@codemirror/state";
-import { joinDraftContent, queueDraftContent } from "../../../shared/progress/draft";
+import { queuedDraftContent } from "../../../shared/conversation/api";
+import { joinDraftContent } from "../../../shared/progress/draft";
 import { continuesLine, mapTimelineAnchors } from "./timeline-draft";
 import type { Draft, DraftContent, QueueItem } from "./types";
 
@@ -13,7 +14,7 @@ export type CancelledDraft = {
 };
 
 export function appendCancelledDraft(previous: DraftContent, item: QueueItem) {
-  const content = joinDraftContent(previous, queueDraftContent(item));
+  const content = joinDraftContent(previous, queuedDraftContent(item) ?? { text: "", images: [] });
   return {
     content,
     addition: {
@@ -66,7 +67,8 @@ export function removeCancelledDraft(
   const edits = ChangeSet.of({ from: added.from, to: added.to }, draft.text.length);
   const text = draft.text.slice(0, added.from) + draft.text.slice(added.to);
   let anchors = draft.timeline_anchors;
-  if (!item.text && queueDraftContent(item).timeline_anchors?.length && anchors) {
+  const original = queuedDraftContent(item);
+  if (!original?.text && original?.timeline_anchors?.length && anchors) {
     const index = anchors.findLastIndex(
       (anchor) => anchor.from === added.from && anchor.to === added.from,
     );
@@ -77,7 +79,7 @@ export function removeCancelledDraft(
     text,
     images: [
       ...draft.images.slice(0, added.imageFrom),
-      ...draft.images.slice(added.imageFrom + item.images.length),
+      ...draft.images.slice(added.imageFrom + (original?.images.length ?? 0)),
     ],
     ...(anchors === undefined
       ? {}
@@ -86,5 +88,7 @@ export function removeCancelledDraft(
 }
 
 function matchesImages(added: CancelledDraft, images: string[], item: QueueItem) {
-  return item.images.every((id, index) => images[added.imageFrom + index] === id);
+  return (queuedDraftContent(item)?.images ?? []).every(
+    (id, index) => images[added.imageFrom + index] === id,
+  );
 }

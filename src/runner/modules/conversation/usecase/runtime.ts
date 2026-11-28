@@ -1,5 +1,16 @@
-import type { RestoreConversationDraft } from "../../../../shared/conversation/api";
+import {
+  queuedStockIds,
+  type ConversationContent,
+  type QueueDeliveryContext,
+  type RestoreConversationDraft,
+} from "../../../../shared/conversation/api";
 import type { TimelineAnchor } from "../../../../shared/progress/draft";
+import {
+  deferredInstruction,
+  deliveryQueueIds,
+  legacyDeliveryTexts,
+  queueReceipts,
+} from "./accepted-delivery";
 import { RunOptions } from "./run-options";
 import type { CommandCache } from "../domain/agent-port";
 import {
@@ -87,6 +98,8 @@ export type SendInput = {
   timelineComments?: TimelineInputComment[];
   timelineAnchors?: TimelineAnchor[];
   restoreDraft?: RestoreConversationDraft;
+  stockIds?: string[];
+  deliveryContext?: QueueDeliveryContext;
 };
 type DeliveryOptions = {
   includeQueued?: boolean;
@@ -99,6 +112,8 @@ type DeliveryOptions = {
   newConversation?: Conversation;
   recordOpeningFailure?: boolean;
   afterAcceptance?: boolean;
+  acceptedStockIds?: readonly string[];
+  acceptedOriginal?: ConversationContent;
 };
 export type InputAcceptance = {
   workspace?: { path: string; id: string };
@@ -361,7 +376,7 @@ export class ConversationRuntime {
       "afterAcceptance" | "includeQueued" | "omitMissingImages" | "prefix"
     > = {},
   ) {
-    const includeQueued = !options.afterAcceptance && (options.includeQueued ?? true);
+    const includeQueued = options.includeQueued ?? !options.afterAcceptance;
     const queued = includeQueued ? this.store.queue(id) : [];
     const inputs = [...queued, input];
     const text = inputs
@@ -482,9 +497,20 @@ export class ConversationRuntime {
         if (prepared.isErr()) return err(prepared.error);
         const { includeQueued, queued, inputs, text, images, missingImages } = prepared.value;
         const hasStructuredComments = inputs.some((entry) => entry.timelineComments !== undefined);
-        const legacyTexts = inputs
-          .filter((entry) => entry.timelineComments === undefined && entry.text.length > 0)
-          .map((entry) => entry.text);
+        const legacyTexts = legacyDeliveryTexts(inputs);
+        const receipts = queueReceipts(queued);
+        const deferred = options.afterAcceptance
+          ? deferredInstruction({
+              id: this.options.id(),
+              conversationId: id,
+              createdAt: this.options.clock.now(),
+              input,
+              queue: queued,
+              prefix: options.prefix,
+              stockIds: options.acceptedStockIds,
+              original: options.acceptedOriginal,
+            })
+          : undefined;
         const event: ConversationEvent = {
           type: "user_message",
           payload: {
@@ -498,48 +524,40 @@ export class ConversationRuntime {
                 }
               : {}),
             client_ids: [
-              ...queued.flatMap((q) => (q.clientId ? [q.clientId] : [])),
+              ...receipts.map(({ clientId }) => clientId),
               ...(input.clientId ? [input.clientId] : []),
             ],
-            queued_ids: queued.map((q) => q.id),
+            queued_ids: [
+              ...new Set([
+                ...deliveryQueueIds(queued),
+                ...receipts.map(({ queuedId }) => queuedId),
+                ...(deferred ? [deferred.id] : []),
+              ]),
+            ],
             client_receipts: [
-              ...queued.flatMap((q) =>
-                q.clientId
-                  ? [
-                      {
-                        client_id: q.clientId,
-                        result: "queued" as const,
-                        queued_id: q.id,
-                        received_at: q.createdAt,
-                      },
-                    ]
-                  : [],
-              ),
+              ...receipts.map(({ clientId, queuedId, createdAt }) => ({
+                client_id: clientId,
+                result: "queued" as const,
+                queued_id: queuedId,
+                received_at: createdAt,
+              })),
               ...(input.clientId
                 ? [
                     {
                       client_id: input.clientId,
-                      result: "delivered" as const,
-                      received_at: this.options.clock.now(),
+                      ...(deferred
+                        ? {
+                            result: "queued" as const,
+                            queued_id: deferred.id,
+                            received_at: deferred.createdAt,
+                          }
+                        : { result: "delivered" as const, received_at: this.options.clock.now() }),
                     },
                   ]
                 : []),
             ],
           },
         };
-        const deferred: AcceptedInstruction | undefined = options.afterAcceptance
-          ? {
-              id: this.options.id(),
-              conversationId: id,
-              text,
-              images: input.images,
-              clientId: input.clientId ?? null,
-              createdAt: this.options.clock.now(),
-              ...(input.timelineComments === undefined
-                ? {}
-                : { timelineComments: input.timelineComments }),
-            }
-          : undefined;
         let execution: Execution | undefined;
         let openingError: { cause: unknown } | undefined;
         let resumeClosedAt: number | null = null;
@@ -564,12 +582,15 @@ export class ConversationRuntime {
                 openingError = { cause: error };
                 throw error;
               }
-              if (deferred) this.store.stageAccepted(deferred);
-              else if (includeQueued)
-                this.store.dequeue(
-                  id,
-                  (this.store.get(id)?.lastSeq ?? 0) + (acceptance?.events.length ?? 0) + 1,
-                );
+              if (deferred) {
+                this.store.stageAccepted(deferred);
+                if (queued.length) this.store.dequeue(id);
+              } else {
+                const seq =
+                  (this.store.get(id)?.lastSeq ?? 0) + (acceptance?.events.length ?? 0) + 1;
+                if (includeQueued) this.store.dequeue(id, seq);
+                this.store.recordStockDelivery(id, queuedStockIds(input), seq);
+              }
             },
             () =>
               withDeliveryWorkspace((actualWorktreeId) => {
@@ -659,17 +680,18 @@ export class ConversationRuntime {
           this.deliverAccepted(
             id,
             execution,
-            deferred.id,
+            deferred,
             Boolean(opened && options.interrupt),
             event,
             deliver,
           );
+          if (queued.length) this.partsChanged(id, ["queue"]);
           return ok({ result: "queued", queuedId: deferred.id });
         }
         if (queued.length)
           this.partsChanged(
             id,
-            queued.some((entry) => entry.stockItemId) ? ["queue", "stock"] : ["queue"],
+            queued.some((entry) => queuedStockIds(entry).length) ? ["queue", "stock"] : ["queue"],
           );
         const record = records.at(-1);
         if (!record) throw new Error("指示を記録できません。");
@@ -741,11 +763,12 @@ export class ConversationRuntime {
   private deliverAccepted(
     id: string,
     execution: Execution,
-    instructionId: string,
+    instruction: AcceptedInstruction,
     interrupt: boolean,
     event: ConversationEvent,
     deliver: (execution: Execution, record: StoredEvent) => void,
   ) {
+    const { id: instructionId } = instruction;
     let active = execution;
     this.trackAcceptedDelivery(id, instructionId, async () => {
       try {
@@ -771,12 +794,13 @@ export class ConversationRuntime {
             active.consuming = this.consume(id, active);
           }
           const records = this.record(id, [event], () => {
-            if (!this.store.removeAccepted(instructionId))
+            if (!this.store.removeAccepted(instructionId, (this.store.get(id)?.lastSeq ?? 0) + 1))
               throw new Error("受理済みの指示がありません。");
             if (interrupt)
               this.store.clearQuestionsBefore(id, (this.store.get(id)?.lastSeq ?? 0) + 1);
           });
           if (interrupt) this.partsChanged(id, ["answers"]);
+          if (queuedStockIds(instruction).length) this.partsChanged(id, ["stock"]);
           const record = records.at(-1);
           if (!record) throw new Error("指示を記録できません。");
           deliver(active, record);
