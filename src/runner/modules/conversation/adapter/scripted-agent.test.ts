@@ -43,9 +43,14 @@ describe("台本型の AI", () => {
     const outputs = await turn(iterator);
     expect(outputs.map((o) => o.kind)).toEqual([
       "init",
+      "message_start",
       "text_delta",
+      "message_usage",
       "assistant_text",
       "turn_end",
+    ]);
+    expect(outputs.filter((o) => o.kind === "message_usage")).toEqual([
+      { kind: "message_usage", outputTokens: 2, parentToolUseId: null },
     ]);
     session.send({ text: "other", images: [] });
     await session.interrupt();

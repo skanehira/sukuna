@@ -46,6 +46,10 @@ export const serverMessageSchema = z
       }),
       z.object({ type: z.literal("delta"), payload: z.object({ text: z.string() }) }),
       z.object({
+        type: z.literal("output_tokens"),
+        payload: z.object({ tokens: z.number().int().nonnegative() }),
+      }),
+      z.object({
         type: z.literal("state"),
         payload: z.object({
           run_state: runStateSchema,

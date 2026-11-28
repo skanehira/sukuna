@@ -7,6 +7,7 @@ import { expect, it } from "vite-plus/test";
 import { createTempHome, openMigratedDatabase, removeTempHome } from "../shared/db/test-helpers";
 import { startRunnerApp } from "./app";
 import type { LogEntry } from "../shared/log";
+import type { RunnerNotice } from "../shared/ipc";
 import { ScriptedAgent } from "./modules/conversation/adapter/scripted-agent";
 import { testEnvironment, xdgDirectoriesIn, xdgVariablesIn } from "../test/directories";
 
@@ -307,3 +308,77 @@ it.each(["working", "waiting_answer", "waiting_permission", "idle"] as const)(
   },
   25000,
 );
+it("台本の text の段の usage を出力トークンの数として知らせ、次の指示を保存すると 0 を知らせる", async () => {
+  const home = createTempHome();
+  const database = openMigratedDatabase(home);
+  const timers: { at: number; callback: () => void | Promise<void> }[] = [];
+  let offset = 0;
+  const clock = {
+    now: () => Date.now() + offset,
+    setTimeout: (callback: () => void | Promise<void>, ms: number) => {
+      const timer = { at: offset + ms, callback };
+      timers.push(timer);
+      return () => {
+        if (timers.includes(timer)) timers.splice(timers.indexOf(timer), 1);
+      };
+    },
+  };
+  const advance = async (ms: number) => {
+    offset += ms;
+    for (const timer of timers.filter(({ at }) => at <= offset)) {
+      timers.splice(timers.indexOf(timer), 1);
+      await timer.callback();
+    }
+  };
+  const agent = new ScriptedAgent({
+    rules: [{ match: "^待って$", steps: [{ hold: true }] }],
+    fallback: [{ text: "了解しました。", usage: 300 }, { end: "success" }],
+  });
+  const app = await startRunnerApp({
+    database,
+    environment: testEnvironment(home),
+    agent,
+    clock,
+    log: () => {},
+  });
+  const tokens: RunnerNotice[] = [];
+  app.changes.subscribe((notice) => {
+    if (notice.kind === "output_tokens") tokens.push(notice);
+  });
+  const until = (id: string, predicate: () => boolean) =>
+    predicate()
+      ? Promise.resolve()
+      : new Promise<void>((resolve) => {
+          const off = app.runtime.subscribe((s) => {
+            if (s.conversationId === id && predicate()) {
+              off();
+              resolve();
+            }
+          });
+        });
+  try {
+    const id = (
+      await app.runtime.start({
+        projectId: "p",
+        issueId: null,
+        kind: "chat",
+        title: "会話",
+        cwd: home,
+        message: "はじめて",
+      })
+    )._unsafeUnwrap().conversationId;
+    await until(id, () => app.runtime.store.get(id)?.runState === "idle");
+    await advance(500);
+    expect(tokens).toEqual([{ kind: "output_tokens", conversation_id: id, tokens: 300 }]);
+    await app.runtime.send(id, { text: "待って", images: [], origin: "developer" });
+    await advance(500);
+    expect(tokens).toEqual([
+      { kind: "output_tokens", conversation_id: id, tokens: 300 },
+      { kind: "output_tokens", conversation_id: id, tokens: 0 },
+    ]);
+  } finally {
+    await app.shutdown();
+    database.close();
+    removeTempHome(home);
+  }
+});

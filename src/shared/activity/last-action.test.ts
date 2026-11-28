@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatLastAction, lastActionInTurn } from "./last-action";
+import { formatLastAction, lastActionInTurn, turnProgress } from "./last-action";
 
 describe("最後にしたこと", () => {
   it.each<[string, unknown, string]>([
@@ -83,4 +83,57 @@ it("発言前から記録されたツールも開始時刻ゼロで表示する"
       "/work",
     ),
   ).toEqual({ lastAction: "Bash(pwd)", lastActionAt: 20, turnStartedAt: 0 });
+});
+
+const turnEvent = (seq: number, type: string, payload: unknown = {}) => ({
+  seq,
+  type,
+  payload,
+  createdAt: seq * 1000,
+});
+const toolUse = (seq: number, id: string, parent: string | null = null) =>
+  turnEvent(seq, "tool_use", { tool_use_id: id, name: "Bash", parent_tool_use_id: parent });
+const toolResult = (seq: number, id: string) =>
+  turnEvent(seq, "tool_result", { tool_use_id: id, parent_tool_use_id: null });
+
+describe("番の経過の起点と動き", () => {
+  it.each(["user_message", "resumed", "answer", "permission_decision"])(
+    "%s を受けた時刻から番の経過を数える",
+    (type) => {
+      expect(
+        turnProgress([turnEvent(1, "user_message"), turnEvent(2, type), turnEvent(3, "tool_use")]),
+      ).toEqual({ action: "考え中", startedAt: 2000 });
+    },
+  );
+
+  it("起点のイベントがまだ無ければ番の経過の起点を持たない", () => {
+    expect(turnProgress([turnEvent(1, "assistant_text")])).toEqual({
+      action: "考え中",
+      startedAt: null,
+    });
+  });
+
+  it.each([
+    ["結果の届いていない親のツールの実行がある", [toolUse(2, "a")], "ツールを実行中"],
+    ["親のツールの実行の結果が届いた", [toolUse(2, "a"), toolResult(3, "a")], "考え中"],
+    [
+      "結果の届いていないサブエージェントのツールの実行だけがある",
+      [toolUse(2, "a", "task")],
+      "考え中",
+    ],
+    [
+      "許可の確認に答えた後も結果の届いていないツールの実行がある",
+      [toolUse(2, "a"), turnEvent(3, "permission_decision")],
+      "ツールを実行中",
+    ],
+  ])("%s 番の動きを %s にする", (_, events, action) => {
+    expect(turnProgress([turnEvent(1, "user_message"), ...events]).action).toBe(action);
+  });
+
+  it("前の番で結果の届かなかったツールの実行は、今の番の動きに数えない", () => {
+    expect(turnProgress([toolUse(1, "old"), turnEvent(2, "user_message")])).toEqual({
+      action: "考え中",
+      startedAt: 2000,
+    });
+  });
 });

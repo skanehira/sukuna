@@ -114,6 +114,11 @@ export const runnerNoticeSchema = z.discriminatedUnion("kind", [
   }),
   z.object({ kind: z.literal("delta"), conversation_id: z.string(), text: z.string() }),
   z.object({
+    kind: z.literal("output_tokens"),
+    conversation_id: z.string(),
+    tokens: z.number().int().nonnegative(),
+  }),
+  z.object({
     kind: z.literal("conversation_parts"),
     conversation_id: z.string(),
     parts: z.array(z.enum(["queue", "answers", "draft", "recap", "stock", "threads"])),

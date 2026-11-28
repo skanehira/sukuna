@@ -292,6 +292,15 @@ it.each(["send", "interrupt"])(
       sent: f.agent.sent.map((message) => message.text),
       queue: f.runner.runtime.store.queue(f.id),
     }).toEqual({ sent: [input.text, "預かった指示"], queue: [] });
+    const answered = () => f.runner.runtime.store.events(f.id).at(-1)?.type === "assistant_text";
+    await new Promise<void>((resolve) => {
+      if (answered()) return resolve();
+      const off = f.runner.runtime.subscribe(() => {
+        if (!answered()) return;
+        off();
+        resolve();
+      });
+    });
     const before = stateOf(f);
     expect({ response: await f.request(empty), after: stateOf(f) }).toEqual({
       response: {

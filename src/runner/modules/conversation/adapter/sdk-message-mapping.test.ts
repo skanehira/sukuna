@@ -542,6 +542,50 @@ it("init・逐次出力・利用枠とバックグラウンドの見本を写す
   ]);
 });
 
+it("出力トークンの数に使うストリームの見本を写す", () => {
+  const stream = (parent: string | null, event: unknown) =>
+    mapSdkMessage({
+      type: "stream_event",
+      uuid: "stream",
+      session_id: "session",
+      parent_tool_use_id: parent,
+      event,
+    });
+  expect([
+    ...stream(null, {
+      type: "message_start",
+      message: { id: "msg", type: "message", role: "assistant", content: [], usage: usage },
+    }),
+    ...stream("task", {
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "thinking_delta", thinking: "考え😀中", estimated_tokens: null },
+    }),
+    ...stream(null, {
+      type: "content_block_delta",
+      index: 1,
+      delta: { type: "input_json_delta", partial_json: '{"a":' },
+    }),
+    ...stream(null, {
+      type: "message_delta",
+      context_management: null,
+      delta: { container: null, stop_details: null, stop_reason: "end_turn", stop_sequence: null },
+      usage: {
+        cache_creation_input_tokens: null,
+        cache_read_input_tokens: null,
+        input_tokens: null,
+        output_tokens: 42,
+        server_tool_use: null,
+      },
+    }),
+  ]).toEqual([
+    { kind: "message_start", parentToolUseId: null },
+    { kind: "output_chars", characters: 4, parentToolUseId: "task" },
+    { kind: "output_chars", characters: 5, parentToolUseId: null },
+    { kind: "message_usage", outputTokens: 42, parentToolUseId: null },
+  ]);
+});
+
 it.each([
   ["success", null, null, null, { state: "idle", stopped: null }],
   ["error_during_execution", null, null, "user", { state: "stopped", stopped: { reason: "user" } }],

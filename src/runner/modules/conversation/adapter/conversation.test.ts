@@ -1193,3 +1193,24 @@ it("IPCの未登録会話は404、保存先の失敗は500に分ける", async (
     body: { error: { code: "internal", message: "保存できませんでした。" } },
   });
 });
+
+it("サブエージェントの出力は出力トークンの数に数えない", async () => {
+  const f = fixture(holdScript);
+  const agent = new ControlledAgent({ rules: [] });
+  f.runtime.options.agent = agent;
+  const id = await f.start();
+  await f.runtime.send(id, { text: "run", images: [], origin: "developer" });
+  for (const parentToolUseId of ["task", null])
+    for (const output of [
+      { kind: "message_start", parentToolUseId },
+      { kind: "output_chars", characters: 8, parentToolUseId },
+      { kind: "message_usage", outputTokens: 5, parentToolUseId },
+    ] as const)
+      agent.outputs[0].push(output);
+  agent.outputs[0].push(turnEnd("success"));
+  await f.until(id, () => f.store.get(id)?.runState === "idle");
+  expect(f.signals.filter((s) => s.type === "outputTokens")).toEqual([
+    { type: "outputTokens", conversationId: id, tokens: 2 },
+    { type: "outputTokens", conversationId: id, tokens: 5 },
+  ]);
+});

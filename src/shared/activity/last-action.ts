@@ -54,3 +54,29 @@ export function lastActionInTurn(
     turnStartedAt: start?.createdAt ?? 0,
   };
 }
+
+const countStarts = ["user_message", "resumed", "answer", "permission_decision"];
+
+export function countsFromEvent(type: string): boolean {
+  return countStarts.includes(type);
+}
+
+export function turnProgress(events: readonly (ActivityEvent & { seq: number })[]): {
+  action: "考え中" | "ツールを実行中";
+  startedAt: number | null;
+} {
+  const turnSeq =
+    events.findLast((event) => event.type === "user_message" || event.type === "resumed")?.seq ?? 0;
+  const running = new Set<unknown>();
+  for (const event of events) {
+    if (event.seq <= turnSeq) continue;
+    const payload = objectOf(event.payload);
+    if (event.type === "tool_use" && payload.parent_tool_use_id === null)
+      running.add(payload.tool_use_id);
+    if (event.type === "tool_result") running.delete(payload.tool_use_id);
+  }
+  return {
+    action: running.size > 0 ? "ツールを実行中" : "考え中",
+    startedAt: events.findLast((event) => countsFromEvent(event.type))?.createdAt ?? null,
+  };
+}

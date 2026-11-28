@@ -69,7 +69,21 @@ export class ScriptedAgent implements AgentPort {
       let ended = false;
       for (const step of steps) {
         if (cancelled) break;
-        if ("text" in step) emitText(step.text);
+        if ("text" in step) {
+          output.push({ kind: "message_start", parentToolUseId: null });
+          output.push({ kind: "text_delta", text: step.text, parentToolUseId: null });
+          output.push({
+            kind: "message_usage",
+            outputTokens: step.usage ?? Math.ceil(Array.from(step.text).length / 4),
+            parentToolUseId: null,
+          });
+          output.push({
+            kind: "assistant_text",
+            uuid: this.uuid(),
+            text: step.text,
+            parentToolUseId: null,
+          });
+        }
         if ("stream" in step) {
           const { prefix, count, interval_ms: interval } = step.stream;
           for (let index = 1; index <= count; index++) {

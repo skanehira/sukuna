@@ -5,6 +5,7 @@ export class ChangeFeed {
   private listeners = new Set<(notice: RunnerNotice) => void>();
   private terminalListeners = new Set<(notice: RunnerNotice) => void>();
   private deltas = new Map<string, { text: string; cancel: () => void }>();
+  private tokens = new Map<string, { tokens: number; cancel: () => void }>();
   private clock: Pick<Clock, "setTimeout">;
   constructor(clock: Pick<Clock, "setTimeout">) {
     this.clock = clock;
@@ -40,13 +41,29 @@ export class ChangeFeed {
     };
     this.deltas.set(id, batch);
   }
+  outputTokens(id: string, tokens: number): void {
+    const pending = this.tokens.get(id);
+    if (pending) {
+      pending.tokens = tokens;
+      return;
+    }
+    const batch = {
+      tokens,
+      cancel: this.clock.setTimeout(() => {
+        this.tokens.delete(id);
+        this.publish({ kind: "output_tokens", conversation_id: id, tokens: batch.tokens });
+      }, 500),
+    };
+    this.tokens.set(id, batch);
+  }
   discardDelta(id: string): void {
     this.deltas.get(id)?.cancel();
     this.deltas.delete(id);
   }
   close(): void {
-    for (const batch of this.deltas.values()) batch.cancel();
+    for (const batch of [...this.deltas.values(), ...this.tokens.values()]) batch.cancel();
     this.deltas.clear();
+    this.tokens.clear();
     this.listeners.clear();
     this.terminalListeners.clear();
   }

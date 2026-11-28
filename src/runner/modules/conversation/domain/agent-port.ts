@@ -82,6 +82,9 @@ export type DiffOutput = {
 export type AgentOutput =
   | { kind: "init"; sessionId: string; commands: { name: string; description: string }[] }
   | { kind: "text_delta"; text: string; parentToolUseId: string | null }
+  | { kind: "message_start"; parentToolUseId: string | null }
+  | { kind: "output_chars"; characters: number; parentToolUseId: string | null }
+  | { kind: "message_usage"; outputTokens: number; parentToolUseId: string | null }
   | { kind: "assistant_text"; uuid: string; text: string; parentToolUseId: string | null }
   | {
       kind: "tool_use";
