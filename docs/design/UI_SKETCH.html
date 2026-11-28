@@ -152,7 +152,6 @@ const WORKING = mk([
   ["del", "  41 - const text = buffer.toString()"],
   ["add", "  41 + const text = decode(buffer, detectEncoding(buffer))"],
   ["tool", "● Bash(npm test -- csv)  実行中"],
-  ["sep", "──── AI が作業中: 実装 11 分 / 最後にしたこと: Bash(npm test -- csv) ────"],
 ]);
 const LIST = [
   { sect: "判断待ち", project: "shop-api", title: "#42 在庫の引き当てを追加する", why: "設計の承認", ago: "12分前", unread: true, go: { s: "issue", project: "shop-api", issue: 42, tab: 1 } },
@@ -661,6 +660,15 @@ function PromptEditor({ label, initial, initialImages, imageSel, working, stocki
   );
 }
 /* ウィンドウの見出し。sub には、列の見出しや、issue の中の表示の並びを置く (バッファの外なので通常の HTML) */
+/* 作業中の会話のウィンドウの下端に出す作業中の表示 (work-monitor.md「作業中の会話の表示」) */
+function WorkingStrip() {
+  return (
+    <div className="shrink-0 border-t border-line px-4 py-2 text-[13px] text-doing" aria-label="作業中の状況">
+      AI が作業中: 実装 11分 / 最後にしたこと: Bash(npm test -- csv)
+    </div>
+  );
+}
+
 function Frame({ title, focused, right, children, edge, sub }) {
   return (
     <section className={`flex flex-col min-w-0 min-h-0 ${edge ? "border-l border-line" : "bg-ground"}`} style={{ containerType: "inline-size" }} aria-label={title}>
@@ -1147,6 +1155,7 @@ function PC() {
               ? <pre className="flex-1 overflow-auto px-3 py-1 text-[13px] leading-5 font-mono">{term.join("\n")}█</pre>
               : <Buffer key={key} side={side} posKey={key} lines={mainMenu} marks={v.s === "home" ? listMarks(mainLines) : marks} crash={crash} startLine={hasUnread(v) ? at("unread") : working ? WORKING.length - 1 : 0} {...bufProps("main")} />}
           </Boundary>
+          {working && <WorkingStrip />}
         </Frame>
         {right && (
           <Frame edge title={right === "stock" || right === "thread" ? `${RIGHT[right]}: ${dest || "送り先なし"}` : RIGHT[right]} focused={focus === "right"} sub={right === "worktree" ? <ColHead kind="wt" side="right" /> : null} right={<span className="flex items-center shrink-0 text-[12px] font-normal">{(rstack.length > 0 || right === "task") && <button tabIndex={-1} onClick={backRight} className="rounded px-1.5 py-0.5 hover:bg-raised"><span className="font-mono text-ink">Ctrl+h</span><span className="text-muted ml-1">戻る</span></button>}<button tabIndex={-1} onClick={closeRight} className="rounded px-1.5 py-0.5 hover:bg-raised"><span className="font-mono text-ink">q</span><span className="text-muted ml-1">閉じる</span></button></span>}>
