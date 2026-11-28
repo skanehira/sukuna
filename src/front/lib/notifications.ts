@@ -13,7 +13,12 @@ export function createBrowserNotifications(deps: {
       deps.title(count === 0 ? "sukuna" : "(" + count + ") sukuna");
     },
     receive(message: ServerMessage) {
-      if (message.topic === "app" && message.type === "notice" && message.payload.notification)
+      if (
+        message.topic === "app" &&
+        message.type === "notice" &&
+        (message.payload.notification ||
+          (message.payload.issue_id && message.payload.level === "error"))
+      )
         deps.notify(message.payload.message, message.payload.level);
     },
   };

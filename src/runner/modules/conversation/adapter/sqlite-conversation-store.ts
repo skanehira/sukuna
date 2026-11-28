@@ -1,3 +1,4 @@
+import { queuedStockIds, queueDeliveryContextSchema } from "../../../../shared/conversation/api";
 import type { ConversationDraft } from "../../../../shared/conversation/api";
 import { readDraft, writeDraft } from "../../../../shared/conversation/sqlite-draft";
 import { statSync } from "node:fs";
@@ -385,7 +386,20 @@ export class SqliteConversationStore implements ConversationStore {
       .prepare("INSERT INTO settings (key,value) VALUES (?,?)")
       .run(acceptedInputPrefix + instruction.id, JSON.stringify(instruction));
   }
-  removeAccepted(id: string): boolean {
+  removeAccepted(id: string, deliveredSeq?: number): boolean {
+    if (deliveredSeq !== undefined) {
+      const row = this.sqlite
+        .prepare("SELECT value FROM settings WHERE key=?")
+        .get(acceptedInputPrefix + id) as { value: string } | undefined;
+      if (row) {
+        const instruction = JSON.parse(row.value) as AcceptedInstruction;
+        this.recordStockDelivery(
+          instruction.conversationId,
+          queuedStockIds(instruction),
+          deliveredSeq,
+        );
+      }
+    }
     return (
       this.sqlite.prepare("DELETE FROM settings WHERE key=?").run(acceptedInputPrefix + id)
         .changes === 1
@@ -424,37 +438,45 @@ export class SqliteConversationStore implements ConversationStore {
   queue(id: string): QueuedInstruction[] {
     const rows = this.sqlite
       .prepare(
-        "SELECT id, conversation_id AS conversationId, text, images, position, client_id AS clientId, created_at AS createdAt, timeline_comments AS timelineComments, timeline_anchors AS timelineAnchors, stock_item_id AS stockItemId FROM queued_instructions WHERE conversation_id = ? ORDER BY position, rowid",
+        "SELECT id, conversation_id AS conversationId, text, images, position, client_id AS clientId, created_at AS createdAt, timeline_comments AS timelineComments, timeline_anchors AS timelineAnchors, stock_item_id AS stockItemId, delivery_context AS deliveryContext FROM queued_instructions WHERE conversation_id = ? ORDER BY position, rowid",
       )
       .all(id) as (Omit<
       QueuedInstruction,
-      "images" | "timelineComments" | "timelineAnchors" | "stockItemId"
+      "images" | "timelineComments" | "timelineAnchors" | "stockItemId" | "deliveryContext"
     > & {
       images: string;
       timelineComments: string | null;
       timelineAnchors: string | null;
       stockItemId: string | null;
+      deliveryContext: string | null;
     })[];
-    return rows.map(({ timelineComments, timelineAnchors, stockItemId, ...r }) => ({
-      ...r,
-      ...(timelineAnchors === null
-        ? {}
-        : { timelineAnchors: timelineAnchorSchema.array().parse(JSON.parse(timelineAnchors)) }),
-      ...(stockItemId === null ? {} : { stockItemId }),
-      images: JSON.parse(r.images) as string[],
-      ...(timelineComments === null
-        ? {}
-        : {
-            timelineComments: timelineInputCommentSchema
-              .array()
-              .parse(JSON.parse(timelineComments)),
-          }),
-    }));
+    return rows.map(
+      ({ timelineComments, timelineAnchors, stockItemId, deliveryContext, ...r }) => ({
+        ...r,
+        ...(timelineAnchors === null
+          ? {}
+          : { timelineAnchors: timelineAnchorSchema.array().parse(JSON.parse(timelineAnchors)) }),
+        ...(stockItemId === null ? {} : { stockItemId }),
+        ...(deliveryContext === null
+          ? {}
+          : {
+              deliveryContext: queueDeliveryContextSchema.parse(JSON.parse(deliveryContext)),
+            }),
+        images: JSON.parse(r.images) as string[],
+        ...(timelineComments === null
+          ? {}
+          : {
+              timelineComments: timelineInputCommentSchema
+                .array()
+                .parse(JSON.parse(timelineComments)),
+            }),
+      }),
+    );
   }
   enqueue(q: QueuedInstruction): void {
     this.sqlite
       .prepare(
-        "INSERT INTO queued_instructions (id, conversation_id, text, images, position, client_id, created_at, timeline_comments, stock_item_id, timeline_anchors) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO queued_instructions (id, conversation_id, text, images, position, client_id, created_at, timeline_comments, stock_item_id, timeline_anchors, delivery_context) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       )
       .run(
         q.id,
@@ -469,19 +491,34 @@ export class SqliteConversationStore implements ConversationStore {
           : JSON.stringify(timelineInputCommentSchema.array().parse(q.timelineComments)),
         q.stockItemId ?? null,
         q.timelineAnchors ? JSON.stringify(q.timelineAnchors) : null,
+        q.deliveryContext ? JSON.stringify(q.deliveryContext) : null,
       );
   }
-  dequeue(id: string, deliveredSeq: number): void {
-    this.sqlite
-      .prepare(
-        "UPDATE stock_items SET sent_seq=? WHERE id IN (SELECT stock_item_id FROM queued_instructions WHERE conversation_id=? AND stock_item_id IS NOT NULL) AND state='sent' AND sent_seq IS NULL",
-      )
-      .run(deliveredSeq, id);
+  recordStockDelivery(id: string, stocks: readonly string[], seq: number): void {
+    if (!stocks.length) return;
+    const sent = this.sqlite.prepare(
+      "UPDATE stock_items SET sent_seq=? WHERE id=? AND conversation_id=? AND state='sent' AND sent_seq IS NULL",
+    );
+    for (const stock of stocks) sent.run(seq, stock, id);
+  }
+  dequeue(id: string, deliveredSeq?: number): void {
+    if (deliveredSeq !== undefined)
+      this.recordStockDelivery(
+        id,
+        this.queue(id).flatMap((item) => [...queuedStockIds(item)]),
+        deliveredSeq,
+      );
     this.sqlite.prepare("DELETE FROM queued_instructions WHERE conversation_id = ?").run(id);
   }
   duplicate(id: string, clientId: string, since: number): SendResult | null {
-    const queued = this.queue(id).find((q) => q.clientId === clientId && q.createdAt >= since);
-    if (queued) return { result: "queued", queuedId: queued.id };
+    for (const queued of this.queue(id)) {
+      if (queued.clientId === clientId && queued.createdAt >= since)
+        return { result: "queued", queuedId: queued.id };
+      const previous = queued.deliveryContext?.receipts?.find(
+        (receipt) => receipt.clientId === clientId && receipt.createdAt >= since,
+      );
+      if (previous) return { result: "queued", queuedId: previous.queuedId };
+    }
     for (const e of this.events(id)) {
       if (e.createdAt < since || e.type !== "user_message") continue;
       const receipt = e.payload.client_receipts?.find(

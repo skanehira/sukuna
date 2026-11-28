@@ -32,6 +32,7 @@ export function createMessageHandler(deps: MessageDependencies): Handler<Identit
       {
         ...(deps.receiptMetadata ? { receipt_metadata: true } : {}),
         ...(input.restoreDraft === undefined ? {} : { restore_draft: input.restoreDraft }),
+        ...(input.stockIds === undefined ? {} : { stock_ids: input.stockIds }),
         text: input.text,
         images: input.images,
         interrupt: input.mode === "interrupt",

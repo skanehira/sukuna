@@ -7,7 +7,10 @@ import {
 } from "../../../../shared/conversation/sqlite-workspace-switch-receipts";
 import { eventSchema } from "../../../../shared/events";
 import { answersSchema } from "../../../../shared/events";
-import type { PendingAnswers } from "../../../../shared/conversation/api";
+import {
+  queueDeliveryContextSchema,
+  type PendingAnswers,
+} from "../../../../shared/conversation/api";
 import type { ConversationRepository } from "../domain/ports";
 import type { QueueItem } from "../domain/message-port";
 import { commentsFromAnchors, timelineAnchorSchema } from "../../../../shared/progress/draft";
@@ -17,16 +20,22 @@ export function createConversationRepository(sqlite: Database.Database): Convers
     (
       sqlite
         .prepare(
-          "SELECT id,text,images,position,stock_item_id AS stockItemId,client_id AS clientId,created_at AS createdAt,timeline_comments AS comments,timeline_anchors AS anchors FROM queued_instructions WHERE conversation_id=? ORDER BY position,rowid",
+          "SELECT id,text,images,position,stock_item_id AS stockItemId,client_id AS clientId,created_at AS createdAt,timeline_comments AS comments,timeline_anchors AS anchors,delivery_context AS deliveryContext FROM queued_instructions WHERE conversation_id=? ORDER BY position,rowid",
         )
-        .all(id) as (Omit<QueueItem, "images"> & {
+        .all(id) as (Omit<QueueItem, "images" | "deliveryContext"> & {
         images: string;
         comments: string | null;
         anchors: string | null;
+        deliveryContext: string | null;
       })[]
-    ).map(({ images, comments, anchors, ...row }) => ({
+    ).map(({ images, comments, anchors, deliveryContext, ...row }) => ({
       ...row,
       images: JSON.parse(images) as string[],
+      ...(deliveryContext === null
+        ? {}
+        : {
+            deliveryContext: queueDeliveryContextSchema.parse(JSON.parse(deliveryContext)),
+          }),
       ...(anchors === null
         ? {}
         : { timeline_anchors: timelineAnchorSchema.array().parse(JSON.parse(anchors)) }),
@@ -70,25 +79,27 @@ export function createConversationRepository(sqlite: Database.Database): Convers
     draft: (id) => readDraft(sqlite, id),
     writeDraft: (id, draft) => writeDraft(sqlite, id, draft),
     queue,
-    editQueue: (id, itemId, input) => {
+    editQueue: (id, itemId, input, context) => {
       const anchors = input.timeline_anchors;
       const images = JSON.stringify(input.images);
+      const delivery = context ? JSON.stringify(context) : null;
       const result =
         anchors === undefined
           ? sqlite
               .prepare(
-                "UPDATE queued_instructions SET text=?,images=?,timeline_anchors=CASE WHEN text=? THEN timeline_anchors ELSE NULL END WHERE conversation_id=? AND id=?",
+                "UPDATE queued_instructions SET text=?,images=?,timeline_anchors=CASE WHEN text=? THEN timeline_anchors ELSE NULL END,delivery_context=COALESCE(?,delivery_context) WHERE conversation_id=? AND id=?",
               )
-              .run(input.text, images, input.text, id, itemId)
+              .run(input.text, images, input.text, delivery, id, itemId)
           : sqlite
               .prepare(
-                "UPDATE queued_instructions SET text=?,images=?,timeline_anchors=?,timeline_comments=? WHERE conversation_id=? AND id=?",
+                "UPDATE queued_instructions SET text=?,images=?,timeline_anchors=?,timeline_comments=?,delivery_context=COALESCE(?,delivery_context) WHERE conversation_id=? AND id=?",
               )
               .run(
                 input.text,
                 images,
                 JSON.stringify(anchors),
                 JSON.stringify(commentsFromAnchors(input.text, anchors)),
+                delivery,
                 id,
                 itemId,
               );

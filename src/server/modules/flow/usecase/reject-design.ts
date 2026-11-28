@@ -8,6 +8,7 @@ import {
   emptyDesignRejection,
   type DesignError,
 } from "../../../../shared/api/design";
+import { sameDraftReceipt } from "../../../../shared/conversation/api";
 import type { DesignDependencies } from "../domain/design-ports";
 
 export async function rejectDesign(
@@ -22,23 +23,29 @@ export async function rejectDesign(
   if (!record) return err(designNotFound);
   if (record.issue.state !== "design_review") return err(designConflict);
   if (designEvents(record.events).reflecting) return err(designReflecting);
-  if (!parsed.data.text.trim()) return err(emptyDesignRejection);
-  const draft = record.draft;
+  if (!parsed.data.text.trim() && !record.unsentInstructionCount) return err(emptyDesignRejection);
+  const { text, draft: submitted } = parsed.data;
+  const stored = record.draft;
+  const draft = stored
+    ? {
+        text: stored.text,
+        images: stored.images,
+        ...(stored.timelineAnchors ? { timeline_anchors: stored.timelineAnchors } : {}),
+        updatedAt: stored.updatedAt,
+        updatedBy: stored.updatedBy,
+      }
+    : null;
+  const clearsDraft =
+    draft?.text === text &&
+    draft.images.length === 0 &&
+    (submitted === undefined ||
+      (!draft.timeline_anchors?.length && sameDraftReceipt(submitted, draft)));
   const response = await deps.runner.forward(
     "POST",
     `/flow/issues/${encodeURIComponent(id)}/design/reject`,
     {
-      ...parsed.data,
-      ...(draft?.text === parsed.data.text && draft.images.length === 0
-        ? {
-            draft: {
-              text: draft.text,
-              images: draft.images,
-              updatedAt: draft.updatedAt,
-              updatedBy: draft.updatedBy,
-            },
-          }
-        : {}),
+      text,
+      ...(clearsDraft ? { draft } : {}),
     },
   );
   if (!response.ok) return ok(response);

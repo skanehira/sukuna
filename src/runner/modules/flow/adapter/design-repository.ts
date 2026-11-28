@@ -127,6 +127,8 @@ export function createDesignRepository(
         !current ||
         current.text !== sent.text ||
         current.images.length ||
+        JSON.stringify(current.timelineAnchors ?? undefined) !==
+          JSON.stringify(sent.timeline_anchors) ||
         sent.images.length ||
         current.updatedAt !== sent.updatedAt ||
         current.updatedBy !== sent.updatedBy

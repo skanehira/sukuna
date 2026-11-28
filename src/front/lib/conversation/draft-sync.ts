@@ -4,17 +4,22 @@ export class DraftSync {
   private value: DraftContent;
   private editedAt: number;
   private savedAt: number;
+  private settled: Draft | null;
   private clientId: string;
   private revision = 0;
   private localRevision = 0;
   constructor(clientId: string, draft: Draft | null) {
     this.clientId = clientId;
     this.value = fromDraft(draft);
+    this.settled = draft;
     this.editedAt = draft?.updatedAt ?? 0;
     this.savedAt = this.editedAt;
   }
   content(): DraftContent {
     return this.value;
+  }
+  receipt(): Draft | null {
+    return this.dirty() ? null : this.settled;
   }
   version(): number {
     return this.revision;
@@ -59,6 +64,7 @@ export class DraftSync {
     const next = fromDraft(draft);
     if (!sameDraftContent(this.value, next)) this.revision++;
     this.value = next;
+    this.settled = draft;
     this.editedAt = draft?.updatedAt ?? 0;
     this.savedAt = this.editedAt;
   }

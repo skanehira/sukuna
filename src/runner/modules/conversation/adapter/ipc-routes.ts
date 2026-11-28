@@ -173,6 +173,7 @@ export function createIpcRoutes(
         timelineComments: p.timeline_comments,
         timelineAnchors: p.timeline_anchors,
         restoreDraft: p.restore_draft,
+        stockIds: p.stock_ids,
       },
       (fresh) => {
         duplicate = !fresh;

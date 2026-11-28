@@ -61,6 +61,7 @@ const expectedColumns: Record<string, string[]> = {
     "created_at",
     "timeline_comments",
     "timeline_anchors",
+    "delivery_context",
   ],
   pending_answers: ["conversation_id", "question_seq", "answers", "updated_at"],
   stock_items: [

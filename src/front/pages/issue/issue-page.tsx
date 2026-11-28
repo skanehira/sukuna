@@ -15,6 +15,8 @@ import type { ConversationSession } from "../../lib/conversation/session";
 import { WorkingActivity, type WorkMonitor } from "../../lib/conversation/work-monitor";
 import { ConversationPage } from "../conversation/ConversationPage";
 import type { IssueApi } from "./issue-api";
+import { DesignView, type IssueDesign } from "./design-view";
+import { designViewName } from "./design-lines";
 import { issueDataKey, issueFormUrl } from "./issue-form";
 import { issueFormColumns, isClosedIssue } from "./issue-form-lines";
 import {
@@ -215,10 +217,12 @@ function IssueTranscript({
 export function IssuePage({
   initial,
   initialDisplay,
+  design,
   projectName,
   api,
   controller,
   subscribe,
+  subscribeDesign,
   subscribeConversation,
   loadConversation,
   monitorConversation,
@@ -229,10 +233,12 @@ export function IssuePage({
 }: {
   initial: IssueView;
   initialDisplay?: IssueDisplay;
+  design?: IssueDesign;
   projectName: string;
   api: IssueApi;
   controller: BufferController;
   subscribe: LifecycleFeed;
+  subscribeDesign?: LifecycleFeed;
   subscribeConversation: SubscribeConversation;
   loadConversation: LoadConversation;
   monitorConversation?: MonitorConversation;
@@ -250,6 +256,10 @@ export function IssuePage({
   const issue = data ?? initial;
   const [display, setDisplay] = useState(() => initialDisplay ?? firstIssueDisplay(initial));
   const [conversationId, setConversationId] = useState<string>();
+  const showConversation = useCallback((id?: string) => {
+    setConversationId(id);
+    setDisplay("conversation");
+  }, []);
   const selected =
     issue.conversations.find((item) => item.id === conversationId) ?? firstIssueConversation(issue);
   const title = `${projectName} / #${issue.number} ${issue.title} / ${displayLabels[display]}`;
@@ -260,7 +270,7 @@ export function IssuePage({
   useEffect(() => {
     const current = () => opening === controller.screenOpening();
     const removeStop = controller.registerActionInterceptor(timelineStopAction.name, {
-      views: ["issue", ...timelineStopAction.views],
+      views: ["issue", designViewName, ...timelineStopAction.views],
       async run({ window }) {
         if (!current()) return false;
         if (window !== "main") {
@@ -319,7 +329,7 @@ export function IssuePage({
       return true;
     };
     controller.options.switchMainView = switchDisplay;
-    const views = ["issue", "conversation"];
+    const views = ["issue", "conversation", designViewName];
     const action = (name: string, label: string, run: () => void | Promise<void>) =>
       controller.actions.register({ name, label, run, views, where: "issue", group: "そのほか" });
 
@@ -381,12 +391,26 @@ export function IssuePage({
   return (
     <Frame title={title} side="main">
       <IssueTabs display={display} />
-      <ListingBuffer
-        lines={[{ kind: "note", text: `${displayLabels[display]}の内容はまだ表示できません` }]}
-        side="main"
-        viewName="issue"
-        posKey={`${positionKey}:${display}`}
-      />
+      {display === "design" && design ? (
+        <DesignView
+          id={issue.id}
+          title={`#${issue.number} ${issue.title}`}
+          positionKey={`${positionKey}:design`}
+          controller={controller}
+          design={design}
+          stopDetail={issue.stopDetail}
+          subscribe={subscribeDesign ?? subscribe}
+          loadConversation={loadConversation}
+          showConversation={showConversation}
+        />
+      ) : (
+        <ListingBuffer
+          lines={[{ kind: "note", text: `${displayLabels[display]}の内容はまだ表示できません` }]}
+          side="main"
+          viewName="issue"
+          posKey={`${positionKey}:${display}`}
+        />
+      )}
     </Frame>
   );
 }

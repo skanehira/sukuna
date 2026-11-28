@@ -153,7 +153,7 @@ SQLite のファイルを 1 つ使う。識別子は ULID の文字列、時刻�
 | `conversations` | `id`、`project_id`、`kind`、`issue_id`、`parent_conversation_id`、`title`、`session_id`、`cwd`、`worktree_id`、`run_state`、`stop_reason`、`resets_at`、`last_seq`、`last_read_seq`、`last_position`、`recap_seq`、`recap_failed_at`、`last_activity_at`、`closed_at` | 会話。`kind` は `chat` / `triage` / `design` / `impl` / `thread` |
 | `conversation_events` | `conversation_id`、`seq`、`type`、`payload`、`sdk_uuid`、`created_at` | 会話のイベントの記録。画面はこの記録を表示する |
 | `drafts` | `conversation_id`、`text`、`images`、`updated_at`、`updated_by`、`timeline_anchors` | 書きかけの入力。会話ごとに 1 つ |
-| `queued_instructions` | `id`、`conversation_id`、`text`、`images`、`position`、`stock_item_id`、`client_id`、`created_at`、`timeline_comments`、`timeline_anchors` | 届く前の指示。`client_id` は二重の送信を見分ける値。ストックから送った指示は、元のストックを指す。相談の配列の扱いは `features/work-monitor.md`「相談コメントの保存と抽出」に従う |
+| `queued_instructions` | `id`、`conversation_id`、`text`、`images`、`position`、`stock_item_id`、`client_id`、`created_at`、`timeline_comments`、`timeline_anchors`、`delivery_context` | 届く前の指示。`client_id` は二重の送信を見分ける値。ストックから送った指示は、元のストックを指す。相談の配列の扱いは `features/work-monitor.md`「相談コメントの保存と抽出」に従う |
 | `pending_answers` | `conversation_id`、`question_seq`、`answers`、`updated_at` | 送る前の回答 |
 | `stock_items` | `id`、`conversation_id`、`kind`、`text`、`quote`、`state`、`sent_at`、`sent_seq`、`thread_conversation_id`、`github_comment_url` | 質問と指示のストック。`kind` は `question` / `instruction`、`state` は `stocked` / `sent` / `cancelled` |
 | `toc_entries` | `conversation_id`、`position`、`title`、`start_seq` | 目次の章 |

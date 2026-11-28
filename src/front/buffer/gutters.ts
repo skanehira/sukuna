@@ -68,11 +68,15 @@ function markGutter(field?: ReturnType<typeof markField>): Extension {
 function numberGutter(): Extension {
   return gutter({
     class: NUM_GUTTER,
-    lineMarkerChange: (update) => update.selectionSet || update.docChanged,
+    lineMarkerChange: (update) =>
+      update.selectionSet ||
+      update.docChanged ||
+      update.startState.field(bufferField).lines !== update.state.field(bufferField).lines,
     lineMarker(view, block) {
       const number = view.state.doc.lineAt(block.from).number;
       const cursor = view.state.doc.lineAt(view.state.selection.main.head).number;
-      return new NumberMarker(String(number), number === cursor);
+      const sourceNumber = view.state.field(bufferField).lines[number - 1]?.lineNumber;
+      return new NumberMarker(String(sourceNumber ?? number), number === cursor);
     },
   });
 }

@@ -1,5 +1,5 @@
 import type { Quote, StockItem } from "../../../shared/stock";
-import type { QuoteSource } from "./quote";
+import { matchesQuotedLine, sameDesignPosition, type QuoteSource } from "./quote";
 
 type StockSymbol = "!" | "?" | "»" | "✓" | "→";
 export type StockMark = { symbol: "›" } | { symbol: StockSymbol; item: StockItem };
@@ -40,12 +40,32 @@ function markedPositions(
         : [];
     });
 
-  if (
-    (source.kind === "design_diff" || source.kind === "pr_diff") &&
-    (quote.kind === "design_diff" || quote.kind === "pr_diff") &&
-    source.kind === quote.kind &&
-    source.path === quote.path
-  ) {
+  if (source.kind === "design_diff" && quote.kind === "design_diff" && source.path === quote.path) {
+    const rows = source.positions.flatMap((position, index) =>
+      position ? [{ ...position, index }] : [],
+    );
+    const selected = quote.text.split("\n");
+    for (const [idx, row] of rows.entries()) {
+      if (
+        !sameDesignPosition(row, quote.start) ||
+        !matchesQuotedLine(
+          lines[row.index],
+          selected[0],
+          quote.start.col,
+          quote.mode === "block" ? quote.end.col : undefined,
+        )
+      )
+        continue;
+      const end = idx + selected.length - 1;
+      const finalRow = rows[end];
+      if (!finalRow || !sameDesignPosition(finalRow, quote.end))
+        return quote.start.row ? [] : [row.index];
+      return firstOnly ? [row.index] : rows.slice(idx, end + 1).map(({ index }) => index);
+    }
+    return [];
+  }
+
+  if (source.kind === "pr_diff" && quote.kind === "pr_diff" && source.path === quote.path) {
     const sameStartSide = (position: NonNullable<(typeof source.positions)[number]>) =>
       !("side" in position) || ("side" in quote.start && quote.start.side === position.side);
     const sameEndSide = (position: NonNullable<(typeof source.positions)[number]>) =>

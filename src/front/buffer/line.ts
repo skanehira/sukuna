@@ -41,6 +41,8 @@ export type LineInfo = {
   strong?: boolean;
   seq?: number;
   seqLine?: number;
+  lineNumber?: number;
+  designDiff?: { path: string; newNo?: number; row?: { side: "old" | "new"; line: number } };
   noQuote?: true;
 };
 

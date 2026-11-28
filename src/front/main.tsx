@@ -36,6 +36,7 @@ import {
   restorePendingNotice,
 } from "./lib/settings-restore";
 import { createRestoreConnection } from "./lib/restore-connection";
+import { createDesignApi } from "./pages/issue/design-api";
 import { createIssueApi } from "./pages/issue/issue-api";
 import { createIssueWorkspace } from "./pages/issue/issue-workspace";
 import { createWorktreeApi } from "./lib/worktree-api";
@@ -166,6 +167,11 @@ const stopSettingsCommands = registerSettingsCommands(controller, projectSetting
 const issues = createIssueWorkspace({
   controller,
   api: createIssueApi(request),
+  design: {
+    api: createDesignApi(request),
+    enterStock: conversations.enterIssueStock,
+    stockSession: conversations.stockSession,
+  },
   id: ulid,
   storage: window.sessionStorage,
   subscribe: conversations.subscribeChanges,

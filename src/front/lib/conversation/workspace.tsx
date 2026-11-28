@@ -1,3 +1,4 @@
+import { queuedStockIds } from "../../../shared/conversation/api";
 import { conversationActionHelp, conversationCommands } from "./keymap";
 import type { ReadyScreen, ScreenLoader } from "../../App";
 import type { ServerMessage } from "../../../shared/ws";
@@ -168,7 +169,7 @@ export function createConversationWorkspace(
         sessions
           .get(id)
           ?.snapshot()
-          .data?.queue.find((queued) => queued.stockItemId === item)?.id,
+          .data?.queue.find((queued) => queuedStockIds(queued).includes(item))?.id,
     });
   const lifecycle =
     lifecycleOptions &&
@@ -278,11 +279,17 @@ export function createConversationWorkspace(
   const subscribeIssueConversation = (session: ConversationSession, monitor?: WorkMonitor) => {
     currentSession = session;
     currentIssueMonitor = monitor;
-    stock?.leave();
+    const conversation = session.snapshot().data?.conversation;
+    const leaveStock =
+      conversation?.kind === "design" && conversation.issueId
+        ? stock?.enterIssue(conversation, conversation.issueId)
+        : undefined;
+    if (!leaveStock) stock?.leave();
     const stop = subscribe(session);
     controller.update({});
     return () => {
       stop();
+      leaveStock?.();
       if (monitor && currentIssueMonitor === monitor) {
         currentIssueMonitor = undefined;
         controller.update({});
@@ -481,6 +488,8 @@ export function createConversationWorkspace(
   return {
     loadScreen,
     loadConversation,
+    enterIssueStock: stock?.enterIssue,
+    stockSession: stock?.session,
     stopConversation: api.stop,
     issueMonitor,
     subscribeIssueConversation,
