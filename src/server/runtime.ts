@@ -25,6 +25,7 @@ import { createTimelineFilePort } from "./modules/conversation/adapter/timeline-
 import type { ProgressDependencies } from "./modules/conversation/domain/progress-port";
 import { WebSocketServer, type WebSocket } from "ws";
 import { RunnerLink } from "./runner-link";
+import { prepareWorktreeTerminalCleanup } from "./modules/workspace/adapter/terminal-cleanup";
 import { WsHub } from "./ws-hub";
 import type { NotificationPush } from "./modules/inbox/domain/push-port";
 import { createInboxRepository, formatResetTime } from "./modules/inbox/adapter/inbox-repository";
@@ -253,6 +254,8 @@ export async function initializeRuntime(
       log,
       now,
       notice: (notice) => hub?.notice(notice),
+      terminalCleanup: (request) =>
+        prepareWorktreeTerminalCleanup(getDatabase().db, terminalSessions, request),
       connection: (connected) => hub?.connection(connected),
     });
     runner.start();

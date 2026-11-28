@@ -1,3 +1,4 @@
+import type { IssueDataRepository } from "../../../../shared/issue/ports";
 import type {
   ClockPort,
   IssueNotice,
@@ -77,4 +78,13 @@ export function moveStateWithin(
         : (command.detail ?? null);
   const notice = repository.saveStateChange(issue, { ...next, cause: next.cause, detail }, now);
   return notice === null ? { kind: "unchanged" } : { kind: "moved", notice };
+}
+
+export function appendImplementationStage(
+  result: Extract<MoveStateResult, { kind: "moved" }>,
+  data: IssueDataRepository,
+  now: number,
+) {
+  const stage = data.append(result.notice.issue_id, "stage_changed", { stage: "implement" }, now);
+  return { ...result, notice: { ...result.notice, seq: stage.seq } };
 }

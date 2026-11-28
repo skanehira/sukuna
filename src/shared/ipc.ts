@@ -83,6 +83,19 @@ export const flowNotifySchema = z.object({
   project_id: z.string().optional(),
   issue_id: z.string().optional(),
 });
+export const TERMINAL_CLEANUP_HEADER = "x-sukuna-terminal-cleanup";
+export const terminalCleanupRequestSchema = z.strictObject({
+  request_id: z.uuid(),
+  worktree_id: z.string().min(1),
+  directory_key: z.string().regex(/^\d+:\d+$/),
+  path: z.string().min(1),
+  expires_at: z.number().int().nonnegative(),
+});
+export type TerminalCleanupRequest = z.infer<typeof terminalCleanupRequestSchema>;
+export const terminalCleanupReplySchema = terminalCleanupRequestSchema
+  .pick({ request_id: true, worktree_id: true, directory_key: true })
+  .extend({ step: z.enum(["claim", "closed", "defer"]) });
+
 export const runnerNoticeSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("conversation"),
@@ -105,6 +118,7 @@ export const runnerNoticeSchema = z.discriminatedUnion("kind", [
     seq: z.number().int().nonnegative(),
   }),
   z.object({ kind: z.literal("project"), project_id: z.string() }),
+  terminalCleanupRequestSchema.extend({ kind: z.literal("worktree_terminal_close") }),
   z.object({
     kind: z.literal("notice"),
     level: z.enum(["info", "error"]),

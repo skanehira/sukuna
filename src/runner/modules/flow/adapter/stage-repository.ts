@@ -19,19 +19,20 @@ export function createStageRepository(
   const globallyPaused = () =>
     db.select({ value: settings.value }).from(settings).where(eq(settings.key, "flow_paused")).get()
       ?.value === true;
+  const events = (id: string) =>
+    db
+      .select()
+      .from(issueEvents)
+      .where(eq(issueEvents.issueId, id))
+      .orderBy(asc(issueEvents.seq))
+      .all();
   const read = (id: string) =>
     activity.run((reservation) => {
       const repo = createIssueRepository(db, reservation);
       const issue = data.get(id);
       const settings = issue && project(issue.projectId);
       if (!issue || !settings) return;
-      const events = db
-        .select()
-        .from(issueEvents)
-        .where(eq(issueEvents.issueId, id))
-        .orderBy(asc(issueEvents.seq))
-        .all();
-      return { issue, project: settings, events, context: repo.contextOf(issue) };
+      return { issue, project: settings, events: events(id), context: repo.contextOf(issue) };
     });
   const transaction = <T>(
     action: (
@@ -53,6 +54,7 @@ export function createStageRepository(
     project,
     globallyPaused,
     read,
+    events,
     projects: () =>
       db
         .select({ id: projects.id })

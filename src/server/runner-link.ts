@@ -3,6 +3,8 @@ import { err, ok, type Result } from "neverthrow";
 import {
   RUNNER_IPC_DEADLINE_HEADER,
   RUNNER_IPC_TIMEOUT_MS,
+  TERMINAL_CLEANUP_HEADER,
+  type TerminalCleanupRequest,
   runnerNoticeSchema,
   unavailableRunnerError,
   type RunnerNotice,
@@ -18,6 +20,7 @@ type Options = {
   log: Logger;
   notice: (notice: RunnerNotice) => void;
   connection: (connected: boolean) => void;
+  terminalCleanup?: (request: TerminalCleanupRequest) => (() => Promise<void>) | undefined;
   clock?: Clock;
   now?: () => number;
 };
@@ -27,9 +30,11 @@ export class RunnerLink {
   private retry: (() => void) | undefined;
   private connected = false;
   private clock: Clock;
+  private now: () => number;
   private options: Options;
   constructor(options: Options) {
     this.options = options;
+    this.now = options.now ?? Date.now;
     this.clock = options.clock ?? {
       setTimeout: (fn, ms) => {
         const timer = setTimeout(fn, ms);
@@ -43,7 +48,7 @@ export class RunnerLink {
     path: string,
     input?: unknown,
   ): Promise<Result<IpcResponse, RunnerUnavailable>> {
-    const deadline = (this.options.now?.() ?? Date.now()) + RUNNER_IPC_TIMEOUT_MS;
+    const deadline = this.now() + RUNNER_IPC_TIMEOUT_MS;
     return new Promise((resolve) => {
       let cancelTimeout = () => {};
       const finish = (result: Result<IpcResponse, RunnerUnavailable>) => {
@@ -113,6 +118,37 @@ export class RunnerLink {
     });
     this.options.connection(connected);
   }
+  private async closeTerminal(request: TerminalCleanupRequest) {
+    if (this.stopped || this.now() >= request.expires_at) return;
+    const end = this.options.terminalCleanup?.(request);
+    const keys = {
+      request_id: request.request_id,
+      worktree_id: request.worktree_id,
+      directory_key: request.directory_key,
+    };
+    const claimed = await this.call("POST", "/flow/terminal-cleanup", { ...keys, step: "claim" });
+    if (
+      claimed.isErr() ||
+      claimed.value.status !== 200 ||
+      this.stopped ||
+      this.now() >= request.expires_at
+    )
+      return;
+    let closed = false;
+    if (end) {
+      try {
+        await end();
+        closed = true;
+      } catch {
+        closed = false;
+      }
+    }
+    await this.call("POST", "/flow/terminal-cleanup", {
+      ...keys,
+      step: closed ? "closed" : "defer",
+    });
+  }
+
   private connect(): void {
     if (this.stopped) return;
     let finished = false;
@@ -123,7 +159,12 @@ export class RunnerLink {
       if (!this.stopped) this.retry = this.clock.setTimeout(() => this.connect(), 1000);
     };
     const req = request(
-      { socketPath: this.options.socket, path: "/changes", method: "GET" },
+      {
+        socketPath: this.options.socket,
+        path: "/changes",
+        method: "GET",
+        headers: this.options.terminalCleanup ? { [TERMINAL_CLEANUP_HEADER]: "1" } : undefined,
+      },
       (res) => {
         if (res.statusCode !== 200) {
           res.resume();
@@ -141,7 +182,10 @@ export class RunnerLink {
             pending = pending.slice(end + 1);
             try {
               const parsed = runnerNoticeSchema.safeParse(JSON.parse(line));
-              if (parsed.success) this.options.notice(parsed.data);
+              if (!parsed.success) continue;
+              if (parsed.data.kind === "worktree_terminal_close")
+                void this.closeTerminal(parsed.data).catch(() => {});
+              else this.options.notice(parsed.data);
             } catch {
               this.options.log({
                 level: "error",

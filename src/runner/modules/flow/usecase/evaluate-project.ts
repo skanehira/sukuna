@@ -24,6 +24,8 @@ import {
 import type { IssueNoticePort } from "../domain/ports";
 import type { createFlowGate } from "./flow-gate";
 import type { createMoveState } from "./move-state";
+import type { createImplementationStart } from "./start-implementation";
+import type { createImplementationCompletion } from "./complete-implementation";
 
 type Snapshot = NonNullable<ReturnType<StageRepository["read"]>>;
 type Run = {
@@ -54,8 +56,13 @@ export function createEvaluateProject(deps: {
   notices: IssueNoticePort;
   allows: ReturnType<typeof createFlowGate>;
   move: ReturnType<typeof createMoveState>;
+  implementation: Pick<
+    ReturnType<typeof createImplementationCompletion>,
+    "observe" | "cleanupIfClosed"
+  > &
+    Pick<ReturnType<typeof createImplementationStart>, "evaluate">;
 }) {
-  const { repo, runtime, design, notices, allows, move } = deps;
+  const { repo, runtime, design, notices, allows, move, implementation } = deps;
   const conversations = (id: string) => runtime.store.list().filter((c) => c.issueId === id);
   const busy = (list: Conversation[]) =>
     list.some(
@@ -144,6 +151,9 @@ export function createEvaluateProject(deps: {
 
   async function evaluateIssue(id: string) {
     if (runtime.closing) return;
+    await implementation.observe(id);
+    await implementation.cleanupIfClosed(id);
+    await implementation.evaluate(id);
     const record = repo.read(id);
     if (!record || record.project.removedAt !== null || !hasFlowHistory(record.events)) return;
     const { issue, context, project, events } = record;

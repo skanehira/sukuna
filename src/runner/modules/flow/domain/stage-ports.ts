@@ -8,7 +8,11 @@ import type { DesignWorktree, DesignWorkspaceRequest } from "./design-ports";
 import type { IssueRepositoryPort } from "./ports";
 import type { TransitionContext } from "./transition";
 
-export type StageProject = DesignProject & { name: string; removedAt: number | null };
+export type StageProject = DesignProject & {
+  name: string;
+  removedAt: number | null;
+  implConcurrency: number;
+};
 export type StageSnapshot = {
   issue: IssueRecord;
   project: StageProject;
@@ -21,6 +25,7 @@ export interface StageRepository {
   project(id: string): StageProject | undefined;
   globallyPaused(): boolean;
   read(id: string): StageSnapshot | undefined;
+  events(id: string): IssueEvent[];
   projects(): { id: string }[];
   issues(id: string): { id: string }[];
   transaction<T>(

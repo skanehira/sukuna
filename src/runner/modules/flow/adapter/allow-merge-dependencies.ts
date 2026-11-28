@@ -1,12 +1,13 @@
 import { MergeStateConflict } from "../domain/merge-ports";
 import { WorktreeActivityBusy } from "../../../../shared/workspace/worktree-activity";
-import { and, desc, eq, isNull, max } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, max } from "drizzle-orm";
 import { err } from "neverthrow";
 import type { OpenedDatabase } from "../../../../shared/db/open";
 import { conversations, issues, projects, issueEvents } from "../../../../shared/db/schema";
 import type { ConversationRuntime } from "../../conversation/usecase/runtime";
 import { activeStates } from "../../conversation/usecase/runtime";
 import type { IssueNoticePort } from "../domain/ports";
+import { implementationOrigin, implementationReady, readyDetails } from "../domain/impl-history";
 import { createAllowMerge } from "../usecase/allow-merge";
 import { createIssueRepository } from "./issue-repository";
 import { createIssueDataRepository } from "../../../../server/modules/issue/adapter/issue-repository";
@@ -52,8 +53,23 @@ export function createRunnerAllowMerge(
         const issue = flow.getIssue(id);
         if (!issue || issue.state !== "stopped" || issue.stopReason !== "merge_confirm")
           throw new MergeStateConflict();
+        const events = db
+          .select()
+          .from(issueEvents)
+          .where(eq(issueEvents.issueId, id))
+          .orderBy(asc(issueEvents.seq))
+          .all();
+        const ready = implementationReady(events);
+        const details = readyDetails(ready);
+        if (implementationOrigin(events) && (!details || details.head !== headSha.toLowerCase()))
+          throw new MergeStateConflict();
         const data = createIssueDataRepository(db);
-        data.append(id, "merge_allowed", { headSha }, now);
+        data.append(
+          id,
+          "merge_allowed",
+          { headSha, ...(details && ready ? { readySeq: ready.seq } : {}) },
+          now,
+        );
         const saved = flow.saveStateChange(
           issue,
           {

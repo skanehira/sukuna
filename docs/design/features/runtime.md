@@ -122,6 +122,7 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 | `settings` のキー `restore_generation` | 復元の処理 (`db.lock` の中) | データベースの置き換えを識別する (`features/operations.md`「復元」) |
 | `settings` の `inbox_notification_markers:` で始まるキー | 画面のサーバー | 待機中の通知の契機を再起動後も照合する (`features/inbox.md`「通知を出す条件」) |
 | `settings` のキー `inbox_notification_sequence` | 画面のサーバー | 表示通知の最後の発行番号 (`features/inbox.md`「通知の文面」) |
+| `settings` のキー `implementation-worktree:<worktree の id>` | ランナー | 実装 worktree の登録・フォルダ・片付け先・自前の Git ロックを照合する (`features/implementation-flow.md`「worktree の片付け」) |
 | `settings` のほかのキー、`projects` | 画面のサーバー | 開発者の操作 |
 | `worktrees` の行の作成 (`origin = user`) | 画面のサーバー | 開発者が作った worktree と、一覧でアプリの外で作ったと分かった worktree (`features/worktree-terminal.md`「書くプロセス」) |
 | `worktrees` の行の作成 (`origin = flow`) | ランナー (自動フロー) | 自動フローが段階の worktree を作る (`features/worktree-terminal.md`「書くプロセス」) |
@@ -177,6 +178,7 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 | POST | `/flow/issues/:id/design/approve` | 設計を承認し、反映を始める (`features/design-review.md`) | `head_commit` | `status` |
 | POST | `/flow/issues/:id/design/reject` | メニューから設計を差し戻す (`features/design-review.md`) | `text` | `delivered_stock_ids` |
 | POST | `/flow/issues/:id/pr/allow-merge` | merge を許可し、実装の会話に merge の指示を届ける (`features/pr-review.md`) | `head_sha` | `state` |
+| POST | `/flow/terminal-cleanup` | 実装 worktree の管理ターミナルの終了依頼を受理し、処理結果を返す | `request_id`、`worktree_id`、`directory_key`、`step` (`claim` / `closed` / `defer`) | `accepted` |
 | POST | `/flow/projects/:id/stop` | プロジェクトの解除の前に、そのプロジェクトの会話を止める (`features/project-settings.md`「解除」) | なし | `stopped_conversation_ids` |
 | POST | `/flow/notify` | issue の項目、プロジェクトの設定、一時停止が変わったことと、PR が GitHub で merge されたのを見たことを自動フローに知らせる | `project_id?`、`issue_id?` | なし |
 | GET | `/health` | 生きているかと版 | なし | `pid`、`started_at`、`version` |
@@ -221,7 +223,8 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 
 ### ランナーからの知らせ
 
-`GET /changes` の応答は終わらない流れで、1 行に 1 件の JSON を書く。中身は「どれが変わったか」だけで、画面のサーバーは中身を SQLite から読む。
+`GET /changes` の応答は終わらない流れで、1 行に 1 件の JSON を書く。知らせを受けた画面のサーバーは、変更内容を SQLite から読む。
+管理ターミナルの終了依頼もこの接続で送る。
 
 ```ts
 type RunnerNotice =
@@ -230,7 +233,8 @@ type RunnerNotice =
   | { kind: "conversation_parts"; conversation_id: string; parts: ("queue" | "answers" | "recap" | "stock" | "threads")[] }
   | { kind: "issue"; issue_id: string; project_id: string; seq: number }
   | { kind: "project"; project_id: string }
-  | { kind: "notice"; level: "info" | "error"; message: string; conversation_id?: string; issue_id?: string };
+  | { kind: "notice"; level: "info" | "error"; message: string; conversation_id?: string; issue_id?: string }
+  | { kind: "worktree_terminal_close"; request_id: string; worktree_id: string; path: string; directory_key: string; expires_at: number };
 ```
 
 - `conversation` は、記録を保存するたびに出す。`seq` はその会話の `last_seq` である
@@ -241,6 +245,14 @@ type RunnerNotice =
 - `issue` は、`issue_events` に記録を足したときに出す (状態の移り変わり、`worktree_kept` など)。`seq` は `issue_events.seq` である
 - `notice` は、画面へ出すお知らせである。例: 利用枠切れで止まった、自動で再開した
 - 知らせには番号を振らない。画面のサーバーは、つなぎ直したときに、購読中の対象を SQLite から読み直す (「配信」)。知らせが欠けても記録は欠けない
+
+ランナーは `x-sukuna-terminal-cleanup: 1` を送る購読に限り、終了依頼を届ける。終了依頼はブラウザーへ配信しない。
+画面のサーバーは、登録された worktree ID とディレクトリの識別子が一致する管理ターミナルを選び、期限内に `claim` を送る。受理後にその端末を閉じ、同じ依頼の `closed` を返す。終了を確認できなければ `defer` を返す。
+
+Git のロックは、公開先にリンクする前に物理識別子を記録する。再起動時は、記録と一致する自前のロックを解除する。
+
+旧接続の応答は、新しい終了依頼には使わない。再接続で古い依頼が残っている場合は、その依頼の排他を解いてから片付けを再評価する。
+期限のフィールドと識別子の型は `src/shared/ipc.ts` を参照する。
 
 ### 会話の記録の種類
 

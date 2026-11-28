@@ -6,6 +6,8 @@ import {
   designPrTargetSchema,
   type DesignPrTarget,
 } from "../../../../shared/api/design";
+import { implementationPrUrl } from "../domain/impl-history";
+import type { ImplementationGithub } from "../domain/impl-ports";
 import type { DesignGithub, DesignPr } from "../domain/design-ports";
 import { githubRepository as canonicalGithubUrl } from "../../../../shared/gh/repository-url";
 import type { GhRunner } from "../../../../shared/gh/gh-runner";
@@ -167,4 +169,53 @@ function firstError(response: CommandResult) {
   return (
     (response.stderr || response.stdout).trim().split(/\r?\n/)[0] || "GitHub の応答がありません"
   );
+}
+
+export function createImplementationGithub(runner: GhRunner): ImplementationGithub {
+  const unexpected = { message: "実装用の PR を確認できませんでした" };
+  return {
+    async target(cwd, origin) {
+      const canonical = canonicalGithubUrl(origin);
+      if (canonical) return ok(repositoryOf(new URL(canonical)));
+      if (!origin.startsWith("/")) return err(unexpected);
+      const response = await runner.run(
+        ["repo", "view", "--json", "nameWithOwner,url", "--", origin],
+        { cwd },
+      );
+      const repo = payload(response, githubRepository, unexpected);
+      if (repo.isErr()) return err(repo.error);
+      const url = canonicalGithubUrl(repo.value.url);
+      return url &&
+        new URL(url).pathname.toLowerCase() === `/${repo.value.nameWithOwner.toLowerCase()}`
+        ? ok(repositoryOf(new URL(url)))
+        : err(unexpected);
+    },
+    async view(cwd, target, url) {
+      const canonical = implementationPrUrl(url);
+      if (!canonical || !matchesUrl(target, canonical)) return err(unexpected);
+      const response = await runner.run(
+        ["pr", "view", canonical, "--json", prFields + ",baseRefOid"],
+        { cwd },
+      );
+      const parsed = payload(
+        response,
+        scopedPr.extend({ baseRefOid: designCommitSchema.nullish() }),
+        unexpected,
+      );
+      if (parsed.isErr()) return err(parsed.error);
+      const row = parsed.value;
+      if (
+        implementationPrUrl(row.url) !== canonical ||
+        !matchedPr(row, target, target.branch, row.headRefOid)
+      )
+        return err(unexpected);
+      return ok({
+        state: row.state,
+        url: canonical,
+        head: row.headRefOid,
+        baseTip: row.baseRefOid ?? null,
+        merge: row.mergeCommit?.oid ?? null,
+      });
+    },
+  };
 }

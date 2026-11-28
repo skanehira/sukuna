@@ -1,3 +1,5 @@
+import { acquireRecordedGitLock } from "../../../../shared/workspace/recorded-lock";
+import { filesystemKey } from "../../../../shared/workspace/git-registration";
 import { parseDesignDiff } from "./design-diff";
 import type { ClosingGitSummary, LifecycleDependencies } from "../../conversation/domain/lifecycle";
 import {
@@ -176,26 +178,21 @@ export function createWorktreeGit(git: GitRunner, gh: GhRunner): WorktreeGitPort
       (await run(cwd, ["worktree", "remove", path])).map(() => undefined),
     prune: async (cwd) =>
       (await run(cwd, ["worktree", "prune", "--expire", "now"])).map(() => undefined),
-    async protect(project, current) {
+    async protect(project, current, observer) {
+      if (observer) {
+        const format = await run(project.path, ["rev-parse", "--show-ref-format"]);
+        if (format.isErr() || format.value.trim() !== "files") return err(WORKTREE_CHANGED);
+      }
       const requested: { cwd: string; ref: string }[] = [];
       if (current) {
         requested.push({ cwd: current.path, ref: "HEAD" });
         if (current.branch)
           requested.push({ cwd: project.path, ref: `refs/heads/${current.branch}` });
       }
-      const handles: { path: string; handle: Awaited<ReturnType<typeof open>> }[] = [];
+      const handles: { path: string; key: string; release(): Promise<void> }[] = [];
       const release = async () => {
-        for (const { path, handle } of handles.reverse()) {
-          await ResultAsync.fromPromise(
-            (async () => {
-              const original = await handle.stat({ bigint: true });
-              const actual = await lstat(path, { bigint: true }).catch(() => null);
-              if (actual && actual.dev === original.dev && actual.ino === original.ino)
-                await rm(path);
-            })(),
-            () => undefined,
-          );
-          await ResultAsync.fromPromise(handle.close(), () => undefined);
+        for (const held of handles.reverse()) {
+          await ResultAsync.fromPromise(held.release(), () => undefined);
         }
       };
       for (const request of requested) {
@@ -206,6 +203,22 @@ export function createWorktreeGit(git: GitRunner, gh: GhRunner): WorktreeGitPort
         }
         const path = `${resolve(request.cwd, resolved.value.trim())}.lock`;
         if (handles.some((held) => held.path === path)) continue;
+        if (observer) {
+          try {
+            const held = acquireRecordedGitLock(path, observer);
+            handles.push({
+              path,
+              key: held.file.key,
+              release: async () => {
+                held.release();
+              },
+            });
+          } catch {
+            await release();
+            return err(WORKTREE_CHANGED);
+          }
+          continue;
+        }
         const opened = await ResultAsync.fromPromise(
           (async () => {
             await mkdir(resolve(path, ".."), { recursive: true });
@@ -217,7 +230,20 @@ export function createWorktreeGit(git: GitRunner, gh: GhRunner): WorktreeGitPort
           await release();
           return err(opened.error);
         }
-        handles.push({ path, handle: opened.value });
+        const handle = opened.value;
+        const key = filesystemKey(await handle.stat({ bigint: true }));
+        handles.push({
+          path,
+          key,
+          release: async () => {
+            try {
+              const actual = await lstat(path, { bigint: true }).catch(() => null);
+              if (actual && filesystemKey(actual) === key) await rm(path);
+            } finally {
+              await handle.close();
+            }
+          },
+        });
       }
       if (current) {
         const head = await run(current.path, ["rev-parse", "--verify", "HEAD"]);
@@ -236,7 +262,7 @@ export function createWorktreeGit(git: GitRunner, gh: GhRunner): WorktreeGitPort
           return err(WORKTREE_CHANGED);
         }
       }
-      return ok({ release });
+      return ok({ release, files: handles.map(({ path, key }) => ({ path, key })) });
     },
     async mergedPrHeads(cwd, urls) {
       const heads: string[] = [];

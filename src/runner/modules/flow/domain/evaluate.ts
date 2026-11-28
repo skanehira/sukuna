@@ -53,6 +53,8 @@ export function hasFlowHistory(events: FlowEvent[]) {
     (event) =>
       event.type === "created" ||
       event.type === "ai_started" ||
-      ["confirm", "ai_created"].includes(stateChange(event)?.cause ?? ""),
+      ["confirm", "ai_created", "impl_started", "reopened_for_fix"].includes(
+        stateChange(event)?.cause ?? "",
+      ),
   );
 }

@@ -3,6 +3,7 @@ import type { ConversationRuntime } from "../../conversation/usecase/runtime";
 import type { StageDesign, StageRepository } from "../domain/stage-ports";
 import { flowStage } from "../domain/evaluate";
 import type { createMoveState } from "./move-state";
+import type { createImplementationCompletion } from "./complete-implementation";
 import { firstLine } from "./on-report";
 
 export async function recoverAfterRestart(
@@ -12,17 +13,22 @@ export async function recoverAfterRestart(
   move: ReturnType<typeof createMoveState>,
   schedule: (projectId: string) => void,
   logFailure: (error: unknown, issueId: string) => void,
+  implementation: Pick<ReturnType<typeof createImplementationCompletion>, "cleanup">,
 ) {
   for (const c of runtime.store.list()) {
     if (
       !c.issueId ||
       c.runState !== "stopped" ||
       c.stopReason !== "restarted" ||
-      !flowStage(c.kind)
+      !(flowStage(c.kind) || c.kind === "impl")
     )
       continue;
     const record = repo.read(c.issueId);
-    if (record?.issue.state !== c.kind || record.project.removedAt !== null) continue;
+    if (
+      record?.issue.state !== (c.kind === "impl" ? "implementing" : c.kind) ||
+      record.project.removedAt !== null
+    )
+      continue;
     const events = runtime.store.events(c.id);
     const stopped = events.findLast((event) => event.type === "stopped");
     if (stopped?.type !== "stopped" || stopped.payload.previous_run_state !== "waiting_answer")
@@ -36,6 +42,8 @@ export async function recoverAfterRestart(
     if (runtime.closing) return;
     for (const issue of repo.issues(project.id)) {
       const record = repo.read(issue.id);
+      if (record?.issue.state === "done" || record?.issue.state === "withdrawn")
+        await implementation.cleanup(record).catch((error: unknown) => logFailure(error, issue.id));
       if (record?.issue.state === "design_review" && designEvents(record.events).reflecting)
         await design
           .recoverApproval(issue.id)

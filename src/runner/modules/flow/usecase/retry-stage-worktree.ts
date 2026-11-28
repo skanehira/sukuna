@@ -10,13 +10,18 @@ import type { PreparedDelivery } from "../../conversation/usecase/run-options";
 import type { StageDesign, StageRepository } from "../domain/stage-ports";
 import type { IssueNoticePort } from "../domain/ports";
 import { firstInstruction } from "../domain/instructions";
-import { moveStateWithin } from "./move-state";
+import { appendImplementationStage, moveStateWithin } from "./move-state";
+import type { createImplementationStart } from "./start-implementation";
 
 export function createStageWorktreeRetry(
   repo: StageRepository,
   runtime: ConversationRuntime,
   design: StageDesign,
   notices: IssueNoticePort,
+  implementation: Pick<
+    ReturnType<typeof createImplementationStart>,
+    "prepare" | "attach" | "instruction"
+  >,
 ) {
   return async (
     c: Conversation,
@@ -25,11 +30,12 @@ export function createStageWorktreeRetry(
     cancelled = () => false,
   ) => {
     const id = c.issueId;
-    const record = id && c.kind === "design" ? repo.read(id) : undefined;
+    const stage = c.kind === "impl" ? "implementing" : c.kind === "design" ? "design" : null;
+    const record = id && stage ? repo.read(id) : undefined;
     if (
       !id ||
       record?.issue.state !== "stopped" ||
-      record.context.stoppedFrom !== "design" ||
+      record.context.stoppedFrom !== stage ||
       record.context.stoppedCause !== "worktree_failed"
     )
       return ok<PreparedDelivery>({ input });
@@ -38,17 +44,41 @@ export function createStageWorktreeRetry(
     const projectRun = runtime.store.reserveProjectRun(c.projectId);
     let reserved = false;
     try {
-      const tree = await design.workspace({
-        issueId: id,
-        conversationId: c.id,
-        prepareOnly: true,
-        cancelled,
-      });
-      if (cancelled() || (tree.isErr() && tree.error.code === "runner_unavailable"))
+      const workspace = async () => {
+        if (c.kind === "impl") {
+          const result = await implementation.prepare(id, c.id, cancelled);
+          if (result.isErr()) return err(result.error);
+          const tree = result.value;
+          return ok({
+            tree,
+            first: await implementation.instruction(id, tree),
+            attach: (_reservation: Parameters<StageDesign["attachWorkspace"]>[3]) =>
+              implementation.attach(c.id, tree)
+                ? ok(undefined)
+                : err({ message: "実装の作業場所が変わりました。" }),
+          });
+        }
+        const result = await design.workspace({
+          issueId: id,
+          conversationId: c.id,
+          prepareOnly: true,
+          cancelled,
+        });
+        if (result.isErr()) return err(result.error);
+        const tree = result.value;
+        return ok({
+          tree,
+          first: firstInstruction("design", record.issue, record.project, tree),
+          attach: (reservation: Parameters<StageDesign["attachWorkspace"]>[3]) =>
+            design.attachWorkspace(id, c.id, tree, reservation),
+        });
+      };
+      const prepared = await workspace();
+      if (cancelled() || (prepared.isErr() && prepared.error.code === "runner_unavailable"))
         return err(unavailableRunnerError);
-      if (tree.isErr())
-        return err({ code: "worktree_failed" as const, message: tree.error.message });
-      const first = firstInstruction("design", record.issue, record.project, tree.value);
+      if (prepared.isErr())
+        return err({ code: "worktree_failed" as const, message: prepared.error.message });
+      const { first, tree, attach } = prepared.value;
       const changed =
         by === "resume"
           ? { ...input, origin: "flow" as const, text: first }
@@ -59,7 +89,7 @@ export function createStageWorktreeRetry(
       return ok<PreparedDelivery>({
         input: changed,
         prefix: by === "message" ? first : undefined,
-        workspace: tree.value,
+        workspace: tree,
         release: () => projectRun.release(),
         before: () => {
           const now = repo.now();
@@ -73,7 +103,7 @@ export function createStageWorktreeRetry(
                 });
               }
               const context = flow.contextOf(latest);
-              if (context.stoppedCause !== "worktree_failed") {
+              if (context.stoppedCause !== "worktree_failed" || context.stoppedFrom !== stage) {
                 throw new InputRefused({
                   code: "conflict",
                   message: "issue の状態が変わりました。",
@@ -86,7 +116,7 @@ export function createStageWorktreeRetry(
                   message: "issue の状態が変わりました。",
                 });
               }
-              const attached = design.attachWorkspace(id, c.id, tree.value, lease);
+              const attached = attach(lease);
               if (attached.isErr())
                 throw new InputRefused({ code: "conflict", message: attached.error.message });
               const moved = moveStateWithin(
@@ -99,13 +129,14 @@ export function createStageWorktreeRetry(
                   code: "conflict",
                   message: "issue の状態が変わりました。",
                 });
+              const state = c.kind === "impl" ? appendImplementationStage(moved, data, now) : moved;
               const start = data.append(
                 id,
                 "ai_started",
-                { kind: "design", conversationId: c.id, reason: "worktree_retry" },
+                { kind: c.kind, conversationId: c.id, reason: "worktree_retry" },
                 now,
               );
-              return { ...moved.notice, seq: start.seq };
+              return { ...state.notice, seq: start.seq };
             }, lease),
           );
         },
