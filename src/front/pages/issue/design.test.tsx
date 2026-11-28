@@ -358,6 +358,6 @@ it("引用の位置を開いて Space c を押すと追加行のパスと行を�
       },
     });
   } finally {
-    await act(() => view.dispose());
+    act(() => view.dispose());
   }
 });
