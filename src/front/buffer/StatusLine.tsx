@@ -9,6 +9,7 @@ const colors = {
   "VISUAL BLOCK": "bg-accent",
   COMMAND: "bg-ink",
   TERMINAL: "bg-doing",
+  IMAGE: "bg-accent",
 };
 export function StatusLine({
   controller,
@@ -22,11 +23,13 @@ export function StatusLine({
   const context =
     state.mode === "TERMINAL"
       ? "terminal"
-      : state.active === "prompt"
-        ? "prompt"
-        : state.mode.startsWith("VISUAL")
-          ? "visual"
-          : "normal";
+      : state.mode === "IMAGE"
+        ? "prompt-images"
+        : state.active === "prompt"
+          ? "prompt"
+          : state.mode.startsWith("VISUAL")
+            ? "visual"
+            : "normal";
   const hints = resolveHints(
     controller.currentHints(),
     controller.entries(),

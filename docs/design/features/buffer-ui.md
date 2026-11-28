@@ -414,7 +414,7 @@ Space を押すと、ステータス行の上に、続けて押せるキーの�
 | --- | --- |
 | 開く・戻る | `open`、`back`、`view.prev`、`view.next`、`jump.back`、`home`、`tree.focus`、`conversation.switch`、`conversation.list`、`conversation.close`、`files.open-path` |
 | ウィンドウ | `win.left`、`win.right`、`win.down`、`win.up`、`right.close` |
-| 会話 | `prompt.open`、`prompt.submit`、`prompt.interrupt`、`prompt.prev`、`prompt.next`、`prompt.complete`、`agent.stop`、`diff.expand`、`diff.collapse` |
+| 会話 | `prompt.open`、`prompt.submit`、`prompt.interrupt`、`prompt.prev`、`prompt.next`、`prompt.complete`、`prompt.image.prev`、`prompt.image.next`、`prompt.image.delete`、`prompt.image.open`、`prompt.image.leave`、`prompt.image.insert`、`agent.stop`、`diff.expand`、`diff.collapse` |
 | 質問と指示 | `stock.question`、`stock.instruct`、`stock.list`、`item.edit`、`item.delete`、`item.undo`、`mark.next`、`mark.prev`、`stock.send.all`、`stock.send.questions`、`stock.send.instructions`、`stock.publish`、`thread.list` |
 | 状況を思い出す | `recap.recent`、`recap.toc`、`recap.decisions`、`recap.search` |
 | そのほか | `cmdline`、`issue.new`、`timeline.open`、`timeline.next`、`timeline.prev`、`files.tree`、`files.folder-open`、`files.folder-close`、`files.grep`、`files.markdown-toggle`、`search.open`、`worktree.list`、`terminal.open`、`terminal.normal` |

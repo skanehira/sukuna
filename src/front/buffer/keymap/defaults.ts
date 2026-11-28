@@ -62,12 +62,21 @@ const windows: [string, string][] = [
   ["<Space>wj", "win.down"],
   ["<Space>wk", "win.up"],
 ];
+const promptImages: [string, string][] = [
+  ["h", "prompt.image.prev"],
+  ["l", "prompt.image.next"],
+  ["d", "prompt.image.delete"],
+  ["<CR>", "prompt.image.open"],
+  ["<Esc>", "prompt.image.leave"],
+  ["i", "prompt.image.insert"],
+  [":", "cmdline"],
+];
 export const defaultKeymap: KeymapEntry[] = [
   ...normal.map(([keys, action]): KeymapEntry => ({ keys, context: "normal", to: { action } })),
   ...windows.flatMap(([keys, action]): KeymapEntry[] =>
-    ["normal", "prompt"].map((context) => ({
+    (["normal", "prompt", "prompt-images"] as const).map((context) => ({
       keys,
-      context: context as "normal" | "prompt",
+      context,
       to: { action },
     })),
   ),
@@ -80,6 +89,11 @@ export const defaultKeymap: KeymapEntry[] = [
     [":", "cmdline"],
     ["<CR>", "github-import.selected"],
   ].map(([keys, action]): KeymapEntry => ({ keys, context: "visual", to: { action } })),
+  ...promptImages.map(([keys, action]): KeymapEntry => ({
+    keys,
+    context: "prompt-images",
+    to: { action },
+  })),
   { keys: "<CR>", context: "prompt", to: { action: "prompt.submit" } },
   { keys: "<A-CR>", context: "prompt", to: { action: "prompt.interrupt" } },
   { keys: "<Tab>", context: "prompt", to: { action: "prompt.complete" } },

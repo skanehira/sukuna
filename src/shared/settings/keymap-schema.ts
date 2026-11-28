@@ -4,7 +4,7 @@ const keys = z.string().refine((value) => value.trim().length > 0 && !/[\r\n]/.t
 
 export const keymapEntrySchema = z.strictObject({
   keys,
-  context: z.enum(["normal", "visual", "prompt", "terminal"]),
+  context: z.enum(["normal", "visual", "prompt", "prompt-images", "terminal"]),
   to: z.union([z.strictObject({ action: z.string().min(1) }), z.strictObject({ keys }), z.null()]),
 });
 

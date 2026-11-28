@@ -1225,6 +1225,27 @@ it("2つのタブの下書きは新しい編集を残し、別会話から戻っ
   });
 });
 
+it("（US-047）書きかけから外した画像は、指示を送っても AI に届かない", async () => {
+  const f = await fixture();
+  const id = await f.start();
+  const kept = (await f.upload(id)).body.image.id;
+  const removed = (await f.upload(id, Buffer.from("GIF89a"), "image/gif")).body.image.id;
+  const save = (images: string[], editedAt: number) =>
+    f.request(`/conversations/${id}/draft`, "PUT", {
+      text: "この画面を直して",
+      images,
+      clientId: "tab",
+      editedAt,
+    });
+  await save([kept, removed], 1);
+  await save([kept], 2);
+  const draft = (await f.snapshot(id)).body.draft!;
+  expect(await f.send(id, draft.text, "sent", "send", draft.images)).toEqual(delivered);
+  expect(f.agent.messages).toEqual([
+    { text: "この画面を直して", images: [{ data: png, mediaType: "image/png" }] },
+  ]);
+});
+
 it("画像を保存して順番どおり実データを届け、欠落した画像数をイベントへ返す", async () => {
   const f = await fixture();
   const id = await f.start();

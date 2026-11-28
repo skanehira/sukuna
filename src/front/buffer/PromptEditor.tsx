@@ -12,19 +12,73 @@ import {
   createCompletionGate,
   type CompletionPanel,
 } from "./completion";
-import { promptCloseHint, type BufferController, type PromptSpec } from "./controller";
+import {
+  promptCloseHint,
+  type BufferController,
+  type PastedImage,
+  type PromptSpec,
+} from "./controller";
+import { resolveHints } from "./hints";
 import { applyVim, vimMode } from "./keymap/apply-vim";
+import { pasteClipboard } from "./clipboard";
 import { eventKey } from "./keymap/notation";
+function PastedThumbnail({
+  image,
+  number,
+  selected,
+}: {
+  image: PastedImage;
+  number: number;
+  selected: boolean;
+}) {
+  const [missing, setMissing] = useState(false);
+  return (
+    <div
+      role="option"
+      aria-selected={selected}
+      aria-label={`画像 ${number}`}
+      className={`relative h-20 overflow-hidden rounded border border-line ${selected ? "ring-2 ring-accent" : ""}`}
+    >
+      {missing ? (
+        <div className="flex h-full w-20 items-center justify-center text-xs text-muted">
+          見つかりません
+        </div>
+      ) : (
+        <img
+          src={image.url}
+          alt={`画像 ${number}`}
+          className="h-full max-w-40 object-contain"
+          onError={() => setMissing(true)}
+        />
+      )}
+      <span className="absolute top-0 left-0 rounded-br bg-raised px-1 font-mono text-[11px]">
+        {number}
+      </span>
+    </div>
+  );
+}
+function hintText(
+  controller: BufferController,
+  hints: [string, string][],
+  context: "prompt" | "prompt-images",
+): string {
+  return resolveHints(hints, controller.entries(), controller.actions, context)
+    .map(([key, label]) => `${key} ${label}`)
+    .join("　");
+}
 export function PromptEditor({
   controller,
   spec,
   active,
+  selectedImage = null,
 }: {
   controller: BufferController;
   spec: PromptSpec;
   active: boolean;
+  selectedImage?: string | null;
 }) {
   const host = useRef<HTMLDivElement | null>(null);
+  const imageRow = useRef<HTMLDivElement | null>(null);
   const [mode, setMode] = useState("INSERT");
   const [candidate, setCandidate] = useState<string | null>(null);
   const [panel, setPanel] = useState<CompletionPanel | null>(null);
@@ -42,6 +96,7 @@ export function PromptEditor({
     let index = -1;
     let submitting = false;
     let externalChange = false;
+    let destroyed = false;
     let completionCandidates: string[] = [];
     const gate = createCompletionGate();
     const replaceText = (text: string) => {
@@ -187,6 +242,21 @@ export function PromptEditor({
           cycling = true;
           setCandidate(completionCandidates[index]);
         }
+      } else if (token === "<C-v>" && state?.insertMode && controller.options.clipboard?.mac) {
+        consumed = true;
+        void pasteClipboard(controller.options.clipboard, {
+          paste: spec.paste && ((images) => spec.paste?.(images)),
+          insert: (text) => {
+            if (destroyed) return;
+            const { from, to } = view.state.selection.main;
+            view.dispatch({
+              changes: { from, to, insert: text },
+              selection: { anchor: from + text.length },
+              scrollIntoView: true,
+            });
+          },
+          notify: controller.notify,
+        });
       } else if (token === ":" && !state?.insertMode) {
         consumed = true;
         controller.openCommand();
@@ -210,17 +280,21 @@ export function PromptEditor({
     const removeKeys = applyVim(view, controller, "prompt", "prompt", true);
     const focus = () => controller.focus("prompt");
     view.dom.addEventListener("focusin", focus);
-    const removeFocus = controller.registerPromptFocus(() => {
+    const removeFocus = controller.registerPromptFocus((insert) => {
       view.focus();
+      if (insert && !cm.state.vim?.insertMode) Vim.handleKey(cm, "i", "user");
       syncMode();
     });
+    const removeImagesFocus = controller.registerPromptImagesFocus(() => imageRow.current?.focus());
     Vim.handleKey(cm, "a", "user");
     view.dispatch({ selection: { anchor: view.state.doc.length } });
     controller.focus("prompt");
     return () => {
+      destroyed = true;
       gate.cancel();
       removeUpdate();
       removeFocus();
+      removeImagesFocus();
       removeKeys();
       cm.off("vim-mode-change", syncMode);
       view.dom.removeEventListener("keydown", receive, true);
@@ -285,16 +359,45 @@ export function PromptEditor({
         </div>
       ) : null}
       <div ref={host} />
+      {spec.pastedImages?.length ? (
+        <div
+          ref={imageRow}
+          role="listbox"
+          aria-label="貼った画像"
+          tabIndex={-1}
+          className="flex flex-wrap gap-2 px-3 pb-2 outline-none"
+          onKeyDown={(event) => controller.receivePromptImageKey(event.nativeEvent)}
+        >
+          {spec.pastedImages.map((image, index) => (
+            <PastedThumbnail
+              key={image.id}
+              image={image}
+              number={index + 1}
+              selected={image.id === selectedImage}
+            />
+          ))}
+        </div>
+      ) : null}
       {spec.unsent ? (
         <div className="px-3 pb-2 text-[13px] text-wait">未送信: {spec.unsent}</div>
       ) : null}
       <div className="px-3 pb-2 text-xs text-muted">
-        {mode === "INSERT" || mode === "REPLACE"
-          ? `Esc Normal へ (${spec.verb}のは Normal から)`
-          : `Enter ${spec.verb}　${spec.interrupt ? "Alt+Enter AI を止めてすぐ送る　" : ""}Esc ${promptCloseHint(spec)}`}
-        {spec.complete ? `　Tab ${spec.complete.verb}` : null}
+        {selectedImage !== null
+          ? hintText(controller, controller.currentHints(), "prompt-images")
+          : mode === "INSERT" || mode === "REPLACE"
+            ? `Esc Normal へ (${spec.verb}のは Normal から)`
+            : `Enter ${spec.verb}　${spec.interrupt ? "Alt+Enter AI を止めてすぐ送る　" : ""}Esc ${promptCloseHint(spec)}`}
+        {spec.complete && selectedImage === null ? `　Tab ${spec.complete.verb}` : null}
+        {spec.paste && (mode === "INSERT" || mode === "REPLACE")
+          ? `　${controller.options.clipboard?.mac && !controller.options.clipboard.secure ? "Cmd+V" : "Ctrl+v"} 貼り付け`
+          : null}
         {spec.images ? (
           <span className="ml-4 text-accent">画像 {spec.images} 件 (送信時に一緒に送る)</span>
+        ) : null}
+        {spec.pastedImages?.length && selectedImage === null && mode === "NORMAL" ? (
+          <span className="ml-4">
+            {hintText(controller, [["win.down", "画像を選ぶ"]], "prompt")}
+          </span>
         ) : null}
       </div>
     </div>

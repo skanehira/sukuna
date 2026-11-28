@@ -19,11 +19,13 @@ import { menuAt } from "./menu";
 import { findSeqLine } from "./seq-index";
 import type { ClipboardPort } from "./clipboard";
 import type { CompletionResult } from "./completion";
+import { eventKey } from "./keymap/notation";
 
 export function windowId(side: string): string {
   return side === "list" || side === "table" ? "main" : side;
 }
 
+export type PastedImage = { id: string; url: string };
 export type PromptSpec = {
   label: string;
   target: string;
@@ -45,6 +47,10 @@ export type PromptSpec = {
   quote?: string[];
   discardOnClose?: boolean;
   images?: number;
+  pastedImages?: PastedImage[];
+  removeImage?(id: string): void;
+  openImage?(image: PastedImage): void;
+  clearImages?(): void | Promise<void>;
   submit(text: string): void | boolean | Promise<void | boolean>;
   close(text: string): void;
   interrupt?(text: string): void | boolean | Promise<void | boolean>;
@@ -80,7 +86,8 @@ export type Mode =
   | "VISUAL LINE"
   | "VISUAL BLOCK"
   | "COMMAND"
-  | "TERMINAL";
+  | "TERMINAL"
+  | "IMAGE";
 export type BufferSnapshot = {
   version: number;
   active: string;
@@ -91,6 +98,7 @@ export type BufferSnapshot = {
   commandPrefix?: ":" | "/";
   prompt: PromptSpec | null;
   promptId: number;
+  promptImage: string | null;
   confirmation: { text: string; context: ActionContext; choicesInText?: boolean } | null;
   notice: { message: string; kind: "error" | "info" } | null;
 };
@@ -139,7 +147,8 @@ export class BufferController {
   private status = new Map<string, string>();
   private hints = new Map<string, Hint[]>();
   private promptUpdate: ((text: string) => void) | null = null;
-  private promptFocus: (() => void) | null = null;
+  private promptFocus: ((insert: boolean) => void) | null = null;
+  private promptImagesFocus: (() => void) | null = null;
   private commandRevision = 0;
   private commandRetry: { input: string; run: () => Promise<void> } | null = null;
   private searchSubmit: ((query: string) => void | Promise<void>) | null = null;
@@ -165,6 +174,7 @@ export class BufferController {
       command: null,
       prompt: null,
       promptId: 0,
+      promptImage: null,
       confirmation: null,
       notice: null,
     };
@@ -205,8 +215,18 @@ export class BufferController {
       ],
       ["win.left", "左へ", "ウィンドウ", () => this.move(-1)],
       ["win.right", "右へ", "ウィンドウ", () => this.move(1)],
-      ["win.down", "入力欄へ", "ウィンドウ", () => this.focus("prompt")],
-      ["win.up", "会話へ", "ウィンドウ", () => this.focus("main")],
+      [
+        "win.down",
+        "入力欄へ",
+        "ウィンドウ",
+        () => (this.state.active === "prompt" ? this.enterPromptImages() : this.focus("prompt")),
+      ],
+      [
+        "win.up",
+        "会話へ",
+        "ウィンドウ",
+        () => this.focus(this.state.promptImage === null ? "main" : "prompt"),
+      ],
       ["terminal.normal", "Normal モードへ戻る", "そのほか", () => this.update({ mode: "NORMAL" })],
     ];
     for (const [name, label, group, run] of builtins)
@@ -217,6 +237,41 @@ export class BufferController {
         where: "共通",
         fromPrompt: name.startsWith("win.") || name === "cmdline",
         run,
+      });
+    const imageActions: [string, string, () => void][] = [
+      ["prompt.image.prev", "左の画像を選ぶ", () => this.selectPromptImage(-1)],
+      ["prompt.image.next", "右の画像を選ぶ", () => this.selectPromptImage(1)],
+      [
+        "prompt.image.delete",
+        "選んだ画像を外す",
+        () => {
+          if (this.state.promptImage !== null)
+            this.state.prompt?.removeImage?.(this.state.promptImage);
+        },
+      ],
+      [
+        "prompt.image.open",
+        "選んだ画像を元の大きさで開く",
+        () => {
+          const image = this.state.prompt?.pastedImages?.find(
+            ({ id }) => id === this.state.promptImage,
+          );
+          if (image) this.state.prompt?.openImage?.(image);
+        },
+      ],
+      ["prompt.image.leave", "本文の Normal へ戻る", () => this.focus("prompt")],
+      ["prompt.image.insert", "本文の Insert へ戻る", () => this.focus("prompt", true)],
+    ];
+    for (const [name, label, run] of imageActions)
+      this.actions.register({
+        name,
+        label,
+        group: "会話",
+        where: "入力欄の画像の段",
+        fromPrompt: true,
+        run: () => {
+          if (this.state.promptImage !== null) run();
+        },
       });
     this.actions.subscribe(() => {
       this.rebuildKeymap();
@@ -232,7 +287,16 @@ export class BufferController {
   };
   update(patch: Partial<BufferSnapshot>): void {
     const before = this.state.command === null ? this.state.active : "command";
-    this.state = { ...this.state, ...patch, version: this.state.version + 1 };
+    const leavesPromptImages =
+      patch.active !== undefined && patch.active !== "prompt" && this.state.promptImage !== null;
+    this.state = {
+      ...this.state,
+      ...(leavesPromptImages
+        ? { promptImage: null, ...(this.state.mode === "IMAGE" ? { mode: "NORMAL" } : {}) }
+        : {}),
+      ...patch,
+      version: this.state.version + 1,
+    };
     const after = this.state.command === null ? this.state.active : "command";
     if (before !== after) this.recordInteraction();
     this.listeners.forEach((listener) => listener());
@@ -319,24 +383,68 @@ export class BufferController {
   windowChanged(side: string, handle: WindowHandle): void {
     if (this.window(side) === handle) this.restoreWindow(side);
   }
-  registerPromptFocus(focus: () => void): () => void {
+  registerPromptFocus(focus: (insert: boolean) => void): () => void {
     this.promptFocus = focus;
     return () => {
       if (this.promptFocus === focus) this.promptFocus = null;
     };
   }
-  focus(side: string): void {
+  registerPromptImagesFocus(focus: () => void): () => void {
+    this.promptImagesFocus = focus;
+    return () => {
+      if (this.promptImagesFocus === focus) this.promptImagesFocus = null;
+    };
+  }
+  focus(side: string, insert = false): void {
     if (side === "prompt") {
       if (!this.state.prompt) return;
-      this.promptFocus?.();
+      this.leavePromptImages();
+      this.promptFocus?.(insert);
     } else {
       const target = this.window(side);
       if (!target) return;
+      this.leavePromptImages();
       target.focus();
     }
     this.positions.setActive(side);
     this.update({ active: side });
   }
+  private enterPromptImages(): void {
+    const images = this.state.prompt?.pastedImages ?? [];
+    if (!images.length) return;
+    this.update({ promptImage: images[images.length - 1].id, mode: "IMAGE", prefix: "" });
+    this.promptImagesFocus?.();
+  }
+  private leavePromptImages(): void {
+    if (this.state.promptImage !== null) this.update({ promptImage: null, mode: "NORMAL" });
+  }
+  private selectPromptImage(step: number): void {
+    const images = this.state.prompt?.pastedImages ?? [];
+    const index = images.findIndex(({ id }) => id === this.state.promptImage);
+    if (index < 0) return;
+    this.update({ promptImage: images[Math.max(0, Math.min(index + step, images.length - 1))].id });
+  }
+  receivePromptImageKey = (event: KeyboardEvent): void => {
+    if (this.state.promptImage === null || this.state.confirmation || event.metaKey) return;
+    event.preventDefault();
+    if (event.isComposing) return;
+    const token = eventKey(event);
+    if (!token) return;
+    const keys = `${this.state.prefix}${token}`;
+    const entries = this.bindings.filter(
+      (entry) =>
+        entry.context === "prompt-images" &&
+        entry.to !== null &&
+        "action" in entry.to &&
+        this.canRun(entry.to.action, "", true),
+    );
+    const exact = entries.find((entry) => entry.keys === keys);
+    if (exact?.to && "action" in exact.to) {
+      this.update({ prefix: "" });
+      void this.run(exact.to.action);
+    } else
+      this.update({ prefix: entries.some((entry) => entry.keys.startsWith(keys)) ? keys : "" });
+  };
   move(direction: number): void {
     const order = ["tree", "main", "right"].filter((side) => this.windows.has(side));
     const index = Math.max(0, order.indexOf(this.state.active));
@@ -548,6 +656,8 @@ export class BufferController {
         ["n", "やめる"],
       ];
     if (this.state.mode === "TERMINAL") return [["terminal.normal", "Normal へ"]];
+    if (this.state.prompt && this.state.active === "prompt" && this.state.promptImage !== null)
+      return promptImageHints;
     if (this.state.prompt && this.state.active === "prompt")
       return this.state.mode === "INSERT" || this.state.mode === "REPLACE"
         ? [["Esc", `Normal へ (${this.state.prompt.verb}のは Normal から)`]]
@@ -728,7 +838,18 @@ export class BufferController {
     this.promptUpdate?.(text);
   }
   patchPrompt(patch: Partial<PromptSpec>): void {
-    if (this.state.prompt) this.update({ prompt: { ...this.state.prompt, ...patch } });
+    const prompt = this.state.prompt;
+    if (!prompt) return;
+    const selected = this.state.promptImage;
+    const images = patch.pastedImages;
+    if (selected === null || !images || images.some(({ id }) => id === selected)) {
+      this.update({ prompt: { ...prompt, ...patch } });
+      return;
+    }
+    const index = prompt.pastedImages?.findIndex(({ id }) => id === selected) ?? 0;
+    const next = images[Math.min(Math.max(index, 0), images.length - 1)];
+    this.update({ prompt: { ...prompt, ...patch }, promptImage: next?.id ?? null });
+    if (!next) this.focus("prompt");
   }
   promptText(): string {
     return this.promptDraft;
@@ -744,6 +865,7 @@ export class BufferController {
     this.update({
       prompt: spec,
       promptId: this.state.promptId + 1,
+      promptImage: null,
       mode: "INSERT",
       active: "prompt",
     });
@@ -752,7 +874,7 @@ export class BufferController {
   closePrompt(text = this.promptDraft): void {
     const spec = this.state.prompt;
     if (!spec) return;
-    this.update({ prompt: null, mode: "NORMAL" });
+    this.update({ prompt: null, promptImage: null, mode: "NORMAL" });
     spec.close(text);
     this.restoreInputFocus(this.promptOrigin);
   }
@@ -774,7 +896,7 @@ export class BufferController {
         this.promptDraft !== text
       )
         return true;
-      this.update({ prompt: null, mode: "NORMAL" });
+      this.update({ prompt: null, promptImage: null, mode: "NORMAL" });
       this.restoreInputFocus(this.promptOrigin);
       return true;
     } catch (error) {
@@ -951,5 +1073,11 @@ export class BufferController {
     );
   }
 }
+const promptImageHints: Hint[] = [
+  ["h l", "選ぶ"],
+  ["prompt.image.delete", "外す"],
+  ["prompt.image.open", "開く"],
+  ["win.up", "本文へ"],
+];
 export const BufferControllerContext = createContext<BufferController | null>(null);
 export const ScreenOpeningContext = createContext<number | undefined>(undefined);

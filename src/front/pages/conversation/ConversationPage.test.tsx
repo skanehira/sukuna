@@ -3,6 +3,7 @@ import { joinDraftContent } from "../../../shared/progress/draft";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { EditorView } from "@codemirror/view";
+import { getCM } from "@replit/codemirror-vim";
 import { StrictMode } from "react";
 import { SWRConfig } from "swr";
 import { App } from "../../App";
@@ -14,7 +15,7 @@ import { inboxFixture, response, row } from "../../lib/inbox.test-support";
 import { InboxPage } from "../inbox";
 import { Tree } from "../../components/tree";
 import { Layout } from "../../buffer/Layout";
-import { ConversationSession } from "../../lib/conversation/session";
+import { ConversationSession, type ConversationEnvironment } from "../../lib/conversation/session";
 import { ConversationApiError, createConversationApi } from "../../lib/conversation/api";
 import type { ConversationApi, Event, Snapshot } from "../../lib/conversation/types";
 import { ConversationPage } from "./ConversationPage";
@@ -141,16 +142,21 @@ function persistentQueueApi(queued: Snapshot["queue"][number], initial: Snapshot
   });
 }
 
-async function mount(api = fakeApi(), events: Event[] = [], openExternal?: (url: string) => void) {
+async function mount(
+  api = fakeApi(),
+  events: Event[] = [],
+  openExternal?: (url: string) => void,
+  schedule: ConversationEnvironment["schedule"] = (fn, ms) => {
+    const timer = setTimeout(fn, ms);
+    return () => clearTimeout(timer);
+  },
+) {
   const controller = new BufferController({ url: "/conversations/c1" });
   const session = new ConversationSession("c1", api, controller, {
     clientId: "tab",
     id: () => "message-id",
     now: () => 1000,
-    schedule: (fn, ms) => {
-      const timer = setTimeout(fn, ms);
-      return () => clearTimeout(timer);
-    },
+    schedule,
     openExternal,
   });
   await session.load();
@@ -1506,3 +1512,313 @@ it(
   },
   navigationTestTimeout,
 );
+
+describe("入力欄の画像の段", () => {
+  const imageUrl = (id: string) => `/api/conversations/c1/images/${id}`;
+  function withDraft(images: string[], overrides: Partial<ConversationApi> = {}) {
+    const data = structuredClone(snapshot);
+    data.draft = { text: "本文", images, updatedAt: 10, updatedBy: "other" };
+    return { data, api: fakeApi({ get: async () => structuredClone(data), ...overrides }) };
+  }
+  function press(key: string, extra = {}) {
+    act(() => {
+      fireEvent.keyDown(document.activeElement!, { key, ...extra });
+    });
+  }
+  function thumbnails() {
+    return within(screen.getByRole("listbox", { name: "貼った画像" }))
+      .getAllByRole("option")
+      .map((option) => ({
+        number: option.textContent,
+        src: option.querySelector("img")?.getAttribute("src") ?? null,
+        selected: option.getAttribute("aria-selected") === "true",
+      }));
+  }
+  async function openImages(images: string[], overrides: Partial<ConversationApi> = {}) {
+    const { data, api } = withDraft(images, overrides);
+    const mounted = await mount(api, [], overrides.upload ? undefined : vi.fn());
+    key(main(), "i");
+    key(prompt(), "Escape");
+    press("w", { ctrlKey: true });
+    press("j");
+    return { ...mounted, data };
+  }
+  const selected = () => thumbnails().findIndex((image) => image.selected) + 1;
+  it("縮小を貼った順に番号付きで並べ、Ctrl+w j で最後の画像を選び、h と l は端で止まる", async () => {
+    const { api } = withDraft(["img-a", "img-b", "img-c"]);
+    const { controller } = await mount(api);
+    key(main(), "i");
+    key(prompt(), "Escape");
+    const hint = () => screen.getByText(/^Enter 送る|^h l 選ぶ/).textContent;
+    expect({ thumbnails: thumbnails(), hint: hint() }).toEqual({
+      thumbnails: [
+        { number: "1", src: imageUrl("img-a"), selected: false },
+        { number: "2", src: imageUrl("img-b"), selected: false },
+        { number: "3", src: imageUrl("img-c"), selected: false },
+      ],
+      hint: "Enter 送る　Alt+Enter AI を止めてすぐ送る　Esc 閉じる (書きかけは残る)画像 3 件 (送信時に一緒に送る)Ctrl+w j 画像を選ぶ",
+    });
+    press("w", { ctrlKey: true });
+    press("j");
+    expect({
+      selected: selected(),
+      mode: within(screen.getByRole("status")).getByText("IMAGE").textContent,
+      hint: hint(),
+      status: screen.getByRole("status").textContent,
+    }).toEqual({
+      selected: 3,
+      mode: "IMAGE",
+      hint: "h l 選ぶ　d 外す　Enter 開く　Ctrl+w k 本文へ画像 3 件 (送信時に一緒に送る)",
+      status: "IMAGE指示h l 選ぶd 外すEnter 開くCtrl+w k 本文へ:h ヘルプ",
+    });
+    press("l");
+    expect(selected()).toBe(3);
+    press("h");
+    press("h");
+    press("h");
+    expect(selected()).toBe(1);
+    act(() => {
+      fireEvent.error(screen.getByRole("img", { name: "画像 2" }));
+    });
+    expect(
+      within(screen.getByRole("option", { name: "画像 2" })).getByText("見つかりません", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    expect(controller.snapshot().prompt?.label).toBe("指示");
+  });
+  it("d で選んだ画像を外して番号を振り直し、同じ位置か 1 つ左を選び、すぐに書きかけを保存する", async () => {
+    const { api, controller } = await openImages(["img-a", "img-b", "img-c"]);
+    press("h");
+    press("d");
+    await act(async () => {});
+    expect({
+      thumbnails: thumbnails(),
+      notice: controller.snapshot().notice,
+      saved: vi.mocked(api.saveDraft).mock.calls.map(([, body]) => body.images),
+    }).toEqual({
+      thumbnails: [
+        { number: "1", src: imageUrl("img-a"), selected: false },
+        { number: "2", src: imageUrl("img-c"), selected: true },
+      ],
+      notice: { message: "画像 2 を外しました", kind: "info" },
+      saved: [["img-a", "img-c"]],
+    });
+    press("d");
+    await act(async () => {});
+    expect(thumbnails()).toEqual([{ number: "1", src: imageUrl("img-a"), selected: true }]);
+    press("Escape");
+    press("Enter");
+    await flush();
+    expect(api.send).toHaveBeenCalledWith("c1", {
+      text: "本文",
+      images: ["img-a"],
+      mode: "send",
+      clientMessageId: "message-id",
+    });
+  });
+  it("最後の 1 枚を外すと縮小が消え、本文の Normal へ戻る", async () => {
+    const { api, controller } = await openImages(["img-a"]);
+    expect(controller.snapshot().mode).toBe("IMAGE");
+    press("d");
+    await act(async () => {});
+    expect({
+      images: screen.queryByRole("listbox", { name: "貼った画像" }),
+      saved: vi.mocked(api.saveDraft).mock.calls.map(([, body]) => body.images),
+      mode: controller.snapshot().mode,
+      focused: document.activeElement === prompt().contentDOM,
+      insert: getCM(prompt())?.state.vim?.insertMode,
+    }).toEqual({ images: null, saved: [[]], mode: "NORMAL", focused: true, insert: false });
+  });
+  it("Enter で選んだ画像を元の大きさで開き、Esc か Ctrl+w k で本文の Normal、i で本文の Insert へ戻る", async () => {
+    const openExternal = vi.fn<(url: string) => void>();
+    const { api } = withDraft(["img-a", "img-b"]);
+    const { controller } = await mount(api, [], openExternal);
+    key(main(), "i");
+    key(prompt(), "Escape");
+    press("w", { ctrlKey: true });
+    press("j");
+    press("Enter");
+    expect(openExternal.mock.calls).toEqual([[imageUrl("img-b")]]);
+    const body = () => ({
+      mode: controller.snapshot().mode,
+      selected: selected(),
+      focused: document.activeElement === prompt().contentDOM,
+    });
+    press("Escape");
+    expect(body()).toEqual({ mode: "NORMAL", selected: 0, focused: true });
+    press("w", { ctrlKey: true });
+    press("j");
+    press("w", { ctrlKey: true });
+    press("k");
+    expect(body()).toEqual({ mode: "NORMAL", selected: 0, focused: true });
+    press("w", { ctrlKey: true });
+    press("j");
+    press("i");
+    expect({
+      mode: controller.snapshot().mode,
+      focused: document.activeElement === prompt().contentDOM,
+      insert: getCM(prompt())?.state.vim?.insertMode,
+    }).toEqual({ mode: "INSERT", focused: true, insert: true });
+  });
+  it("入力欄の外へ移るかコマンド行を開くと画像の段を抜け、戻ると本文の Normal になる", async () => {
+    const { controller } = await openImages(["img-a", "img-b"]);
+    let passed = false;
+    act(() => {
+      passed = fireEvent.keyDown(document.activeElement!, { key: "r", metaKey: true });
+    });
+    press(":");
+    expect({ passed, command: controller.snapshot().command, selected: selected() }).toEqual({
+      passed: true,
+      command: "",
+      selected: 2,
+    });
+    act(() => controller.closeCommand());
+    expect({
+      mode: controller.snapshot().mode,
+      focused: document.activeElement === prompt().contentDOM,
+      selected: selected(),
+    }).toEqual({ mode: "NORMAL", focused: true, selected: 0 });
+    press("w", { ctrlKey: true });
+    press("j");
+    press("w", { ctrlKey: true });
+    press("h");
+    const hint = () =>
+      screen.getByText("画像 2 件 (送信時に一緒に送る)", { exact: true }).parentElement!
+        .textContent;
+    const onMain = hint();
+    expect({ active: controller.snapshot().active, selected: selected() }).toEqual({
+      active: "main",
+      selected: 0,
+    });
+    press("w", { ctrlKey: true });
+    press("j");
+    expect({
+      active: controller.snapshot().active,
+      mode: controller.snapshot().mode,
+      focused: document.activeElement === prompt().contentDOM,
+      selected: selected(),
+    }).toEqual({ active: "prompt", mode: "NORMAL", focused: true, selected: 0 });
+    press("w", { ctrlKey: true });
+    press("j");
+    act(() => main().contentDOM.focus());
+    const clicked = {
+      active: controller.snapshot().active,
+      mode: controller.snapshot().mode,
+      selected: selected(),
+      hint: hint(),
+    };
+    press("w", { ctrlKey: true });
+    press("k");
+    expect({ clicked, afterUp: controller.snapshot().active }).toEqual({
+      clicked: { active: "main", mode: "NORMAL", selected: 0, hint: onMain },
+      afterUp: "main",
+    });
+  });
+  it("別の端末の保存で画像が変わっても選んだ画像を選び続け、消えたら同じ位置の画像を選ぶ", async () => {
+    const { session, data } = await openImages(["img-a", "img-b", "img-c"]);
+    press("h");
+    const remote = async (images: string[], updatedAt: number) => {
+      data.draft = { text: "本文", images, updatedAt, updatedBy: "other" };
+      await act(async () => {
+        session.receive({
+          topic: "conversation:c1",
+          seq: 0,
+          type: "changed",
+          payload: { parts: ["draft"] },
+        });
+      });
+      await flush();
+    };
+    await remote(["img-x", "img-a", "img-b", "img-c"], 20);
+    expect(thumbnails().map(({ number, selected }) => ({ number, selected }))).toEqual([
+      { number: "1", selected: false },
+      { number: "2", selected: false },
+      { number: "3", selected: true },
+      { number: "4", selected: false },
+    ]);
+    await remote(["img-x", "img-a", "img-c"], 30);
+    expect(thumbnails()).toEqual([
+      { number: "1", src: imageUrl("img-x"), selected: false },
+      { number: "2", src: imageUrl("img-a"), selected: false },
+      { number: "3", src: imageUrl("img-c"), selected: true },
+    ]);
+  });
+  it.each([
+    {
+      operation: "d",
+      remove: async () => {
+        press("w", { ctrlKey: true });
+        press("j");
+        press("d");
+        await act(async () => {});
+        press("Escape");
+      },
+      images: ["img-q1"],
+    },
+    {
+      operation: ":images clear",
+      remove: async (controller: BufferController) => {
+        await act(async () => controller.command("images clear"));
+      },
+      images: [],
+    },
+  ])(
+    "届く前の指示を直している入力欄では、$operation がその指示の画像を外し、書きかけを保存しない",
+    async ({ remove, images }) => {
+      const data = structuredClone(snapshot);
+      data.draft = { text: "書きかけ", images: ["draft-image"], updatedAt: 10, updatedBy: "other" };
+      data.queue = [
+        {
+          id: "queued",
+          text: "預けた本文",
+          images: ["img-q1", "img-q2"],
+          position: 1,
+          stockItemId: null,
+          clientId: null,
+          createdAt: 0,
+        },
+      ];
+      const editQueue = vi.fn<ConversationApi["editQueue"]>(async () => ({}));
+      const api = fakeApi({ get: async () => structuredClone(data), editQueue });
+      const scheduled = new Set<() => void>();
+      const { controller } = await mount(api, [], undefined, (fn) => {
+        scheduled.add(fn);
+        return () => scheduled.delete(fn);
+      });
+      act(() => main().dispatch({ selection: { anchor: 0 } }));
+      await act(async () => controller.run("item.edit"));
+      const input = EditorView.findFromDOM(screen.getByRole("textbox", { name: "預けた指示" }))!;
+      key(input, "Escape");
+      await remove(controller);
+      await act(async () => {
+        [...scheduled].forEach((fn) => {
+          scheduled.delete(fn);
+          fn();
+        });
+      });
+      const savedBeforeSubmit = vi.mocked(api.saveDraft).mock.calls.map(([, body]) => body);
+      key(input, "Enter");
+      await flush();
+      expect({ savedBeforeSubmit, edited: editQueue.mock.calls }).toEqual({
+        savedBeforeSubmit: [],
+        edited: [["c1", "queued", { text: "預けた本文", images }]],
+      });
+    },
+  );
+  it(":images clear は、入力欄を開いていなければエラーを出し、開いた入力欄の画像をすべて外す", async () => {
+    const { api } = withDraft(["img-a", "img-b"]);
+    const { controller } = await mount(api);
+    await act(async () => controller.command("images clear"));
+    expect(controller.snapshot().notice).toEqual({
+      message: "画像を貼れる入力欄を開いてから使ってください",
+      kind: "error",
+    });
+    key(main(), "i");
+    await act(async () => controller.command("images clear"));
+    expect({
+      images: screen.queryByRole("listbox", { name: "貼った画像" }),
+      saved: vi.mocked(api.saveDraft).mock.calls.map(([, body]) => body.images),
+    }).toEqual({ images: null, saved: [[]] });
+  });
+});

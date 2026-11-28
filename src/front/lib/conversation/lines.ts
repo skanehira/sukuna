@@ -76,6 +76,9 @@ export function stoppedText(
       return `止まっています: ${detail ?? "作業に失敗しました"}`;
   }
 }
+export function conversationImageUrl(conversationId: string, imageId: string): string {
+  return `/api/conversations/${encodeURIComponent(conversationId)}/images/${encodeURIComponent(imageId)}`;
+}
 export function eventLines(
   event: Event,
   id: string,
@@ -135,7 +138,7 @@ export function eventLines(
           return {
             ...line("tool", `${RESULT_INDENT}${alt} (Enter で元の大きさで開く)`),
             image: {
-              url: `/api/conversations/${encodeURIComponent(id)}/images/${encodeURIComponent(image.id)}`,
+              url: conversationImageUrl(id, image.id),
               alt,
             },
           };
