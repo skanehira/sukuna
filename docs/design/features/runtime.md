@@ -161,7 +161,8 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 | POST | `/conversations/:id/stop` | AI を止める | なし | `run_state` |
 | POST | `/conversations/:id/resume` | 止まった作業を再開する | なし | `seq` |
 | POST | `/conversations/:id/fork` | 分岐して新しい会話を作る (スレッド) | `title`、`kind` | `conversation_id` |
-| POST | `/conversations/:id/answers` | 選択式の質問に答える | `request_id`、`answers` (`pending_answers.answers` と同じ形) | `result` (`answered` / `delivered` / `queued`)、`seq?` |
+| POST | `/conversations/:id/answers` | 未回答の確認を伴わない回答を送る | `request_id`、`question_seq?`、`answers` (`pending_answers.answers` と同じ形) | `result` (`answered` / `delivered` / `queued`)、`seq?` |
+| POST | `/conversations/:id/answers/checked` | 未回答の確認を受けた回答を照合して送る | `request_id`、`question_seq`、`answers` | `/conversations/:id/answers` と同じ |
 | POST | `/conversations/:id/permissions/:requestId` | 許可の確認に答える | `behavior` (`allow` / `deny`)、`message?` | `seq` |
 | GET | `/conversations/:id/commands` | スキルとスラッシュコマンドの候補 | なし | `commands` (`name`、`description`) |
 | POST | `/conversations/:id/workspace` | 開発者が始めた会話の作業ディレクトリを切り替える。開いている実行を閉じる (`features/worktree-terminal.md`「作業場所の切り替え」) | `cwd`、`worktree_id?`、`attempt?` (要求 ID と有効期限) | `cwd` |
@@ -195,7 +196,10 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 - ランナーにつながらない、10 秒以内に応答がない、または知らせの流れが切れた場合、画面のサーバーは API に 503 (`runner_unavailable`) を返す。`message` は「AI を動かすプロセスにつながりません。少し待ってから、もう一度操作してください。」とする。作業場所の切り替えは共有 SQLite で確定を確認し、`features/worktree-terminal.md` の PUT の規則に従って応答する
 - 手動の再開、作業場所の切り替え、ストック送信の受付を確定する前に、IPC の切断と期限を確認する。画面のサーバーは、10 秒後の時刻を Unix ミリ秒で `x-sukuna-ipc-deadline` に渡す
 - ストック送信の応答が途切れたときは、保存済みの受付結果を取り出す (`features/stock-thread.md`「POST /api/conversations/:id/stock/send」)
-- 質問と許可の確認の `request_id` は、ランナーが `question` / `permission_request` の記録の `payload` に入れる。画面のサーバーは、`pending_answers.question_seq` の記録から `request_id` を引いて回答の操作に渡す
+- 質問と許可の確認の `request_id` は、ランナーが `question` / `permission_request` の記録の `payload` に入れる
+- 保存済みの回答を送るときは、画面のサーバーが `question_seq` に保存時の質問番号を入れ、その記録の `request_id` と回答を渡す。未回答の確認を受けた送信は、質問番号が必須の `/answers/checked` に送る
+- 質問番号のある送信は、ランナーが受付を記録するトランザクションで保存済みの回答を再照合する。内容が一致しなければ 409 `answers_changed` を返し、後から保存された回答を残す
+- 画面のサーバーだけを更新したとき、旧ランナーが `/answers/checked` を知らなければ、画面のサーバーは送信を止める。公開 API から 503 `runner_unavailable` を返し、ランナーの更新を案内する (`features/operations.md`「更新」)
 - 回答の操作の `result` は、質問を待っている会話に答えを返したとき `answered` とする。待ちの消えた質問の回答を指示の文にして送ったときは、指示を送る操作と同じく `delivered` か `queued` とする。`seq` は、記録を書いたときだけ返す
 - `/flow/projects/:id/stop` は、作業中と回答待ち・許可待ちの会話を止める。作業中でない `usage_limited` と `stopped` (`restarted`) の会話も、`stopped` (`user`) にし、利用枠の戻りを待つタイマーを外す
 - `client_id` は、画面が送信ごとに作る ULID である (API の `clientMessageId`)。二重の送信の判定は、ランナーのこの操作の 1 か所だけで行う
