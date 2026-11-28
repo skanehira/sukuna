@@ -6,6 +6,7 @@
   "scripts": {
     "postinstall": "node scripts/prepare-node-pty.mjs",
     "dev:runner": "node src/runner/dev.mjs",
+    "test:built-server": "node --test scripts/test-built-server.ts",
     "e2e": "playwright test",
     "mutation": "stryker run",
     "mutation:changed": "sh scripts/mutation-changed.sh"
