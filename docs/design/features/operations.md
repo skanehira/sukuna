@@ -56,7 +56,7 @@ node dist/server/install.js --port 4580
 
 導入のコマンド (`dist/server/install.js`) は次を行う。何度実行しても結果は同じになる。
 
-1. `SUKUNA_HOME` (既定は `~/.sukuna`) と、下の「データの置き場所」のディレクトリを、持ち主だけが読み書きできる権限 (0700) にする。既存のディレクトリも対象とする
+1. 下の「データの置き場所」のデータ・状態・実行時のディレクトリを作り、持ち主だけが読み書きできる権限 (0700) にする。既存のディレクトリも対象とする
 2. VAPID の鍵が無ければ作り、`vapid.json` に権限 0600 で保存する
 3. `~/Library/LaunchAgents/` に、画面のサーバー (`dev.sukuna.server`)、ランナー (`dev.sukuna.runner`)、復元の処理 (`dev.sukuna.restore`) の 3 つの plist を書く。中身は下の表のとおり
 4. `launchctl bootout` で前の登録を外してから、`launchctl bootstrap gui/<uid>` で 3 つを登録する。再実行では画面のサーバーとランナーが入れ替わる
@@ -69,12 +69,12 @@ plist の中身:
 | --- | --- | --- |
 | `ProgramArguments` | Node.js の絶対パスと、`<リポジトリ>/dist/server/main.js` (ランナーは `dist/runner/main.js`) | Node.js の絶対パスと、`<リポジトリ>/dist/server/install.js`、`restore` |
 | `WorkingDirectory` | リポジトリの絶対パス | 同じ |
-| `EnvironmentVariables` | `NODE_ENV=production`、`PORT`、`SUKUNA_HOME`、`HOME`、`PATH` (導入を実行した端末の値)、`CLAUDE_CONFIG_DIR` (導入を実行した端末に設定があるときだけ) | 同じ |
+| `EnvironmentVariables` | `NODE_ENV=production`、`PORT`、`HOME`、`PATH` (導入を実行した端末の値)。`CLAUDE_CONFIG_DIR`、`XDG_DATA_HOME`、`XDG_STATE_HOME`、`XDG_RUNTIME_DIR` (導入を実行した端末に設定があるときだけ) | 同じ |
 | `RunAtLoad` | `true` | `false` (画面のサーバーが復元のときだけ起動する) |
 | `KeepAlive` | `true` (落ちたら起動し直す) | `false` |
 | `ThrottleInterval` | `10` (秒) | なし |
 | `ExitTimeOut` | `20` (秒。止める合図のあと、強制で止めるまでの時間) | なし |
-| `StandardOutPath` / `StandardErrorPath` | `<SUKUNA_HOME>/logs/server.log` (ランナーは `runner.log`) | `<SUKUNA_HOME>/logs/restore.log` |
+| `StandardOutPath` / `StandardErrorPath` | `<状態のディレクトリ>/logs/server.log` (ランナーは `runner.log`)。導入のコマンドが絶対パスに直して書く | `<状態のディレクトリ>/logs/restore.log` |
 
 - plist には上の列の環境変数だけを書く。値の形と既定の値は下の「環境変数」に従う
 - plist に偽物の指定 (`SUKUNA_AGENT`、`SUKUNA_AGENT_SCRIPT`、`SUKUNA_GH`) は書かない。本番の起動でこれらがあると、起動を失敗させる (下の「環境変数」)
@@ -87,10 +87,12 @@ plist の中身:
 
 | 環境変数 | 値の形 | 既定 | 読むプロセス | 起動を失敗させる条件 |
 | --- | --- | --- | --- | --- |
-| `SUKUNA_HOME` | データの置き場所のディレクトリのパス | `~/.sukuna` | 画面のサーバー、ランナー、導入のコマンド、復元の処理 | なし |
+| `XDG_DATA_HOME` | データのディレクトリの親 (「データの置き場所」) | `~/.local/share` | 画面のサーバー、ランナー、導入のコマンド、復元の処理 | なし |
+| `XDG_STATE_HOME` | 状態のディレクトリの親 | `~/.local/state` | 同じ | なし |
+| `XDG_RUNTIME_DIR` | 実行時のディレクトリの親 | 無し (状態のディレクトリを使う) | 画面のサーバー、ランナー、導入のコマンド、復元の処理 | なし |
 | `PORT` | 画面のサーバーが 0.0.0.0 で待ち受けるポートの番号 (1〜65535) | `4580` | 画面のサーバー | 番号として読めないか、そのポートで待ち受けられない (画面のサーバー) |
 | `CLAUDE_CONFIG_DIR` | Claude Code の設定のディレクトリのパス | `~/.claude` | 画面のサーバー (タイムラインのファイルを探す。`features/work-monitor.md`)。ランナーは読まず、Claude Code の子プロセスにそのまま渡る | なし |
-| `SUKUNA_RUNNER_SOCKET` | ランナーのソケットのパス (103 バイトまで) | `$SUKUNA_HOME/runner.sock` | 画面のサーバー、ランナー | 103 バイトを超える (両方。`features/runtime.md`「プロセスと起動」) |
+| `SUKUNA_RUNNER_SOCKET` | ランナーのソケットのパス (103 バイトまで) | `<実行時のディレクトリ>/runner.sock` | 画面のサーバー、ランナー | 103 バイトを超える (両方。`features/runtime.md`「プロセスと起動」) |
 | `SUKUNA_AGENT` | `fake` で Agent SDK を偽物にする | 無し (実物を使う) | ランナー | 本番の起動である (ランナー) |
 | `SUKUNA_AGENT_SCRIPT` | 偽物の AI の台本のファイルのパス。`SUKUNA_AGENT=fake` のときに要る | 無し | ランナー | 本番の起動である。`SUKUNA_AGENT=fake` なのに無いか読めない (どちらもランナー) |
 | `SUKUNA_GH` | `gh` の偽物の台本のファイルのパス。あると `gh` を偽物にする | 無し (実物を使う) | 画面のサーバー、ランナー | 本番の起動である (両方) |
@@ -103,25 +105,59 @@ plist の中身:
 
 ### データの置き場所
 
-`SUKUNA_HOME` の中身:
+アプリのファイルは、XDG Base Directory の決まりに従って 3 つのディレクトリに分けて置く。macOS では XDG の環境変数はふつう設定されていないので、既定の場所を使う。
+
+| ディレクトリ | パス | 既定のパス (環境変数が無いとき) | 置くもの |
+| --- | --- | --- | --- |
+| データのディレクトリ | `$XDG_DATA_HOME/sukuna` | `~/.local/share/sukuna` | 失うと困るもの (データベース、画像、鍵、バックアップ) |
+| 状態のディレクトリ | `$XDG_STATE_HOME/sukuna` | `~/.local/state/sukuna` | 再起動のあとも残すが、失っても作り直せるもの (ログ、ロック、子プロセスの記録、復元の受け渡し) |
+| 実行時のディレクトリ | `$XDG_RUNTIME_DIR/sukuna` | 状態のディレクトリ | プロセスが動いているあいだだけ要るもの (ランナーのソケット) |
+
+決定: データ・状態・実行時の 3 つに分けて置く
+理由: XDG Base Directory の決まりに従うと、バックアップの対象 (データのディレクトリ) と、消してもよいもの (状態と実行時のディレクトリ) が、ディレクトリで分かれる
+採らなかった案: すべてをデータのディレクトリに置く (置き場所は 1 つで済むが、ログやロックがバックアップしたいデータと混ざる)。`SUKUNA_HOME` で 1 つのディレクトリを指定できるまま残す (置き場所の決め方が 2 通りになる)
+
+- 環境変数の値が空か、絶対パスでなければ、設定されていないとして既定のパスを使う (XDG Base Directory の決まりのとおり)
+- 3 つのパスは、両方のプロセス、導入のコマンド、復元の処理が、同じ規則で 1 か所 (`src/shared/env.ts`) で求める。各処理はデータベースのパスなどからディレクトリを導かず、求めたパスを受け取って使う
+- 2 つのプロセスは、起動のときに 3 つのディレクトリが無ければ権限 0700 で作る。導入のコマンドも、手順 1 で同じに作る
+- 設定ファイルは持たないので、`XDG_CONFIG_HOME` は使わない。アプリの設定はデータベースの `settings` にある
+
+データのディレクトリの中身:
 
 | パス | 中身 | 書くプロセス |
 | --- | --- | --- |
 | `sukuna.db` (と `-wal`・`-shm`) | SQLite のデータベース | 両方 |
 | `images/<conversation_id>/` | 貼り付けた画像。名前と記録の形は `features/runtime.md`「書くプロセスの分担」 | 画面のサーバー |
 | `vapid.json` | Web Push の VAPID の鍵 (権限 0600) | 導入のコマンド |
-| `runner.sock` | ランナーの Unix ドメインソケット (既定のパス。`features/runtime.md`「プロセスと起動」) | ランナー |
+| `backups/` | バックアップ (下の「バックアップ」) | ランナー、復元の処理 |
+| `restore-db.tmp` (と `-journal`・`-wal`・`-shm`) | 復元で置き換える前のデータベースの写し (復元のあいだだけある) | 復元の処理 |
+
+- `restore-db.tmp` は、`sukuna.db` と同じディレクトリに置く。名前の付け替えでデータベースと置き換えるので、別のボリュームに置くと失敗するためである
+
+状態のディレクトリの中身:
+
+| パス | 中身 | 書くプロセス |
+| --- | --- | --- |
+| `logs/` | 3 つのプロセスのログ | launchd |
 | `runner/children` | ランナーが起動した Claude Code の子プロセスの PID (`features/runtime.md`「ランナーの再起動」) | ランナー |
 | `runner/recap/` | 決定ファイルの置換前に一時保存する差分とハッシュ (`features/recap.md`「番ごとの更新」) | ランナー |
 | `runner-build.sha` | 前回入れ替えたランナーの成果物のハッシュ (下の「更新」) | 導入のコマンド |
-| `backups/` | バックアップ (下の「バックアップ」) | ランナー、復元の処理 |
-| `logs/` | 3 つのプロセスのログ | launchd |
+| `worktree-leases/` | worktree の共有排他に使うファイル (`features/worktree-terminal.md`「実装の配置」) | 両方 |
+| `project-run-leases/` | プロジェクトの実行の共有排他に使うファイル | 両方 |
 | `db.lock` | マイグレーションと復元の置き換えのあいだだけ取る、排他のロックのファイル (下の「データベースのロック」) | 両方、復元の処理 |
 | `db.lock.guard` | `db.lock` の作成・確認・削除を直列に行うための SQLite ファイル (下の「データベースのロック」) | 両方、復元の処理 |
-| `restore.json` | 復元の依頼 (復元のあいだだけある) | 画面のサーバーが書き、復元の処理か起動の処理が消す |
+| `restore.json` と、それを書くときの一時ファイル `restore-<UUID>.tmp` | 復元の依頼 (復元のあいだだけある) | 画面のサーバーが書き、復元の処理か起動の処理が消す |
 | `restore-worker.lock` と `restore-worker.lock.guard` | 復元の受理・実行・後始末を直列に行うロック | 復元の処理、画面のサーバー、ランナー |
 | `restore-result.json` | 最後に処理した復元の結果 | 復元の処理、起動の処理 |
 
+実行時のディレクトリの中身:
+
+| パス | 中身 | 書くプロセス |
+| --- | --- | --- |
+| `runner.sock` | ランナーの Unix ドメインソケット (既定のパス。`features/runtime.md`「プロセスと起動」) | ランナー |
+| `runner.sock.lock` と `runner.sock.lock.guard` | ソケットの確認と待ち受けを直列にするロック (`features/runtime.md`「プロセスと起動」) | ランナー |
+
+- `SUKUNA_RUNNER_SOCKET` でソケットのパスを指定したときは、ロックもそのソケットの隣に置く
 - ログのファイルは、各プロセスの起動時に 100 MB を超えていれば、`<名前>.1` に写して空にする。`.1` は 1 世代だけ残す
 - Agent SDK の会話の記録と、タイムラインのファイルは `~/.claude` にあり、アプリのデータではない。バックアップにも含めない
 
@@ -135,7 +171,8 @@ node dist/server/install.js update
 ```
 
 - `update` は、画面のサーバーだけを `launchctl kickstart -k gui/<uid>/dev.sukuna.server` で入れ替える。ランナーは止めない (BR-069)
-- ランナーの成果物 (`dist/runner/`) の中身のハッシュを、前回入れ替えたときの値 (`SUKUNA_HOME/runner-build.sha`) と比べる。違えば「ランナーのコードが変わりました。動いている AI を止めてよいときに `install.js update --runner` を実行してください」と表示する
+- `update` は、XDG の環境変数を、実行した端末からではなく登録済みの plist の `EnvironmentVariables` から読む。ポートを登録済みの値から読むのと同じ形で、導入したときと同じ置き場所を使うためである
+- ランナーの成果物 (`dist/runner/`) の中身のハッシュを、前回入れ替えたときの値 (状態のディレクトリの `runner-build.sha`) と比べる。違えば「ランナーのコードが変わりました。動いている AI を止めてよいときに `install.js update --runner` を実行してください」と表示する
 - `update --runner` は、両プロセスを止めてから起動し直す。「導入」と同じ手順で起動を確認し、ハッシュを記録する
 - ランナーの終了は `features/runtime.md`「プロセスと起動」、入れ替え後の会話は DESIGN.md「ランナーの再起動」に従う
 - 普通の更新では、画面のサーバーの起動を確認する
@@ -376,6 +413,9 @@ BR-072 は、次の作りで満たす。
 | 処理 | 層 | 実装先ファイル |
 | --- | --- | --- |
 | 導入・更新・登録の解除のコマンド、plist の生成 | インフラ | `src/server/install.ts`, `src/server/modules/settings/domain/launchd-plist.ts` |
+| データ・状態・実行時のディレクトリの求め方 (XDG の環境変数) | 共有 | `src/shared/env.ts`、`src/shared/db/startup.ts` |
+| 求めたディレクトリを受け取るように変える処理 (いまはデータベースのパスや 1 つの置き場所から導いている) | 共有、インフラ | `src/shared/workspace/sqlite-worktree-activity.ts`、`src/shared/project/sqlite-project-run-activity.ts`、`src/shared/db/restore-state.ts`、`src/server/modules/settings/adapter/restore-files.ts`、`src/server/modules/settings/adapter/install-files.ts`、`src/server/runtime.ts`、`src/server/dev.ts`、`src/runner/modules/conversation/adapter/ipc-socket.ts` |
+| E2E の起動で 3 つのディレクトリを一時ディレクトリの下に渡す | E2E | `e2e/start-server.sh` |
 | 復元の処理 (`install.js restore`。2 つのプロセスを止める、置き換える、登録し直す) → settings | ユースケース | `src/server/modules/settings/usecase/run-restore.ts` |
 | launchd の操作の Port と実物 (`launchctl`) | アダプター | `src/server/modules/settings/domain/launchd-port.ts`, `src/server/modules/settings/adapter/launchctl.ts` |
 | 接続範囲と `/api/me` | TCP の入り口と API ハンドラ | `src/server/network-access.ts`、`src/server/modules/settings/adapter/server-state.ts` |
@@ -422,6 +462,7 @@ BR-072 は、次の作りで満たす。
 | （US-051）Mac が再起動しても、開発者が始めた会話の AI は、指示を送るまで動かない | 結合 |
 | （US-052）AI が動いている間にアプリを更新しても、AI は作業を続け、画面を開き直すと続きが表示される | 結合 |
 | （US-053）アプリのデータは 1 日 1 回バックアップされて 7 日分が残り、バックアップを選んで復元すると、その時点の内容に戻る | 結合 |
+| （US-052）導入すると、データは XDG_DATA_HOME の下に、ログと実行中の記録は XDG_STATE_HOME の下に置かれ、環境変数が無ければ ~/.local/share と ~/.local/state を使う | 結合 |
 | （US-045）画面のサーバーが再起動した後で会話を開くと、それまでの会話が表示され、続けて指示を送れる | 結合 |
 | （US-026）`:h` を実行すると、今の割り当てでのキーとコマンドの一覧が表示される | 単体 |
 | （US-027）キーの割り当てを変えると、すぐに新しいキーで操作でき、ヘルプにも反映される | 結合 |
@@ -430,6 +471,8 @@ BR-072 は、次の作りで満たす。
 
 - 接続範囲の 2 行は、接続元の IP アドレスを替えて HTTP と WebSocket を確かめる。
 - 「Mac が再起動すると、アプリが自動で起動し」は、生成した plist の中身 (`RunAtLoad`、`KeepAlive`、絶対パス、環境変数) を単体テストで確かめる。Mac の再起動そのものは自動のテストで起こせない。会話と issue が残ることは、データベースのファイルを開き直す結合テスト (US-045 の行) が通る
+- 置き場所の単体テストは、環境変数の有無・空・相対パスの組で 3 つのパスを求める関数と、生成した plist のログのパスと環境変数を確かめる
+- 置き場所の結合テストは、2 つのプロセスを 3 つの別々の一時ディレクトリで起動し、指示を 1 つ届けてから、各ディレクトリの中身が「データの置き場所」の表のとおりであることを確かめる
 - 再起動と更新の結合テストは、Agent SDK を Port の偽物にし、ランナーと画面のサーバーを別のプロセスとして起動し、片方だけを止めて起動し直す
 - バックアップの結合テストは、時計の Port を 8 日分進め、日ごとのファイルが 7 つ残ることと、復元のあとにその時点の行に戻ることを確かめる。launchd の操作は Port の偽物にする
 - キーの割り当ての変更の行は、`PUT /api/settings/keymap` で保存し、`settings_changed` の配信を受けた別のタブが割り当てとヘルプの行を作り直すことを結合で確かめる。新しいキーで動作が呼ばれることは、`features/buffer-ui.md` の割り当ての単体テストが確かめる

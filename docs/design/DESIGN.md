@@ -123,15 +123,15 @@ flowchart LR
 - property テストの seed は、いつものテストでは実行のたびに変わり、落ちたテストの名前に出る。Stryker が流すときだけ、`src/test/fast-check.ts` が seed を固定する。変異ごとに入力が変わると、同じ変異でも、捕まえたかどうかが実行のたびに変わるためである
 - 変異テストの設定は `stryker.config.json` に置き、レポートは `reports/mutation/mutation.html` に出る。`mutation:changed` は `scripts/mutation-changed.sh` を呼び、基準から変えた `src` のソース (テスト・`.d.ts`・`src/test/` を除く) の、変えた行だけを対象にする。行の範囲は、Stryker の `--mutate` に `<パス>:<開始行>-<終了行>` の形で渡す。数行だけ変えたファイルでも、変えていない行は変異させない。対象の行が無ければ流さずに終わる
 - worktree のセットアップ: チェックアウトの直後に `vp install` を実行する。`.env` 系のファイルは使わず、設定は環境変数で渡す
-- Playwright のセットアップ: 初回だけ `vp exec playwright install chromium` を実行してブラウザを入れる。`vp run e2e` は `e2e/start-server.sh` で `vp dev` を起動し、既に動いているサーバーには相乗りしない (`reuseExistingServer: false`)。`SUKUNA_HOME` には実行ごとの一時ディレクトリを渡し、終了時に消す。並列で流すときは `PORT=5190 vp run e2e` のようにポートをずらす
+- Playwright のセットアップ: 初回だけ `vp exec playwright install chromium` を実行してブラウザを入れる。`vp run e2e` は `e2e/start-server.sh` で `vp dev` を起動し、既に動いているサーバーには相乗りしない (`reuseExistingServer: false`)。`XDG_DATA_HOME`・`XDG_STATE_HOME`・`XDG_RUNTIME_DIR` には実行ごとの一時ディレクトリの下を渡し、終了時に消す。並列で流すときは `PORT=5190 vp run e2e` のようにポートをずらす
 - ポートは `--port` (開発) と環境変数 `PORT` (本番と E2E) で外から指定する。指定したポートで起動できなければ失敗させる (`--strictPort`)。並列の検証で使う基準のポートは 5180 とし、worktree ごとに 10 ずつずらして使う (5180、5190、5200)
-- データの置き場所は環境変数 `SUKUNA_HOME` で指定する (既定は `~/.sukuna`)。テストと E2E は、実行ごとに作った一時ディレクトリを指定する
+- データの置き場所は XDG Base Directory の決まりに従い、環境変数 `XDG_DATA_HOME`・`XDG_STATE_HOME`・`XDG_RUNTIME_DIR` で決まる (`features/operations.md`「データの置き場所」)。テストと E2E は、実行ごとに作った一時ディレクトリの下を 3 つに指定する。ソケットのパスが 103 バイトを超えないよう、テストと E2E は `SUKUNA_RUNNER_SOCKET` も短いパスで指定する
 - テストと E2E は、本物の Claude も GitHub も呼ばない。Agent SDK と `gh` は Port の偽物に差し替える。Agent SDK の偽物は、台本どおりにイベントを流し、アプリのツールの呼び出しでは登録した処理を実際に呼ぶ。E2E は、偽物を使う設定で画面のサーバーとランナーを起動する
 - 環境変数は次のとおりとする。値の形、既定の値、読むプロセスは `features/operations.md`「環境変数」が正本である
 
 | 環境変数 | 用途 |
 | --- | --- |
-| `SUKUNA_HOME` | データの置き場所 |
+| `XDG_DATA_HOME`、`XDG_STATE_HOME`、`XDG_RUNTIME_DIR` | データ・状態・実行時のディレクトリの親 |
 | `PORT` | 画面のサーバーが待ち受けるポート |
 | `CLAUDE_CONFIG_DIR` | Claude Code の設定の置き場所。タイムラインのファイルを探すときに読む |
 | `SUKUNA_RUNNER_SOCKET` | ランナーのソケットのパス |
@@ -169,7 +169,7 @@ SQLite のファイルを 1 つ使う。識別子は ULID の文字列、時刻�
 - 会話の記録は、Agent SDK が持つ記録とは別に、`conversation_events` に保存する。画面の表示、未読の位置、引用の位置は `seq` で指す。Agent SDK の記録は、AI の文脈を続けるためだけに使う
 - `conversations.stop_reason` は `user` / `restarted` / `api_error` / `error` / `credits_required` / `usage_limit` とする。`run_state` との対応は `features/conversation.md` が正本である
 - `conversations.last_position` は、前回読んでいた行のイベントの `seq` とする。`recap_seq` は、目次などの更新に反映した最後の `seq` である
-- 貼り付けた画像は `SUKUNA_HOME` の下のファイルで持ち、`drafts.images` と `queued_instructions.images` は画像の識別子の配列とする
+- 貼り付けた画像はデータのディレクトリ (`features/operations.md`「データの置き場所」) の下のファイルで持ち、`drafts.images` と `queued_instructions.images` は画像の識別子の配列とする
 - どの列をどちらのプロセスが書くかは `features/runtime.md`「書くプロセスの分担」が正本である。同じ列を 2 つのプロセスが書くのは、分担の表に挙げた列だけとし、その更新は元の値を条件にして、前の変化を上書きしないようにする
 - `conversations.run_state` は `idle` / `working` / `waiting_answer` / `waiting_permission` / `stopped` / `failed` / `usage_limited` とする。一覧のセクション (判断待ち・指示待ち・作業中) は、この値と `questions`、issue の状態から求める (決まりは `features/inbox.md`)
 - 決まったことの一覧は、データベースではなくリポジトリのファイルで持つ (BR-015。置き場所は `features/recap.md`)
@@ -388,7 +388,7 @@ issue の状態の移り変わりは `features/issue-flow.md` の表が正本で
 
 - 動かす場所: Mac Studio。launchd で、画面のサーバーとランナーを別々のサービスとして常駐させる。Mac の再起動のあとも自動で起動する (UC-015 C)
 - 画面のサーバーは 0.0.0.0 の指定したポートで待ち受け、`http://macstudio:<port>` (Tailscale の MagicDNS の名前) で開く
-- データは `SUKUNA_HOME` (既定は `~/.sukuna`) に置く。中身は、SQLite のファイル、貼り付けた画像、VAPID の鍵、ランナーのソケット、子プロセスの記録、バックアップ、ログである。ファイルの名前と形は `features/runtime.md` と `features/operations.md` が正本である
+- ファイルは XDG Base Directory の決まりに従って置く。データのディレクトリ (既定は `~/.local/share/sukuna`) に SQLite のファイル、貼り付けた画像、VAPID の鍵、バックアップを置く。状態のディレクトリ (既定は `~/.local/state/sukuna`) にログ、ロック、子プロセスの記録を置き、ランナーのソケットは実行時のディレクトリに置く。ディレクトリの決め方とファイルの名前は `features/operations.md`「データの置き場所」が正本である
 - 配置先には `node_modules` が要る。SQLite のドライバと擬似端末の部品は、ビルドの成果物に同梱しない
 - 更新: リポジトリを更新して `vp install` と `vp build` を行い、画面のサーバーだけを入れ替える。ランナーを入れ替えるのは、ランナーのコードが変わったときだけにする
 - バックアップ: SQLite のデータベースを、SQLite のバックアップの機能で写す。貼り付けた画像は含めない。復元は、2 つのプロセスを止めてから行う。手順は `features/operations.md` に書く

@@ -315,7 +315,7 @@ HTTP と同じ接続範囲を適用する。オリジンの照合に通らなけ
 | ターミナルの画面 (xterm.js、モードの切り替え、つなぎ直し) | UI | `src/front/pages/terminal/terminal-page.tsx` |
 | 端末の内容を Normal モードの行に直す | UI | `src/front/pages/terminal/terminal-lines.ts` |
 
-- 共有排他の口は `src/shared/workspace/worktree-activity.ts` の `WorktreeActivity` とする。実物は `src/shared/workspace/sqlite-worktree-activity.ts` の `createWorktreeActivity` が作り、同じ SQLite ファイルのパスを両プロセスから渡す。排他には `$SUKUNA_HOME/worktree-leases/<id>.db` を使い、接続を閉じるかプロセスが終わると解除される
+- 共有排他の口は `src/shared/workspace/worktree-activity.ts` の `WorktreeActivity` とする。実物は `src/shared/workspace/sqlite-worktree-activity.ts` の `createWorktreeActivity` が作り、両プロセスが状態のディレクトリのパス (`features/operations.md`「データの置き場所」) を渡す。排他には状態のディレクトリの `worktree-leases/<id>.db` を使い、接続を閉じるかプロセスが終わると解除される
 - 会話の作成は `SqliteConversationStore.create`、実行は `withWorkspace` で排他を保つ。状態更新の排他はトランザクションのコミットまで保つ。作業場所を切り替える実装は、共有排他の `run` 内で `acquire` に移動元と移動先の worktree の id を渡し、最新の状態確認と条件付き更新まで保つ
 - `/ws/terminals/:id` の upgrade は、`/ws` と同じ `ws` の受け口に、パスで分けて足す (DESIGN.md「既知の制約」の `vp dev` の項)
 - 使う列 (`worktrees` の `branch_created`・`port_slot`) の定義は DESIGN.md「データスキーマ」参照。`port_slot` は実装の worktree だけが使い、決め方は `features/implementation-flow.md` に従う
