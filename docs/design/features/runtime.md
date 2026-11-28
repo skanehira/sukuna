@@ -237,6 +237,7 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 type RunnerNotice =
   | { kind: "conversation"; conversation_id: string; seq: number; run_state: RunState; project_id: string; issue_id: string | null }
   | { kind: "delta"; conversation_id: string; text: string }
+  | { kind: "output_tokens"; conversation_id: string; tokens: number }
   | { kind: "conversation_parts"; conversation_id: string; parts: ("queue" | "answers" | "recap" | "stock" | "threads")[] }
   | { kind: "issue"; issue_id: string; project_id: string; seq: number }
   | { kind: "project"; project_id: string }
@@ -247,6 +248,7 @@ type RunnerNotice =
 - `conversation` は、記録を保存するたびに出す。`seq` はその会話の `last_seq` である
 - `delta` は、AI の発言の書きかけの文字である。保存しない。会話ごとに 100 ミリ秒の間の分をまとめて 1 件にする
 - `delta` を出すのは、サブエージェントでない AI の発言 (`parent_tool_use_id` が無いもの) だけにする。1 つの会話で同時に書きかけになる発言は 1 つである
+- `output_tokens` は、作業中の表示に出す、AI が出力したトークンの数である。数え方は「番の途中の出力トークンの数」に従う。保存しない。会話ごとに 500 ミリ秒の間に変わった分を、最後の値の 1 件にまとめる
 - `conversation_parts` は、記録以外のものが変わったときに出す (届く前の指示、送る前の回答、目次など、ストック、スレッド)
 - 目次などの更新が済んだときと失敗したときも、`conversation_parts` (`recap`) を出す。一覧は、これを受けて番の終わりの待ちを解く (`features/inbox.md`)
 - `issue` は、`issue_events` に記録を足したときに出す (状態の移り変わり、`worktree_kept` など)。`seq` は `issue_events.seq` である
@@ -346,7 +348,10 @@ SDK のメッセージは、まず Port の出力 (「Agent SDK を包む Port�
 | SDK のメッセージ | `AgentOutput` | 記録 |
 | --- | --- | --- |
 | `system` の `init` | `init` (スキルとコマンドの一覧、`session_id`) | 書かない。一覧はランナーが会話ごとに覚える |
-| `stream_event` の `content_block_delta` の `text_delta` | `text_delta` | 書かない。サブエージェントでなければ知らせの `delta` にする |
+| `stream_event` の `content_block_delta` の `text_delta` | `text_delta` | 書かない。サブエージェントでなければ知らせの `delta` にする。文字数を出力トークンの数の見積もりに足す |
+| `stream_event` の `message_start` | `message_start` | 書かない。出力トークンの数を数える区切りに使う |
+| `stream_event` の `content_block_delta` の `thinking_delta`・`input_json_delta` | `output_chars` (`thinking` か `partial_json` の文字数) | 書かない。出力トークンの数の見積もりに足す |
+| `stream_event` の `message_delta` の `usage.output_tokens` | `message_usage` (`outputTokens`) | 書かない。そのメッセージの出力トークンの数として、見積もりと置き換える |
 | `assistant` の `content` の `text` | `assistant_text` | `assistant_text` |
 | `assistant` の `content` の `tool_use` | `tool_use` | `tool_use` |
 | `user` の `content` の `tool_result` | `tool_result` | `tool_result` |
@@ -415,6 +420,24 @@ SDK のメッセージは、まず Port の出力 (「Agent SDK を包む Port�
 - `stop_reason` と `resets_at` は `stopped` を書くときに入れ、次の `user_message` か `resumed` で空にする
 - `last_activity_at` は、すべての記録の保存で、その記録の `created_at` にする
 
+### 番の途中の出力トークンの数
+
+ランナーは、サブエージェントでない AI (`parentToolUseId` が `null`) が出力したトークンの数を会話ごとに数え、変わるたびに知らせの `output_tokens` を出す。作業中の表示が、AI が書き進めていることを数で見せるためである (`features/work-monitor.md`「作業中の会話の表示」)。
+
+| 受けた出力 | 数え方 |
+| --- | --- |
+| `message_start` | 前のメッセージの数を「終わったメッセージの合計」に足し、今のメッセージの文字数と確定した数を空にする |
+| `text_delta`・`output_chars` | 今のメッセージの文字数に足す |
+| `message_usage` | 今のメッセージの確定した数を、その値にする |
+
+- 知らせる数は「終わったメッセージの合計 + 今のメッセージの数」である。今のメッセージの数は、確定した数があればその値、無ければ文字数 ÷ 4 の切り上げとする
+- 数を 0 に戻すのは、`user_message`・`resumed`・`answer`・`permission_decision` を保存したときである。作業中の表示の番の経過と同じ起点から数えるためである
+- 数はメモリーにだけ持つ。ランナーが再起動すると、作業中の会話は止まるので、引き継がない
+
+決定: メッセージの途中は、届いた文字数から見積もり、メッセージの終わりに API の数で置き換える
+理由: 出力トークンの数が届くのは、`message_delta` の `usage.output_tokens` (そのメッセージの中の累計) だけである。`message_delta` は、メッセージの本文のブロックをすべて流したあとに届く (Messages API のストリーミングの順。型は Agent SDK 0.3.332 が使う `@anthropic-ai/sdk` 1.14.0 の `BetaMessageDeltaUsage`)。これだけを使うと、AI が長く考えているあいだ数が増えず、作業が続いていることを示せない
+採らなかった案: `message_delta` の数だけを出す (考えているあいだ数が止まる)。文字数から見積もった数だけを出す (日本語のように 1 文字が 1 トークンに近い文では、少なく見積もったまま残る)
+
 ### ランナーの中の合図
 
 ランナーの中のほかのモジュールは、ソケットを通さずに、会話のモジュールが出す合図を受ける。
@@ -454,7 +477,7 @@ type ClientMessage =
 | `topic` | 配信する `type` | `seq` の意味 | つなぎ直したとき |
 | --- | --- | --- | --- |
 | `inbox` | `changed` (`conversation_ids`、`issue_ids`、`project_ids`) | 画面のサーバーの中の通し番号 | 画面が API で読み直す |
-| `conversation:<id>` | `event` (記録の 1 行)、`delta`、`state` (`run_state`、`stop_reason`、`resets_at`)、`changed` (`parts`)、`resync` (`last_seq`) | `event` は記録の `seq`。ほかはその時点の `last_seq` | `after` より後の `event` を順に再送する。`state` と `changed` の分は画面が API で読み直す |
+| `conversation:<id>` | `event` (記録の 1 行)、`delta`、`output_tokens` (`tokens`)、`state` (`run_state`、`stop_reason`、`resets_at`)、`changed` (`parts`)、`resync` (`last_seq`) | `event` は記録の `seq`。ほかはその時点の `last_seq` | `after` より後の `event` を順に再送する。`state` と `changed` の分は画面が API で読み直す |
 | `issue:<id>` | `event` (`issue_events` の 1 行)、`changed` | `event` は `issue_events.seq` | `after` より後の `event` を再送する。ほかは画面が API で読み直す |
 | `app` | `notice` (お知らせ)、`runner` (`connected`)、`settings_changed`、`ping` (死活確認) | 画面のサーバーの中の通し番号 | 画面が API で読み直す |
 
@@ -488,6 +511,7 @@ type AppNotice = {
 - 画面は `event` の `seq` が飛んだら (受け取った最大の `seq` + 1 でない)、間の分を API で読み直す
 - 画面は `delta` の文字を、会話の末尾の書きかけの発言として逐次出す (`features/buffer-ui.md`「末尾の区画」)
 - `delta` は再送しない。画面は、その会話の次の `assistant_text` か `turn_end` の `event` が届いたら、書きかけの表示を消す
+- `output_tokens` も再送しない。画面は、会話を開いたときとつなぎ直したときは、次の `output_tokens` が届くまでトークンの数を出さない (`features/work-monitor.md`「作業中の会話の表示」)
 - 接続範囲を通った端末に、購読した対象の変更を配信する。対象が存在しない購読には何も配信しない
 - 画面のサーバーは 20 秒ごとに `{ topic: "app", seq: <通し番号>, type: "ping", payload: {} }` を全接続へ送る。購読が無い接続にも送る。`seq` はほかの `app` の配信と同じ通し番号を使う。画面は受信時刻だけを更新し、通知の表示・API の読み直し・保存は行わない。最後の受信から 45 秒何も届かなければ接続を閉じてつなぎ直す
 - 送り待ちが 8 MiB を超えた接続は、画面のサーバーが閉じる。画面はつなぎ直し、続きから受け取る
@@ -543,6 +567,9 @@ interface AgentSession {
 type AgentOutput =
   | { kind: "init"; sessionId: string; commands: { name: string; description: string }[] }
   | { kind: "text_delta"; text: string; parentToolUseId: string | null }
+  | { kind: "message_start"; parentToolUseId: string | null }
+  | { kind: "output_chars"; characters: number; parentToolUseId: string | null }
+  | { kind: "message_usage"; outputTokens: number; parentToolUseId: string | null } // 1 つのメッセージの中の累計
   | { kind: "assistant_text"; uuid: string; text: string; parentToolUseId: string | null }
   | { kind: "tool_use"; uuid: string; toolUseId: string; name: string; input: unknown; parentToolUseId: string | null }
   | { kind: "tool_result"; uuid: string; toolUseId: string; isError: boolean; content: string; images: { mediaType: string; data: Buffer }[]; omittedImages: number; diff: DiffOutput | null; parentToolUseId: string | null }
@@ -622,7 +649,7 @@ type AppTool = {
 
 | 段 | 動き |
 | --- | --- |
-| `text` | `text_delta` を 1 件と `assistant_text` を流す |
+| `text` | `message_start`、`text_delta` を 1 件、`message_usage` (文字数 ÷ 4 の切り上げ)、`assistant_text` の順に流す |
 | `tool` | `tool_use` と `tool_result` を流す。`diff` があれば結果に付ける。`images` (`{ "media_type", "data" }` の配列。`data` は base64) があれば、結果に画像として付ける。名前が `mcp__sukuna__` で始まるツールは、`AppToolRegistry` に登録した処理を実際に呼び、その戻り値を結果にする。台本の `result` は使わない |
 | `shell` | 会話の `cwd` でコマンドを実際に実行し、`Bash` の `tool_use` と、標準出力と標準エラーをつないだ `tool_result` を流す。終了コードが 0 でなければ `is_error` を真にする |
 | `ask` | `onQuestion` を呼び、回答が返るまで次へ進まない |

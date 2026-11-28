@@ -672,9 +672,9 @@ function WorkingStrip({ thinking, chat }) {
   const [n, setN] = useState(0);
   useEffect(() => { if (still) return; const t = setInterval(() => setN((x) => (x + 1) % SPIN.length), 120); return () => clearInterval(t); }, [still]);
   return (
-    <div data-sketch-change={chat ? "158:考え中と秒の経過だけ" : thinking ? "158:考え中の表示" : "158:動く印と秒の経過"} className="shrink-0 border-t border-line px-4 py-2 text-[13px] text-doing" aria-label="作業中の状況">
+    <div data-sketch-change={chat ? "158:工程を出さない" : thinking ? "158:考え中の表示" : "158:動く印・秒・トークン"} className="shrink-0 border-t border-line px-4 py-2 text-[13px] text-doing" aria-label="作業中の状況">
       <span aria-hidden="true" className="inline-block w-[1em] text-center">{still ? "✻" : SPIN[n]}</span>{" "}
-      {chat ? "考え中… 8秒" : <>{thinking ? "考え中… 2分31秒" : "ツールを実行中… 2分5秒"} / 実装 11分 / 最後にしたこと: Bash(npm test -- csv)</>}
+      {chat ? "考え中… (8秒 · ↓ 120 トークン)" : `${thinking ? "考え中… (2分31秒 · ↓ 2.4k トークン)" : "ツールを実行中… (2分5秒 · ↓ 2.1k トークン)"} / 実装 11分`}
     </div>
   );
 }
