@@ -52,14 +52,14 @@ describe("createApp", () => {
     }
   });
 
-  it("clientDir を渡すと、静的ファイルに無い画面の URL でも index.html を返す", async () => {
+  it("SPA のフォールバックは /apiary/abc にも index.html を返す", async () => {
     const clientDir = mkdtempSync(join(tmpdir(), "sukuna-client-"));
     const html = "<!doctype html><title>sukuna</title>";
     writeFileSync(join(clientDir, "index.html"), html);
 
     try {
       const response = await createTestApp({ clientDir }).request(
-        "/conversations/abc",
+        "/apiary/abc",
         undefined,
         localConnection(),
       );
@@ -71,18 +71,22 @@ describe("createApp", () => {
     }
   });
 
-  it("clientDir を渡しても、未知の /api のパスは 404 を返す", async () => {
+  it("画面の深い URL は index.html、未知の /api のパスは HTML 以外の 404 を返す", async () => {
     const clientDir = mkdtempSync(join(tmpdir(), "sukuna-client-"));
-    writeFileSync(join(clientDir, "index.html"), "<!doctype html><title>sukuna</title>");
 
     try {
-      const response = await createTestApp({ clientDir }).request(
-        "/api/unknown",
-        undefined,
-        localConnection(),
-      );
+      const html = "<!doctype html><title>sukuna</title>";
+      writeFileSync(join(clientDir, "index.html"), html);
+      const app = createTestApp({ clientDir });
 
-      expect(response.status).toBe(404);
+      const pageResponse = await app.request("/conversations/abc", undefined, localConnection());
+      const apiResponse = await app.request("/api/unknown", undefined, localConnection());
+
+      expect(pageResponse.status).toBe(200);
+      expect(await pageResponse.text()).toBe(html);
+      expect(apiResponse.status).toBe(404);
+      expect(apiResponse.headers.get("content-type") ?? "").not.toMatch(/^text\/html(?:\s*;|$)/i);
+      expect(await apiResponse.text()).not.toBe(html);
     } finally {
       rmSync(clientDir, { recursive: true, force: true });
     }
