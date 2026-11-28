@@ -15,7 +15,7 @@ import { readEnvironment } from "../../../../shared/env";
 import { createWorktreeActivity } from "../../../../shared/workspace/sqlite-worktree-activity";
 import { createApp } from "../../../app";
 import { RunnerLink } from "../../../runner-link";
-import { createClockFake, createTailscaleFake, incomingWith } from "../../identity/test-support";
+import { incomingWith } from "../../identity/test-support";
 import {
   createWorkspaceAgent,
   WorkspaceClock,
@@ -138,12 +138,6 @@ async function fixture(
   });
   const app = createApp({
     build: "test",
-    identity: {
-      login: "test@example.com",
-      devIdentity: "1",
-      tailscale: createTailscaleFake().api,
-      clock: createClockFake(),
-    },
     conversations: createConversationDependencies({
       sqlite: serverDb.sqlite,
       home,

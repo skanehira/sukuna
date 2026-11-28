@@ -8,11 +8,7 @@ import { BufferController } from "../buffer/controller";
 import { createNavigation } from "./navigation";
 import { createNotices } from "./notices";
 import { Skeleton, Spinner } from "./loading";
-import {
-  AuthenticationGuard,
-  createIdentityLoader,
-  type IdentityResult,
-} from "./AuthenticationGuard";
+import { ServerConnectionGate, createServerStateLoader } from "./ServerConnectionGate";
 import { ShellBoundary } from "./ShellBoundary";
 
 const reload = vi.fn();
@@ -441,14 +437,14 @@ describe("アプリシェル", () => {
   });
 });
 
-function IdentityRevalidation({
+function ServerRevalidation({
   load,
   navigation,
   controller,
   loadScreen,
   connection,
 }: {
-  load: () => Promise<IdentityResult>;
+  load: () => Promise<true>;
   navigation: NavigationPort;
   controller: BufferController;
   loadScreen: ScreenLoader;
@@ -458,47 +454,34 @@ function IdentityRevalidation({
   return (
     <>
       <button type="button" onClick={() => void mutate("/api/me").catch(() => undefined)}>
-        本人を再確認
+        サーバーを再確認
       </button>
-      <AuthenticationGuard load={load} onReload={reload}>
-        {(identityRecovery) => (
+      <ServerConnectionGate load={load} onReload={reload}>
+        {(serverRecovery) => (
           <App
             navigation={navigation}
             controller={controller}
             loadScreen={loadScreen}
             connection={connection}
-            identityRecovery={identityRecovery}
+            serverRecovery={serverRecovery}
           />
         )}
-      </AuthenticationGuard>
+      </ServerConnectionGate>
     </>
   );
 }
 
-describe("認証ガード", () => {
-  it.each(["成功", "通信失敗", "503", "401 identity", "401 unavailable"] as const)(
-    "本人確認済みの再検証が%sなら本文と入力を保持して回復でき、401は拒否へ切り替える",
+describe("サーバー接続の確認", () => {
+  it.each(["成功", "通信失敗", "503"] as const)(
+    "接続の再確認が%sでも本文と入力を保持し、失敗から回復できる",
     async (result) => {
       let revalidating = false;
       let requests = 0;
-      const load = createIdentityLoader(async () => {
+      const load = createServerStateLoader(async () => {
         requests += 1;
         if (revalidating) {
           if (result === "通信失敗") throw new TypeError("fetch failed");
           if (result === "503") return new Response("unavailable", { status: 503 });
-          if (result === "401 identity" || result === "401 unavailable")
-            return Response.json(
-              {
-                error: {
-                  code: "unauthorized",
-                  message: "拒否",
-                  details: {
-                    reason: result === "401 unavailable" ? "unavailable" : "identity",
-                  },
-                },
-              },
-              { status: 401 },
-            );
         }
         return Response.json({ login: "dev@example.com", device: "local", build: "test" });
       });
@@ -536,7 +519,7 @@ describe("認証ガード", () => {
         };
       };
       session(
-        <IdentityRevalidation
+        <ServerRevalidation
           load={load}
           navigation={navigation}
           controller={controller}
@@ -549,129 +532,96 @@ describe("認証ガード", () => {
       fireEvent.change(input, { target: { value: "送信前の指示" } });
       await act(async () => {
         revalidating = true;
-        fireEvent.click(screen.getByRole("button", { name: "本人を再確認" }));
+        fireEvent.click(screen.getByRole("button", { name: "サーバーを再確認" }));
       });
       expect(requests).toBe(2);
-      if (result === "401 identity" || result === "401 unavailable") {
-        expect(
-          await screen.findByText("このアプリは使えません", { exact: true }),
-        ).toBeInTheDocument();
-        expect(screen.queryByRole("region", { name: "sukuna" })).toBeNull();
-        expect(screen.queryByRole("region", { name: "会話" })).toBeNull();
+      const main = screen.getByRole("region", { name: "会話" });
+      expect(screen.getByRole("textbox", { name: "書きかけの入力" })).toBe(input);
+      expect(input).toHaveValue("送信前の指示");
+      expect(screen.getByRole("region", { name: "sukuna" })).toBe(tree);
+      expect(
+        within(main).getByText("最後に取得した会話の本文", { exact: true }),
+      ).toBeInTheDocument();
+      if (result === "成功") {
+        expect(within(main).queryByRole("alert")).toBeNull();
+        expect(within(main).queryByRole("button", { name: "再読み込み" })).toBeNull();
       } else {
-        const main = screen.getByRole("region", { name: "会話" });
+        expect(within(main).getByRole("alert").textContent).toBe(
+          "サーバーの状態を確認できませんでした。再読み込みしてください。",
+        );
+        expect(within(main).getByRole("button", { name: "一覧へ戻る" })).toBeEnabled();
+        await act(async () => {
+          fireEvent.click(within(main).getByRole("button", { name: "再読み込み" }));
+        });
+        expect(requests).toBe(3);
+        expect(screenRequests).toEqual(["conversation"]);
+        expect(reload).not.toHaveBeenCalled();
+        expect(screen.getByRole("textbox", { name: "書きかけの入力" })).toBe(input);
+        expect(input).toHaveValue("送信前の指示");
+        act(() => {
+          connected = false;
+          listeners.forEach((listener) => listener());
+        });
+        expect(within(main).getAllByRole("alert")).toHaveLength(1);
+        expect(within(main).getAllByRole("button", { name: "再読み込み" })).toHaveLength(1);
+        await act(async () => {
+          connected = true;
+          revalidating = false;
+          listeners.forEach((listener) => listener());
+          fireEvent.click(within(main).getByRole("button", { name: "再読み込み" }));
+        });
+        expect(requests).toBe(4);
+        expect(within(main).queryByRole("alert")).toBeNull();
+        expect(within(main).queryByRole("button", { name: "再読み込み" })).toBeNull();
         expect(screen.getByRole("textbox", { name: "書きかけの入力" })).toBe(input);
         expect(input).toHaveValue("送信前の指示");
         expect(screen.getByRole("region", { name: "sukuna" })).toBe(tree);
-        expect(
-          within(main).getByText("最後に取得した会話の本文", { exact: true }),
-        ).toBeInTheDocument();
-        if (result === "成功") {
-          expect(within(main).queryByRole("alert")).toBeNull();
-          expect(within(main).queryByRole("button", { name: "再読み込み" })).toBeNull();
-        } else {
-          expect(within(main).getByRole("alert").textContent).toBe(
-            "本人の情報を取得できませんでした。再読み込みしてください。",
-          );
-          expect(within(main).getByRole("button", { name: "一覧へ戻る" })).toBeEnabled();
-          await act(async () => {
-            fireEvent.click(within(main).getByRole("button", { name: "再読み込み" }));
-          });
-          expect(requests).toBe(3);
-          expect(screenRequests).toEqual(["conversation"]);
-          expect(reload).not.toHaveBeenCalled();
-          expect(screen.getByRole("textbox", { name: "書きかけの入力" })).toBe(input);
-          expect(input).toHaveValue("送信前の指示");
-          act(() => {
-            connected = false;
-            listeners.forEach((listener) => listener());
-          });
-          expect(within(main).getAllByRole("alert")).toHaveLength(1);
-          expect(within(main).getAllByRole("button", { name: "再読み込み" })).toHaveLength(1);
-          await act(async () => {
-            connected = true;
-            revalidating = false;
-            listeners.forEach((listener) => listener());
-            fireEvent.click(within(main).getByRole("button", { name: "再読み込み" }));
-          });
-          expect(requests).toBe(4);
-          expect(within(main).queryByRole("alert")).toBeNull();
-          expect(within(main).queryByRole("button", { name: "再読み込み" })).toBeNull();
-          expect(screen.getByRole("textbox", { name: "書きかけの入力" })).toBe(input);
-          expect(input).toHaveValue("送信前の指示");
-          expect(screen.getByRole("region", { name: "sukuna" })).toBe(tree);
-          fireEvent.mouseDown(tree);
-          expect(controller.snapshot().active).toBe("tree");
-          await act(async () => {
-            revalidating = true;
-            fireEvent.click(screen.getByRole("button", { name: "本人を再確認" }));
-          });
-          await act(async () => {
-            fireEvent.click(within(main).getByRole("button", { name: "一覧へ戻る" }));
-          });
-          expect(navigation.snapshot()).toEqual({ kind: "home" });
-          expect(await screen.findByText("取得した一覧", { exact: true })).toBeInTheDocument();
-          expect(screen.getByRole("region", { name: "sukuna" })).toBe(tree);
-          expect(screenRequests).toEqual(["conversation", "home"]);
-          expect(requests).toBe(5);
-        }
+        fireEvent.mouseDown(tree);
+        expect(controller.snapshot().active).toBe("tree");
+        await act(async () => {
+          revalidating = true;
+          fireEvent.click(screen.getByRole("button", { name: "サーバーを再確認" }));
+        });
+        await act(async () => {
+          fireEvent.click(within(main).getByRole("button", { name: "一覧へ戻る" }));
+        });
+        expect(navigation.snapshot()).toEqual({ kind: "home" });
+        expect(await screen.findByText("取得した一覧", { exact: true })).toBeInTheDocument();
+        expect(screen.getByRole("region", { name: "sukuna" })).toBe(tree);
+        expect(screenRequests).toEqual(["conversation", "home"]);
+        expect(requests).toBe(5);
       }
     },
   );
 
-  it.each(["identity", "unavailable"] as const)(
-    "本人ではない(%s)と拒否の画面だけを出す",
-    async (reason) => {
-      const load = createIdentityLoader(
-        async () =>
-          new Response(
-            JSON.stringify({
-              error: { code: "unauthorized", message: "拒否", details: { reason } },
-            }),
-            { status: 401 },
-          ),
-      );
-      session(
-        <AuthenticationGuard load={load} onReload={reload}>
-          {(identityRecovery) => <App identityRecovery={identityRecovery} />}
-        </AuthenticationGuard>,
-      );
-      expect(
-        await screen.findByText("このアプリは使えません", { exact: true }),
-      ).toBeInTheDocument();
-      expect(screen.queryByRole("region", { name: "sukuna" })).toBeNull();
-      expect(screen.queryByRole("region", { name: "一覧" })).toBeNull();
-    },
-  );
-
   it.each(["通信失敗", "サーバーエラー"])(
-    "本人確認中の%sでは再読み込みを案内する",
+    "初回接続中の%sでは再読み込みを案内する",
     async (failure) => {
-      const load = createIdentityLoader(async () => {
+      const load = createServerStateLoader(async () => {
         if (failure === "通信失敗") throw new TypeError("fetch failed");
         return new Response("unavailable", { status: 503 });
       });
       session(
-        <AuthenticationGuard load={load} onReload={reload}>
-          {(identityRecovery) => <App identityRecovery={identityRecovery} />}
-        </AuthenticationGuard>,
+        <ServerConnectionGate load={load} onReload={reload}>
+          {(serverRecovery) => <App serverRecovery={serverRecovery} />}
+        </ServerConnectionGate>,
       );
       expect(await screen.findByRole("alert")).toHaveTextContent(
-        /^本人の情報を取得できませんでした。再読み込みしてください。$/,
+        /^サーバーの状態を確認できませんでした。再読み込みしてください。$/,
       );
       fireEvent.click(screen.getByRole("button", { name: "再読み込み" }));
       expect(reload).toHaveBeenCalledOnce();
     },
   );
 
-  it("本人であればアプリを開く", async () => {
-    const load = createIdentityLoader(async () =>
+  it("サーバーの状態を取得できればアプリを開く", async () => {
+    const load = createServerStateLoader(async () =>
       Response.json({ login: "dev@example.com", device: "local", build: "test" }),
     );
     session(
-      <AuthenticationGuard load={load} onReload={reload}>
-        {(identityRecovery) => <App identityRecovery={identityRecovery} />}
-      </AuthenticationGuard>,
+      <ServerConnectionGate load={load} onReload={reload}>
+        {(serverRecovery) => <App serverRecovery={serverRecovery} />}
+      </ServerConnectionGate>,
     );
     expect(await screen.findByRole("region", { name: "一覧" })).toBeInTheDocument();
   });

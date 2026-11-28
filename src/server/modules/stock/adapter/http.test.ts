@@ -17,7 +17,6 @@ import {
 } from "../../../../shared/db/test-helpers";
 import { createApp } from "../../../app";
 import { incomingWith } from "../../identity/test-support";
-import { createTailscaleLocalApi } from "../../identity/adapter/tailscale-local-api";
 import { createWorkspaceDependencies } from "../../workspace/adapter/dependencies";
 import { createStockDependencies } from "./dependencies";
 import { startRunnerApp } from "../../../../runner/app";
@@ -221,12 +220,6 @@ describe("ストックとスレッド API", () => {
     });
     const appOptions = {
       build: "test",
-      identity: {
-        login: "dev@example.com",
-        devIdentity: "dev@example.com",
-        tailscale: createTailscaleLocalApi(),
-        clock: { now: () => 0 },
-      },
       stock: deps,
     };
     app = createApp(appOptions);

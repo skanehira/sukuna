@@ -1,6 +1,6 @@
 pre-push:
   jobs:
     - name: check
-      run: vp check
+      run: vp check < /dev/null
     - name: build
-      run: vp build
+      run: vp build < /dev/null

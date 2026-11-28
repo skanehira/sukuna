@@ -141,6 +141,40 @@ describe("会話の行", () => {
     );
     expect(eventLines(diff, "c1", "/project", null, true).length).toBe(count);
   });
+  it.each([
+    {
+      name: "空",
+      content: "",
+      truncated: false,
+      expected: [{ kind: "tool", text: "  ⎿  (出力なし)", seq: 4 }],
+    },
+    {
+      name: "改行だけ",
+      content: "\n\n",
+      truncated: false,
+      expected: [{ kind: "tool", text: "  ⎿  (出力なし)", seq: 4 }],
+    },
+    {
+      name: "切り詰められた 5 行",
+      content: "一\n二\n三\n四\n五",
+      truncated: true,
+      expected: [
+        { kind: "tool", text: "  ⎿  一", seq: 4, seqLine: 0 },
+        { kind: "tool", text: "     二", seq: 4, seqLine: 1 },
+        { kind: "tool", text: "     三", seq: 4, seqLine: 2 },
+        { kind: "tool", text: "     … +2 行以上", seq: 4 },
+      ],
+    },
+  ])(
+    "ツールの結果が $name のとき、その旨か残りの行数を添える",
+    ({ content, truncated, expected }) => {
+      const result = event(4, {
+        type: "tool_result",
+        payload: { tool_use_id: "t", is_error: false, content, truncated, bytes: 0 },
+      });
+      expect(eventLines(result, "c1", "/project")).toEqual(expected);
+    },
+  );
   it("切替一覧はプロジェクトごとに会話・対象 issue・開始メニューを並べ、現在のプロジェクトだけ worktree の開始を出す", () => {
     const projects = [
       {

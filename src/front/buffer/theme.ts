@@ -41,6 +41,7 @@ export const MENU_DANGER = "cm-menu-danger";
 export const MENU_DONE = "cm-menu-done";
 export const COLUMN = "cm-column";
 export const COLUMN_HANG = "cm-hang";
+export const TOOL_ELBOW = "cm-tool-elbow";
 export const TONE_CLASS = "cm-tone-";
 export const STRONG = "cm-strong";
 export const MARK_GUTTER = "cm-mark-gutter";
@@ -143,7 +144,9 @@ function createBufferTheme(side: BufferSide): Extension {
       fontFamily: "var(--font-mono)",
       fontSize: "12px",
       color: "var(--color-muted)",
+      textIndent: "5ch hanging",
     },
+    [`.${TOOL_ELBOW}`]: { display: "inline-block", width: "1ch", textIndent: "0" },
     [`.cm-line.${KIND_CLASS}note`]: { fontSize: "13px", color: "var(--color-muted)" },
     [`.cm-line.${KIND_CLASS}separator`]: {
       color: "var(--color-accent)",

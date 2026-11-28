@@ -4,7 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { designResponseSchema } from "../../../../shared/api/design";
 import { openMigratedDatabase } from "../../../../shared/db/test-helpers";
 import { createApp } from "../../../app";
-import { createTailscaleFake, incomingWith } from "../../identity/test-support";
+import { incomingWith } from "../../identity/test-support";
 import { createProjectDependencies } from "../../workspace/adapter/project-dependencies";
 import { designFixture, git } from "../design-test-support";
 
@@ -25,12 +25,6 @@ describe("設計の反映とプロジェクトの解除", () => {
     const database = openMigratedDatabase(f.home);
     const app = createApp({
       build: "test",
-      identity: {
-        login: "dev@example.test",
-        devIdentity: "1",
-        tailscale: createTailscaleFake().api,
-        clock: { now: Date.now },
-      },
       projects: createProjectDependencies(() => database, {
         home: f.home,
         gh: f.runner.gh,

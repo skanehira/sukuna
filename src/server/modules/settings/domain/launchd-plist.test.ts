@@ -7,10 +7,8 @@ const config = {
   home: "/data/sukuna",
   userHome: "/home/developer",
   port: 4580,
-  login: "dev@example.com",
   path: "/bin:/tools",
   claudeConfigDir: "/data/a & b",
-  SUKUNA_DEV_IDENTITY: "test",
   SUKUNA_AGENT: "fake",
 };
 
@@ -25,7 +23,6 @@ it("本番用の常駐プロセスと必要時だけ起動する復元の plist 
     "<key>NODE_ENV</key><string>production</string>" +
       "<key>PORT</key><string>4580</string>" +
       "<key>SUKUNA_HOME</key><string>/data/sukuna</string>" +
-      "<key>SUKUNA_LOGIN</key><string>dev@example.com</string>" +
       "<key>HOME</key><string>/home/developer</string>" +
       "<key>PATH</key><string>/bin:/tools</string>" +
       "<key>CLAUDE_CONFIG_DIR</key><string>/data/a &amp; b</string>",

@@ -6,7 +6,6 @@ export type LaunchdPlistConfig = {
   home: string;
   userHome: string;
   port: number;
-  login: string;
   path: string;
   claudeConfigDir?: string;
 };
@@ -32,7 +31,6 @@ export function launchdPlist(service: ServiceName, config: LaunchdPlistConfig): 
     NODE_ENV: "production",
     PORT: String(config.port),
     SUKUNA_HOME: config.home,
-    SUKUNA_LOGIN: config.login,
     HOME: config.userHome,
     PATH: config.path,
     ...(config.claudeConfigDir === undefined ? {} : { CLAUDE_CONFIG_DIR: config.claudeConfigDir }),

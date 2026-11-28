@@ -35,13 +35,13 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 - 本書は、書くプロセスの分担、`gh` の実行器とその偽物の正本でもある
 - 環境変数の値の形、既定の値、読むプロセス、起動を失敗させる条件は `features/operations.md`「環境変数」が正本である
 - 再起動のときの規則そのものは DESIGN.md「横断規約 > ランナーの再起動」が正本で、本書はその実現の手順を書く
-- 配信の 1 件の形と本人の判定は DESIGN.md「横断規約 > 配信」「横断規約 > 本人の判定」参照
+- 配信の 1 件の形と接続範囲は DESIGN.md「横断規約 > 配信」「横断規約 > 接続範囲」参照
 - エラーの形とコードは DESIGN.md「横断規約 > エラー応答」参照
 - 会話の画面での見せ方、指示の送り方の UI は `features/conversation.md` が持つ。本書は、その下で動く仕組みだけを持つ
 
 ### プロセスと起動
 
-画面のサーバーとランナーは、同じリポジトリの別の入口から起動する。どちらも `SUKUNA_HOME` の同じ SQLite のファイルを開く。
+画面のサーバーとランナーは、同じリポジトリの別の入口から起動する。どちらもデータのディレクトリ (`features/operations.md`「データの置き場所」) の同じ SQLite のファイルを開く。
 
 | 項目 | 画面のサーバー | ランナー |
 | --- | --- | --- |
@@ -54,12 +54,13 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 
 ランナーは起動時に次の順で進む。
 
-1. データベースを開き、マイグレーションを当てる (「マイグレーション」)
-2. ソケットのファイルがあれば接続を試す。つながったらほかのランナーが動いているので、起動を失敗させる。つながらなければファイルを消す
-3. 前回の起動で残った Claude Code の子プロセスを止める (「ランナーの再起動」)
-4. 会話の状態を直す (「ランナーの再起動」)
-5. 目次などの更新に反映していない番が残る会話を探し、更新を積み直す (`features/recap.md`「番ごとの更新」)
-6. ソケットで待ち受けを始め、利用枠切れのタイマーと自動フローを始める
+1. データ・状態・実行時のディレクトリ (`features/operations.md`「データの置き場所」) が無ければ作る
+2. データベースを開き、マイグレーションを当てる (「マイグレーション」)
+3. ソケットのファイルがあれば接続を試す。つながったらほかのランナーが動いているので、起動を失敗させる。つながらなければファイルを消す
+4. 前回の起動で残った Claude Code の子プロセスを止める (「ランナーの再起動」)
+5. 会話の状態を直す (「ランナーの再起動」)
+6. 目次などの更新に反映していない番が残る会話を探し、更新を積み直す (`features/recap.md`「番ごとの更新」)
+7. ソケットで待ち受けを始め、利用枠切れのタイマーと自動フローを始める
 
 2 つ目のランナーを起動させないのは、同じ会話を 2 つのプロセスで動かさないためである (DESIGN.md「既知の制約」)。
 
@@ -142,9 +143,9 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 - `settings` の `runner-workspace-switch:` で始まるキー。ランナーは確定結果を、画面のサーバーは未確定の要求の取消しを書く。どちらも SQLite の書き込みロック内で同じ要求の行が無いことを確かめてから追加する。この名前で始まる期限切れの行だけを掃除する
 - `worktrees` の `removed_at`。どちらのプロセスも、`removed_at` が空のときだけ書く (`features/worktree-terminal.md`「書くプロセス」)
 
-会話の画像は `$SUKUNA_HOME/images/<conversation_id>/<ID>.<拡張子>` に置く。貼り付けた画像は画面のサーバーが書き、ツールの結果の画像はランナーが書く。ランナーは、指示を送るときに貼り付けた画像を読む。画面のサーバーは、画面に表示するために両方を読む (`features/conversation.md`「GET /api/conversations/:id/images/:imageId」)。
+会話の画像は `<データのディレクトリ>/images/<conversation_id>/<ID>.<拡張子>` に置く (`features/operations.md`「データの置き場所」)。貼り付けた画像は画面のサーバーが書き、ツールの結果の画像はランナーが書く。ランナーは、指示を送るときに貼り付けた画像を読む。画面のサーバーは、画面に表示するために両方を読む (`features/conversation.md`「GET /api/conversations/:id/images/:imageId」)。
 
-- `<ID>` は画像の識別子 (ULID) で、`drafts.images`、`queued_instructions.images`、`tool_result` の記録の `images` に入る値である。`user_message` の記録には、`SUKUNA_HOME` からの相対のパスで残す
+- `<ID>` は画像の識別子 (ULID) で、`drafts.images`、`queued_instructions.images`、`tool_result` の記録の `images` に入る値である。`user_message` の記録には、データのディレクトリからの相対のパスで残す
 - 同じ ID のファイルは、書いたあとに書き換えない
 - 拡張子は、保存するときの形式 (`image/png` なら `png`、`image/jpeg` なら `jpg`、`image/gif` なら `gif`、`image/webp` なら `webp`) から決める
 - 識別子からファイルを引くときは、`images/<conversation_id>/` の中で `<ID>.` で始まるファイルを探す。無ければ、画像が見つからないとして扱う (`features/conversation.md`)
@@ -282,7 +283,7 @@ Git のロックは、公開先にリンクする前に物理識別子を記録�
 ```ts
 type UserMessage = {
   text: string;
-  images: { path: string; media_type: string }[]; // path は SUKUNA_HOME からの相対
+  images: { path: string; media_type: string }[]; // path はデータのディレクトリからの相対
   origin: "developer" | "queued" | "interrupt" | "stock" | "resume" | "flow" | "answer_text" | "finish_proposal";
   client_receipts?: ({ client_id: string; received_at: number } & ({ result: "queued"; queued_id: string } | { result: "delivered" }))[];
   client_ids?: string[]; // 1 通にまとめた指示の client_id (届く前の指示の分を含む)
@@ -436,7 +437,7 @@ SDK のメッセージは、まず Port の出力 (「Agent SDK を包む Port�
 
 ### 配信 (`/ws`)
 
-画面のサーバーは、ランナーの知らせと自分の書き込みを受けて、購読している接続へ配信する。1 件の形と本人の判定は DESIGN.md「横断規約 > 配信」参照。メッセージの形は `src/shared/ws.ts` の Zod のスキーマが正本である。
+画面のサーバーは、ランナーの知らせと自分の書き込みを受けて、購読している接続へ配信する。1 件の形と接続範囲は DESIGN.md「横断規約 > 配信」参照。メッセージの形は `src/shared/ws.ts` の Zod のスキーマが正本である。
 
 画面から送るメッセージは次の 4 つである。
 
@@ -487,7 +488,7 @@ type AppNotice = {
 - 画面は `event` の `seq` が飛んだら (受け取った最大の `seq` + 1 でない)、間の分を API で読み直す
 - 画面は `delta` の文字を、会話の末尾の書きかけの発言として逐次出す (`features/buffer-ui.md`「末尾の区画」)
 - `delta` は再送しない。画面は、その会話の次の `assistant_text` か `turn_end` の `event` が届いたら、書きかけの表示を消す
-- 購読を受けたら、画面のサーバーは対象を開ける権限を確かめない (使うのは本人 1 人)。存在しない対象の購読は、何も配信しない
+- 接続範囲を通った端末に、購読した対象の変更を配信する。対象が存在しない購読には何も配信しない
 - 画面のサーバーは 20 秒ごとに `{ topic: "app", seq: <通し番号>, type: "ping", payload: {} }` を全接続へ送る。購読が無い接続にも送る。`seq` はほかの `app` の配信と同じ通し番号を使う。画面は受信時刻だけを更新し、通知の表示・API の読み直し・保存は行わない。最後の受信から 45 秒何も届かなければ接続を閉じてつなぎ直す
 - 送り待ちが 8 MiB を超えた接続は、画面のサーバーが閉じる。画面はつなぎ直し、続きから受け取る
 - 画面のつなぎ直しの間隔は、0.5 秒から倍にして 8 秒までとし、つながったら 0.5 秒に戻す
@@ -666,7 +667,7 @@ interface GhRunner {
 
 規則は DESIGN.md「横断規約 > ランナーの再起動」参照。ランナーは起動時に次を行う。
 
-**残った子プロセスを止める**: ランナーは、Claude Code の子プロセスを SDK の `spawnClaudeCodeProcess` で起動し、PID を `$SUKUNA_HOME/runner/children` に 1 行ずつ書く。起動時はこのファイルの PID のうち、生きていてコマンドが Claude Code のものに SIGTERM を送る。5 秒たっても残るものには SIGKILL を送り、ファイルを空にする。`spawnClaudeCodeProcess` で PID を取れないときは、`ps` の一覧から、引数に保存済みの `session_id` を含む Claude Code のプロセスを探して止める。
+**残った子プロセスを止める**: ランナーは、Claude Code の子プロセスを SDK の `spawnClaudeCodeProcess` で起動し、PID を状態のディレクトリの `runner/children` に 1 行ずつ書く。起動時はこのファイルの PID のうち、生きていてコマンドが Claude Code のものに SIGTERM を送る。5 秒たっても残るものには SIGKILL を送り、ファイルを空にする。`spawnClaudeCodeProcess` で PID を取れないときは、`ps` の一覧から、引数に保存済みの `session_id` を含む Claude Code のプロセスを探して止める。
 
 子プロセスの PID は `spawnClaudeCodeProcess` の戻り値から取得する。この方法で止めた会話も、保存した識別子で再開する (PoC `runner-child-cleanup`)。
 
@@ -705,7 +706,7 @@ interface GhRunner {
 
 - Drizzle Kit で SQL を生成し、`src/shared/db/migrations/` に置く。テーブルの定義は `src/shared/db/schema.ts` に置く
 - 両方のプロセスは、起動時にデータベースを開き、`PRAGMA journal_mode = WAL`、`PRAGMA busy_timeout = 5000`、`PRAGMA foreign_keys = ON` を設定する
-- 当てるあいだだけ、`$SUKUNA_HOME/db.lock` の排他のロックを取る。当て終えたらすぐに外し、動いているあいだはロックを持たない (DESIGN.md「データスキーマ」)
+- 当てるあいだだけ、状態のディレクトリの `db.lock` の排他のロックを取る。当て終えたらすぐに外し、動いているあいだはロックを持たない (DESIGN.md「データスキーマ」)
 - ロックの取り方と、取れないときに起動を失敗させるまでの時間は `features/operations.md`「データベースのロック」が持つ
 - 未適用の分は、ロックの中の `BEGIN IMMEDIATE` のトランザクションで当てる。当て済みの記録を見て、当てる分が無ければ何もしない
 - 当てるのに失敗したら、ロールバックしてロックを外し、プロセスの起動を失敗させる。理由はログに出す

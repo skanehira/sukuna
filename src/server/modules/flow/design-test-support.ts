@@ -13,7 +13,7 @@ import { startRunnerApp } from "../../../runner/app";
 import { ScriptedAgent } from "../../../runner/modules/conversation/adapter/scripted-agent";
 import { createApp } from "../../app";
 import { RunnerLink } from "../../runner-link";
-import { createTailscaleFake, incomingWith } from "../identity/test-support";
+import { incomingWith } from "../identity/test-support";
 import { createStockDependencies } from "../stock/adapter/dependencies";
 import { createWorkspaceDependencies } from "../workspace/adapter/dependencies";
 import { createDesignDependencies } from "./adapter/design-dependencies";
@@ -269,12 +269,6 @@ export function designFixture() {
         now: () => time,
       }),
       build: "test",
-      identity: {
-        login: "dev@example.test",
-        devIdentity: "1",
-        tailscale: createTailscaleFake().api,
-        clock: { now: Date.now },
-      },
       design: createDesignDependencies(
         () => serverDb.db,
         () => link,
@@ -297,17 +291,19 @@ export function designFixture() {
     url = "/api/issues/issue/design",
     method = "GET",
     body?: unknown,
-    ip = "127.0.0.1",
+    origin?: string,
   ) =>
     app.request(
       url,
       {
         method,
-        ...(body === undefined
-          ? {}
-          : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        headers: {
+          ...(body === undefined ? {} : { "content-type": "application/json" }),
+          ...(origin === undefined ? {} : { origin }),
+        },
       },
-      incomingWith(ip, 5000),
+      incomingWith("127.0.0.1", 5000),
     );
   const state = () => serverDb.db.select().from(issues).where(eq(issues.id, "issue")).get()!.state;
   const events = () =>

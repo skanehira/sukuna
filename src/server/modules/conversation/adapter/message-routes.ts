@@ -2,7 +2,6 @@ import type { Handler } from "hono";
 import { z } from "zod";
 import { sendConversationMessageSchema } from "../../../../shared/conversation/api";
 import { hasUnlocatedEdits, unlocatedConsultationNotice } from "../../../../shared/progress/draft";
-import type { IdentityEnv } from "../../identity/adapter/middleware";
 import type { MessageDependencies } from "../domain/message-port";
 
 const resultSchema = z.discriminatedUnion("result", [
@@ -14,7 +13,7 @@ const resultSchema = z.discriminatedUnion("result", [
   }),
 ]);
 
-export function createMessageHandler(deps: MessageDependencies): Handler<IdentityEnv> {
+export function createMessageHandler(deps: MessageDependencies): Handler {
   return async (c) => {
     const parsed = sendConversationMessageSchema.safeParse(
       await c.req.json().catch(() => undefined),

@@ -66,8 +66,6 @@ function start(home: string, role: "runner" | "server", build = "loaded") {
       NODE_ENV: "development",
       SUKUNA_HOME: home,
       SUKUNA_RUNNER_SOCKET: join(home, "runner.sock"),
-      SUKUNA_LOGIN: "dev@example.com",
-      SUKUNA_DEV_IDENTITY: "dev@example.com",
       SUKUNA_AGENT: "fake",
       SUKUNA_AGENT_SCRIPT: join(home, "agent.json"),
       SUKUNA_GH: join(home, "gh.json"),

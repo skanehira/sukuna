@@ -19,7 +19,7 @@
 
 **主な決まり**:
 
-- AI が作業中に送った指示は預かり、番が正常に終わったときに、書いた順に 1 通にまとめて届ける。届く前なら直せて、取り消せる (BR-009)
+- AI が作業中に送った指示は預かり、番が正常に終わったときに、書いた順に 1 通にまとめて届ける。届く前なら入力欄に呼び出して直せて、取り消せる (BR-009、BR-103)
 - 割り込みで送ると AI を止め、預かっていた指示を新しい指示の前に付けて、すぐに届ける。止めたときと失敗で止まったときは、預かった指示を届けずに残す (BR-088)
 - 利用枠切れで止まった作業は、枠が戻ると自動で再開する。API のエラーや失敗で止まった作業は、開発者が再開を選ぶまで動かさない (BR-091)
 - 選んだ選択肢と書いた回答は、送るまでサーバーに残り、どの端末でも同じに見える。答えていない質問があれば、送る前に確かめる (BR-089、BR-090)
@@ -64,7 +64,7 @@
 
 ### 開発者の操作と画面に起きること
 
-画面は UI_SKETCH.html の `pc-conv--recent`・`pc-conv--answers`・`pc-conv--input`・`pc-issue-working`・`pc-issue-stopped`・`pc-home--switch` を手本にする。
+画面は UI_SKETCH.html の `pc-conv--recent`・`pc-conv--answers`・`pc-conv--input`・`pc-issue-working`・`pc-issue-working--input`・`pc-issue-working--queue-edit`・`pc-issue-stopped`・`pc-home--switch` を手本にする。
 
 | 操作 | 画面に起きること |
 | --- | --- |
@@ -73,7 +73,8 @@
 | worktree の一覧 (Space k) の行で Enter | 開いている会話の作業場所を、その worktree に切り替える (`features/worktree-terminal.md`「作業場所の切り替え」) |
 | 会話で i | 入力欄が開き、書きかけがあれば続きから書ける。Insert モードで始まる |
 | 入力欄 (Normal) で Enter | 送る。AI が `idle` / `stopped` / `failed` / `usage_limited` ならすぐ届け、開発者の発言として会話に出し、お知らせ「送りました」を出す。画像があれば「画像 n 件と一緒に送りました」とする。作業中なら預け、お知らせ「預けました。今の作業が終わると届きます」を出す |
-| 入力欄 (Normal) で Alt+Enter | AI が作業中なら割り込み、お知らせ「AI を止めて、すぐに送りました」を出す。届く前の指示を前に付けたときは「AI を止めて、届く前の指示 n 件と一緒にすぐに送りました」とする。作業中でなければ Enter と同じに送る |
+| 入力欄 (Insert、Normal) で Ctrl+Enter か Alt+Enter | AI が作業中なら割り込み、お知らせ「AI を止めて、すぐに送りました」を出す。届く前の指示を前に付けたときは「AI を止めて、届く前の指示 n 件と一緒にすぐに送りました」とする。入力欄が空で届く前の指示があるときは、届く前の指示だけを届け、「AI を止めて、届く前の指示 n 件をすぐに送りました」とする。作業中でなければ Normal の Enter と同じに送る |
+| 入力欄で ↑ (カーソルが先頭の行にあり、届く前の指示があるとき) | 書きかけを脇に置き、いちばん新しい届く前の指示を入力欄に出して直せるようにする。欄の名前は「預けた指示を直す (k / n 件目)」になる。決まりは「届く前の指示を入力欄で直す」 |
 | 入力欄で Esc か Ctrl+[ | Insert なら Normal へ移る。Normal なら入力欄を閉じ、書きかけを残す。書きかけがあれば、お知らせ「書きかけを残しました。i で続きを書けます」を出す |
 | 入力欄の先頭で / を打つ | スキルの候補を、打った文字に前方一致で絞って入力欄の上に出す。Tab で先頭の候補を入れる |
 | 入力欄 (Insert) で Ctrl+v | クリップボードの画像を上げ、入力欄に縮小を番号付きで並べ、下の段に「画像 n 件 (送信時に一緒に送る)」と出す。クリップボードに画像が無く文字があれば、カーソルの位置に文字を入れる。macOS で `http://macstudio:<port>` を開いているときは貼れず、Cmd+V を案内する (「貼り付けた画像」) |
@@ -86,7 +87,7 @@
 | 「Qn に文章で答える」の行で Enter | 入力欄が開く。決めると、質問の下に「→ あなたの回答 (まだ送っていない): <文>」と出し、お知らせ「回答を書きました。「回答をまとめて送る」で送ります」を出す |
 | 「回答をまとめて送る (n / m 件)」の行で Enter | 全部に答えていれば送り、お知らせ「回答 n 件を 1 通にまとめて送りました」を出す。答えていない質問があれば、確認「答えていない質問が n 件あります。このまま送りますか? (y / n)」を出し、y で送る。1 問も答えていなければ送らず、お知らせ「回答がまだありません。選択肢を選ぶか、文章で答えてください」を出す |
 | 許可の確認の「許可する」か「拒否する」の行で Enter | 答えを AI に返し、会話の末尾に答えた結果を 1 行出す |
-| 届く前の指示の行で cc / dd | cc は入力欄で直す。dd はその指示を取り消し、お知らせ「預けた指示を取り消しました。u で戻せます」を出す。u を押すと、同じ指示を預け直す。ストックから送った指示はストックに戻り、入力欄から送った指示は書きかけに戻る |
+| 届く前の指示の行で cc / dd | cc は、入力欄で ↑ を押して選んだときと同じに、その指示を入力欄に出して直せるようにする。dd はその指示を取り消し、お知らせ「預けた指示を取り消しました。u で戻せます」を出す。u を押すと、同じ指示を預け直す。ストックから送った指示はストックに戻り、入力欄から送った指示は書きかけに戻る |
 | 「届く前の指示を送る」の行で Enter | AI が作業中でなければ、残っている指示を書いた順に 1 通にまとめて届ける |
 | Space x か :stop | AI を止め、お知らせ「<送り先> の AI を止めました。作業は保存され、指示待ちになります」を出す。<送り先> は `会話: <題名>` か `#<番号> <題名>` である。確認は挟まない (止めても指示を送れば続けられる) |
 | 「再開する」の行で Enter | 止まった段階から続ける |
@@ -124,7 +125,7 @@
 | 回答を指示にした文 (`origin` が `answer_text`) | 出さない。同じ回答を「送った回答」の行で出す |
 | AI の発言 (書きかけ) | 配信の `delta` を、会話の末尾の書きかけの区画に届いた順に足す。保存しないので、開き直すと出ない |
 | AI の発言 | 「AI」の札の行のあとに本文の行。届くと、書きかけの区画を消してこの行に置き換える |
-| ツールの実行 | 「● <ツール名>(<対象>)」の行。結果が届くと、その下に「⎿ <結果の要約>」の行を足す。結果に画像があれば、要約の行の下に画像を 1 枚ずつ出す (「ツールの結果の画像」) |
+| ツールの実行 | 「● <ツール名>(<対象>)」の行。結果が届くと、その下に結果の行を足す (下の箇条「ツールの結果の行」)。結果に画像があれば、結果の行の下に画像を 1 枚ずつ出す (「ツールの結果の画像」) |
 | ファイルの編集の差分 | ツールの行の下に、行番号付きの追加と削除の行。25 行を超える差分は先頭 10 行だけを出し、「残り n 行 (Enter か zo で開く)」の行で畳む |
 | 選択式の質問 | 質問の文の行、選択肢のメニューの行、「Qn に文章で答える」の行、最後に「回答をまとめて送る (n / m 件)」の行 |
 | 送った回答 | 「あなた」の札のあとに「Q1: <回答>」の形で 1 行ずつ |
@@ -132,7 +133,12 @@
 | 止まったこと | 区切りの行 (状態の表の「会話の末尾に出す行」) |
 | 届く前の指示 | 会話の末尾に「届く前の指示: <1 行目>」の行を書いた順に並べる。最後に「届く前の指示を送る」の行 (AI が作業中でないときだけ) |
 
-- ツールの結果の要約は、読み取りは行数、コマンドは終了コード、編集は「追加 n 行、削除 m 行」とする。画像を含む結果は、結果の文の 1 行目とする。文が無ければ「画像 n 件」(n は保存できた画像の数) とし、1 枚も保存できなかったときは「画像 m 件 (表示できません)」(m は結果の中の画像の数) とする
+- ツールの結果の行は、ターミナルの Claude Code と同じ形にする。結果の本文の先頭 3 行までを出し、長い出力で会話が埋まらないようにする
+  - 1 行目は「  ⎿  <本文の 1 行目>」とする。2 行目と 3 行目は、空白 5 文字のあとに本文を置き、1 行目の本文と字の頭を揃える
+  - 本文が 3 行を超えるときは、4 行目に「     … +<残りの行数> 行」を出す。本文がランナーで切り詰められていたら (`truncated`)、「… +<残りの行数> 行以上」とする。残りの行を開く操作は持たない
+  - 本文の末尾の改行は行に数えない。本文が空か改行だけなら、「  ⎿  (出力なし)」の 1 行を出す
+  - 本文を出した行は、本文の何行目か (0 から) を `seqLine` に持つ。「… +n 行」と「(出力なし)」の行は `seqLine` を持たず、引用の位置に使わない
+  - 画像を含む結果は、文字のブロックをつないだ文を本文とする。文が無ければ、「(出力なし)」の代わりに「  ⎿  画像 n 件」(n は保存できた画像の数) を出す。1 枚も保存できなかったときは「  ⎿  画像 m 件 (表示できません)」(m は結果の中の画像の数) とする
 - 番の途中の作業中の表示は、バッファの行ではなく、主のウィンドウの下端に出す。工程・工程の経過・最後にしたことの求め方は `features/work-monitor.md`「作業の状況の求め方」が正本である
 - 書きかけの区画、質問の区画、届く前の指示の行は、状態が変わるたびに書き換える。書き換えは会話の末尾の区画に限る (`features/buffer-ui.md`「末尾の区画」)
 - 末尾の区画は、書きかけ (`reply`)、質問 (`question`)、届く前の指示 (`queue`) の順に並べる
@@ -155,7 +161,7 @@
 - 番が正常に終わったら、預かった指示を書いた順に改行 2 つでつなぎ、1 通にして届ける。各指示の画像も同じ 1 通に付ける
 - 番が止まって終わったら (開発者の停止、失敗、利用枠切れ、再起動)、預かった指示は届けずに残す
 - AI が作業中でないときに開発者が指示を送ったら、残っている預かった指示を前に付けて 1 通にして、すぐに届ける。「届く前の指示を送る」は、新しい指示なしで同じことをする
-- 割り込みで送ったら、AI を止めてから、預かった指示を前に付けて 1 通にして、すぐに届ける
+- 割り込みで送ったら、AI を止めてから、預かった指示を前に付けて 1 通にして、すぐに届ける。新しい指示の本文も画像も無い割り込みでは、預かった指示だけを 1 通にして届ける
 - 再開は、預かった指示を届けない。再開した番が正常に終わったら、上の規則で届ける
 
 ストックから送った指示も、本文と一緒に送った指示も、同じ規則で届けるか預ける。指示に結び付くストックの ID は、単数なら `queued_instructions.stock_item_id`、まとめて預けた場合は `delivery_context` に記録する。
@@ -186,6 +192,41 @@ issue の会話 (`kind` が `triage` / `design` / `impl`) へ開発者の指示�
 
 - issue の担当の会話は、`features/issue.md`「担当の会話」の表で決める。<段階> はその会話の種類の名前 (精査・設計・実装) である
 - `flow` の判定は、指示を送った時点で通す。AI が作業中で預かった指示を、番の終わりに届けるときは通し直さない
+
+### 届く前の指示を入力欄で直す
+
+開発者は、会話の入力欄から届く前の指示を呼び出して直し、そのまますぐに送れる。書きかけは、指示を直しているあいだも元のまま残る (BR-103)。
+
+↑ と ↓ で指示を選べるのは、会話かスレッドの表示で i を押して開いた入力欄だけである。AI が作業中でなくても、届く前の指示が残っていれば選べる。ストックの指示と一緒に送る入力欄、差し戻しや確定事項の入力欄では、↑ と ↓ はカーソルを動かすだけにする。「先頭の行」と「末尾の行」は、改行で区切った行で数える。
+
+| 操作 | 画面に起きること |
+| --- | --- |
+| 書きかけを書いている入力欄で ↑ (カーソルが先頭の行) | 書きかけを保存してから脇に置き、いちばん新しい (最後に預けた) 届く前の指示を出す。カーソルは本文の末尾に置き、モードは変えない。届く前の指示が無ければ、カーソルを動かすだけにする。書きかけを保存できないとき (接続が切れている、保存に失敗した) は移らず、理由をお知らせに出す |
+| 指示を直している入力欄で ↑ (カーソルが先頭の行) | 1 つ古い指示へ移る。いちばん古い指示では何もしない |
+| 指示を直している入力欄で ↓ (カーソルが末尾の行) | 1 つ新しい指示へ移る。いちばん新しい指示からは、脇に置いた書きかけに戻る |
+| 指示を直している入力欄 (Normal) で Enter | 直した内容を保存して入力欄を閉じ、お知らせ「預けた指示を直しました」を出す |
+| 指示を直している入力欄 (Insert、Normal) で Ctrl+Enter か Alt+Enter | 直した内容を保存してから、届く前の指示をすべて、書いた順に 1 通にまとめてすぐに届け、入力欄を閉じる。AI が作業中なら止めてから届け、お知らせ「AI を止めて、届く前の指示 n 件をすぐに送りました」を出す。作業中でなければ「届く前の指示を送る」と同じに届け、お知らせ「届く前の指示 n 件を送りました」を出す |
+| 指示を直している入力欄 (Normal) で Esc | 直した内容を保存して入力欄を閉じる。次に i で開くと書きかけが出る |
+
+- 指示を直しているあいだ、欄の名前は「預けた指示を直す (k / n 件目)」にする。k は古い方から数えた位置、n は届く前の指示の件数である
+- 入力欄の下のヒントは次のとおりにする (並びと形は `features/buffer-ui.md`「入力欄」)
+  - 書きかけを書いていて、届く前の指示があるとき: 「↑ 届く前の指示を直す」を足す
+  - 指示を直しているとき: Enter の動詞を「直す」、Esc の説明を「閉じる (直した内容は残る)」にする。いちばん古い指示でなければ「↑ 前の指示へ」を足す。Ctrl+Enter の説明は、AI が作業中なら「AI を止めて届く前の指示をすぐ送る」、作業中でなければ「届く前の指示をすぐ送る」にし、作業中でなくても出す
+- 直した内容は、別の指示へ移るとき、書きかけに戻るとき、閉じるとき、送るときに `PATCH /api/conversations/:id/queue/:itemId` で保存する。内容を変えていなければ保存しない
+- 保存に失敗したら (404 を除く)、移らず・閉じず・送らずに今の指示に留まり、応答の `message` をエラーのお知らせに出す。直した内容は入力欄に残す
+- Ctrl+Enter で、保存は通ったが届けるのに失敗したとき (ランナーにつながらない、issue の担当でない段階の会話など) は、入力欄を閉じずに今の指示に留まる。入力欄の下に「未送信: <失敗の理由>」を出し、もう一度 Ctrl+Enter で送れる
+- 本文も画像も空にして保存しようとしたら、保存せずに今の指示に留まり、お知らせ「内容が空です。取り消すときは、届く前の指示の行で dd を押してください」を出す
+- 指示を直しているあいだは、入力欄の内容を書きかけとして保存しない。書きかけはサーバーに残り、入力欄を閉じたあとも i で続きを書ける
+- 書きかけに戻るときは、サーバーの最新の書きかけを出す。脇に置いているあいだに別のタブが書きかけを変えていれば、その内容を出し、お知らせ「別の端末で書いた内容に置き換わりました」を出す (「書きかけの入力と未送信」)
+- 指示を直しているあいだに貼った画像は、直している指示に付く。「画像 n 件」の表示と :images clear も、直している指示の画像に効く。書きかけの画像は変わらない
+- 直している指示が届く前の指示の列から消えたら (番の終わりに届いた、別のタブか dd で取り消された)、書きかけに戻る。消えたことは、配信で届いた列か、保存の 404 で知る。内容を変えていなければ、お知らせ「この指示は、もう届く前の指示にありません」だけを出す。内容を変えていれば、消え方で分ける
+  - 届いたとき (その指示を含む開発者の発言が会話に出たとき): 直した内容を書きかけの後ろに空行 1 つを挟んで足し、お知らせ「この指示はもう届いていました。直した内容を書きかけの後ろに足しました」を出す
+  - 取り消されたとき: 取り消しで書きかけに戻った元の本文を、直した内容に置き換え、お知らせ「この指示は取り消されました。直した内容を書きかけに戻しました」を出す。書きかけが別に変わっていて元の本文が見つからなければ、後ろに足す
+  - このタブの dd で取り消したときは、置き換わりのお知らせ「別の端末で書いた内容に置き換わりました」を出さない
+- ストックから預けた指示と、まとめて預けた指示は、開発者が書いた本文だけを入力欄に出す。前置きと引用は保つ (「PATCH /api/conversations/:id/queue/:itemId」)
+- 取り消しの復帰の応答を待っているあいだは、↑ で指示を呼び出さない。押すと、お知らせに復帰の結果を待つように出す (「指示を届ける規則」)
+- 別のタブで届く前の指示が増えたり減ったりしても、直している指示はそのまま直せる。k と n は、配信で届いた最新の列で数え直す
+- すぐに届けるときも「指示を届ける規則」に従う。直した指示だけを先に届けることはしない
 
 ### 選択式の質問と許可の確認
 
@@ -241,7 +282,7 @@ issue の会話 (`kind` が `triage` / `design` / `impl`) へ開発者の指示�
 
 ### 画像
 
-会話で扱う画像は 2 種類ある。開発者が入力欄に貼り、指示と一緒に AI へ送る「貼り付けた画像」と、AI のツールの結果に含まれる「ツールの結果の画像」(ブラウザのスクリーンショットなど) である。どちらも `SUKUNA_HOME` の下のファイルに置き、画像の ID (ULID) で指す。置き場所、ファイルの名前、書くプロセスは `features/runtime.md`「書くプロセスの分担」が正本である。画面は、どちらの画像も `GET /api/conversations/:id/images/:imageId` で読み込んで表示する。
+会話で扱う画像は 2 種類ある。開発者が入力欄に貼り、指示と一緒に AI へ送る「貼り付けた画像」と、AI のツールの結果に含まれる「ツールの結果の画像」(ブラウザのスクリーンショットなど) である。どちらもデータのディレクトリ (`features/operations.md`「データの置き場所」) の下のファイルに置き、画像の ID (ULID) で指す。置き場所、ファイルの名前、書くプロセスは `features/runtime.md`「書くプロセスの分担」が正本である。画面は、どちらの画像も `GET /api/conversations/:id/images/:imageId` で読み込んで表示する。
 
 #### 貼り付けた画像
 
@@ -291,7 +332,7 @@ issue の会話 (`kind` が `triage` / `design` / `impl`) へ開発者の指示�
 | 開いている入力欄 | 外す画像 | 外したことが残るとき |
 | --- | --- | --- |
 | 会話の指示の入力欄 | 書きかけの画像 | すぐに書きかけを保存する |
-| 届く前の指示を cc で直している入力欄 | 直している指示の画像 | 直した指示を送ったとき。送る前の扱いは、cc で直した文字と同じである |
+| 届く前の指示を ↑ で呼び出して直している入力欄 | 直している指示の画像。書きかけの画像は変わらない | 直した内容を保存したとき (「届く前の指示を入力欄で直す」) |
 | 右のウィンドウのスレッドの入力欄 | そのスレッドの書きかけの画像 | すぐに書きかけを保存する |
 
 - 外す前の確認は出さない。外した画像は、貼り直せば戻るためである
@@ -313,7 +354,7 @@ issue の会話 (`kind` が `triage` / `design` / `impl`) へ開発者の指示�
 
 #### ツールの結果の画像
 
-ツールの結果に画像のブロックがあれば、ランナーは画像をファイルに保存し、記録には画像の ID だけを残す (BR-103)。記録の文字には 64 KiB の上限があり、画像を文字のまま残すと切れて表示できないためである。保存の規則と記録の形は `features/runtime.md`「Agent SDK のメッセージからの写し方」に従う。
+ツールの結果に画像のブロックがあれば、ランナーは画像をファイルに保存し、記録には画像の ID だけを残す (BR-104)。記録の文字には 64 KiB の上限があり、画像を文字のまま残すと切れて表示できないためである。保存の規則と記録の形は `features/runtime.md`「Agent SDK のメッセージからの写し方」に従う。
 
 - 会話には、ツールの行と「⎿ <結果の要約>」の行の下に、保存できた画像ごとに「画像 <k> / <n> (Enter で元の大きさで開く)」の行を出し、その行の下に画像を出す。<n> は保存できた画像の数である
 - 画像は、主のウィンドウの幅から 2rem を引いた幅と、高さ 16rem に収まるように、縦横比を保って縮める
@@ -405,7 +446,7 @@ DESIGN.md「API 一覧」のうち本機能の分を書く。エラーの形と�
 - 相談を送るときの `timeline_comments` と `timeline_anchors` は `features/work-monitor.md`「相談コメントの保存と抽出」に従う
 - `clientMessageId` はタブが送信ごとに作る ULID とする。画面のサーバーは判定せず、ランナーへ `client_id` として渡す
 - ランナーは、同じ会話で同じ `client_id` が 10 分以内に届いたら、何もせずに初回の結果を返す。届く前の指示の `client_id` と、`user_message.client_receipts` に残した受付時刻・初回の結果で判定する。`client_ids` と `queued_ids` は、1 通にまとめた指示の番号の一覧として残す。詳しい規則は、`features/runtime.md`「画面のサーバーからランナーへの操作」に従う
-- `text` が空で画像も無いときは、預かった指示が残っていれば「届く前の指示を送る」として扱う
+- `text` が空で画像も無いときは、預かった指示が残っていれば「届く前の指示を送る」として扱う。`mode` が `interrupt` で AI が作業中なら、AI を止めてから預かった指示だけを 1 通にして届ける
 - 202: `{ "result": "delivered" | "queued", "queueItem": <届く前の指示> | null }`
 - 400 `invalid_input`: 文も画像も預かった指示も無い。画像が 20 枚を超える。画像のファイルが無い
 - 409 `conflict`: issue の担当でない段階の会話に送った (「指示を届ける規則」)。`stockIds` に指定した指示が対象の会話に無いか、送信できる状態にない場合も同じ応答を返す。復帰の `expected` と保存済みの書きかけが違えば、保存済みの書きかけを残す
@@ -449,7 +490,7 @@ DESIGN.md「API 一覧」のうち本機能の分を書く。エラーの形と�
 - 本文: `{ "text": "...", "images": [] }`。相談を編集した場合は `timeline_anchors` も送る。本文の位置を特定できない旧形式の相談を改稿した場合は 409 `conflict` を返し、預けた指示を保つ
 - まとめた指示の前置きと引用を保ち、開発者の本文を編集する。前置きや引用の範囲が変わったときは 409 `conflict` を返す
 - 200: `{ "queueItem": <届く前の指示> }`
-- 404 `not_found`: もう届いた。画面は「すでに届きました」とお知らせに出し、表示を読み直す
+- 404 `not_found`: もう届いたか、取り消された。画面の動きは「届く前の指示を入力欄で直す」に従う
 
 ### DELETE /api/conversations/:id/queue/:itemId
 
@@ -501,52 +542,54 @@ DESIGN.md「API 一覧」のうち本機能の分を書く。エラーの形と�
 
 ## 実装の配置
 
-| 処理 | 層 | 実装先ファイル |
-| --- | --- | --- |
-| 状態の移り変わり、届ける規則、回答の文字列の組み立て | ドメイン | `src/server/modules/conversation/domain/` と `src/runner/modules/conversation/domain/` (共有する純粋な関数は `src/shared/conversation/`) |
-| 会話を始める → conversations、worktrees | ユースケース | `src/server/modules/conversation/usecase/start-conversation.ts` |
-| 指示を送る・預かった指示を直す・取り消す → queued_instructions、stock_items と drafts (取り消しで戻す) | ユースケース | `src/server/modules/conversation/usecase/send-message.ts`、`edit-queue.ts` |
-| 閉じた会話の開き直し (指示の送信、回答をまとめて送る、再開を、ランナーが受け付けたあとに呼ぶ) | ユースケース | `src/server/modules/conversation/usecase/reopen.ts` (`features/conversation-lifecycle.md`) |
-| 書きかけの保存 → drafts | ユースケース | `src/server/modules/conversation/usecase/save-draft.ts` |
-| 送る前の回答の保存 → pending_answers。回答の送信をランナーへ渡す | ユースケース | `src/server/modules/conversation/usecase/answers.ts` |
-| 画像の保存 | ユースケース | `src/server/modules/conversation/usecase/upload-image.ts` |
-| 画像の読み出し (`GET /api/conversations/:id/images/:imageId`) | ユースケース | `src/server/modules/conversation/usecase/read-image.ts` (新しく作る) |
-| 画像の読み出しのルート | API ハンドラ | `src/server/modules/conversation/adapter/http.ts` |
-| 画像のファイルを読む口 (`ImageStorage` に読み出しを足す) と、その実物 | ドメインの Port とインフラ | `src/server/modules/conversation/domain/ports.ts`、`src/server/modules/conversation/adapter/dependencies.ts` |
-| ツールの結果の画像の取り出し (SDK の結果のブロックから)、`AgentOutput` の型 | インフラとドメイン | `src/runner/modules/conversation/adapter/sdk-message-mapping.ts`、`src/runner/modules/conversation/domain/agent-port.ts` |
-| ツールの結果の画像の保存と記録 → conversation_events (`tool_result`) | ユースケース | `src/runner/modules/conversation/usecase/runtime.ts` |
-| 画像を書く口 (Port に書き込みを足す) と、その実物 | ドメインの Port とインフラ | `src/runner/modules/conversation/domain/image-port.ts`、`src/runner/modules/conversation/adapter/image-files.ts` |
-| `tool_result` の記録の形 | 共有 | `src/shared/events.ts` |
-| 偽物の台本の画像付きの結果 | インフラ | `src/shared/agent-script.ts`、`src/runner/modules/conversation/adapter/scripted-agent.ts` |
-| ツールの結果の画像の行 | UI | `src/front/lib/conversation/lines.ts` |
-| ツールの結果の画像の表示 (`src/front/pages/issue/pr-images.ts` と同じ作り) と、会話の画面への組み込み | UI | `src/front/pages/conversation/tool-images.ts` (新しく作る)、`src/front/pages/conversation/ConversationPage.tsx` |
-| 画像を新しいタブで開く口 (ほかの機能と同じ `openExternal` を会話のセッションに渡す) | UI | `src/front/main.tsx`、`src/front/lib/conversation/session.ts` |
-| Ctrl+v のクリップボードの読み取り、入力欄の縮小の表示 | UI | `src/front/buffer/PromptEditor.tsx`、`src/front/buffer/clipboard.ts`、`src/front/buffer/controller.ts`、`src/front/lib/browser.ts` |
-| 画像の段のキー (選ぶ、`d` で外す、Enter で開く) と `:images clear` (開いている入力欄の画像に効かせる) | UI | `src/front/buffer/PromptEditor.tsx`、`src/front/buffer/controller.ts`、`src/front/lib/conversation/session.ts` |
-| 割り当ての `prompt-images` の文脈と既定のキー | UI | `src/front/buffer/keymap/registry.ts`、`src/front/buffer/keymap/defaults.ts` |
-| API のハンドラ | API ハンドラ | `src/server/modules/conversation/adapter/http.ts` |
-| テーブルの読み書き | インフラ (Repository) | `src/server/modules/conversation/adapter/repository.ts` |
-| 会話の実行 (開く、届ける、預かった指示を届ける、止める、再開する) → conversations、conversation_events、queued_instructions、stock_items (`sent_seq`) | ユースケース | `features/runtime.md`「実装の配置」の `src/runner/modules/conversation/usecase/*.ts` に足す (ファイルは同書が正本) |
-| issue の会話へ届ける前の `flow` の判定の呼び出し | ユースケース | 上のユースケースの送信と再開から `src/runner/modules/flow/usecase/reject-design.ts`、`impl-instruction.ts`、`retry-stage-worktree.ts` を呼ぶ |
-| 質問と許可の確認の保留、回答の受け渡し → questions、pending_answers (削除)、conversation_events | ユースケース | `features/runtime.md`「実装の配置」の回答と許可のユースケースに足す |
-| 利用枠の戻りを待つタイマー (自動フローの会話は一時停止を `flow` に問う)、再起動のあとの状態の付け直し | ユースケース | `features/runtime.md`「実装の配置」の `usage-limit-timer.ts` と `recover.ts` に足す |
-| スキルとコマンドの一覧の記憶 | インフラ | `src/runner/modules/conversation/adapter/command-cache.ts` |
-| 会話の画面、入力欄、質問の区画、届く前の指示の行 | UI | `src/front/pages/conversation/`、`src/front/components/conversation/` |
-| 書きかけの同期と未送信の扱い | UI | `src/front/lib/conversation/draft-sync.ts` |
+| 処理 | 層 | 実装先ファイル | 作る / 足す |
+| --- | --- | --- | --- |
+| 状態の移り変わり、届ける規則、回答の文字列の組み立て (共有する純粋な関数は `src/shared/conversation/` に置く) | ドメイン | `src/runner/modules/conversation/domain/run-state.ts`、`src/runner/modules/conversation/domain/stop-reason.ts`、`src/server/modules/conversation/domain/lifecycle.ts`、`src/shared/conversation/answers.ts` | 足す |
+| 会話を始める → conversations、worktrees | ユースケース | `src/server/modules/conversation/usecase/start-conversation.ts` | 足す |
+| 指示を送る・預かった指示を直す・取り消す → queued_instructions、stock_items と drafts (取り消しで戻す) | ユースケース | `src/server/modules/conversation/usecase/send-message.ts`、`src/server/modules/conversation/usecase/edit-queue.ts` | 足す |
+| 閉じた会話の開き直し (指示の送信、回答をまとめて送る、再開を、ランナーが受け付けたあとに呼ぶ。`features/conversation-lifecycle.md`) | ユースケース | `src/server/modules/conversation/usecase/reopen.ts` | 足す |
+| 書きかけの保存 → drafts | ユースケース | `src/server/modules/conversation/usecase/save-draft.ts` | 足す |
+| 送る前の回答の保存 → pending_answers。回答の送信をランナーへ渡す | ユースケース | `src/server/modules/conversation/usecase/answers.ts` | 足す |
+| 画像の保存 | ユースケース | `src/server/modules/conversation/usecase/upload-image.ts` | 足す |
+| 画像の読み出し (`GET /api/conversations/:id/images/:imageId`) | ユースケース | `src/server/modules/conversation/usecase/read-image.ts` | 作る |
+| 画像の読み出しのルート | API ハンドラ | `src/server/modules/conversation/adapter/http.ts` | 足す |
+| 画像のファイルを読む口 (`ImageStorage` に読み出しを足す) と、その実物 | ドメインの Port とインフラ | `src/server/modules/conversation/domain/ports.ts`、`src/server/modules/conversation/adapter/dependencies.ts` | 足す |
+| ツールの結果の画像の取り出し (SDK の結果のブロックから)、`AgentOutput` の型 | インフラとドメイン | `src/runner/modules/conversation/adapter/sdk-message-mapping.ts`、`src/runner/modules/conversation/domain/agent-port.ts` | 足す |
+| ツールの結果の画像の保存と記録 → conversation_events (`tool_result`) | ユースケース | `src/runner/modules/conversation/usecase/runtime.ts` | 足す |
+| 画像を書く口 (Port に書き込みを足す) と、その実物 | ドメインの Port とインフラ | `src/runner/modules/conversation/domain/image-port.ts`、`src/runner/modules/conversation/adapter/image-files.ts` | 足す |
+| `tool_result` の記録の形 | 共有 | `src/shared/events.ts` | 足す |
+| 偽物の台本の画像付きの結果 | インフラ | `src/shared/agent-script.ts`、`src/runner/modules/conversation/adapter/scripted-agent.ts` | 足す |
+| ツールの結果の画像の行 | UI | `src/front/lib/conversation/lines.ts` | 足す |
+| ツールの結果の画像の表示 (`src/front/pages/issue/pr-images.ts` と同じ作り) | UI | `src/front/pages/conversation/tool-images.ts` | 作る |
+| ツールの結果の画像の表示を会話の画面に組み込む | UI | `src/front/pages/conversation/ConversationPage.tsx` | 足す |
+| 画像を新しいタブで開く口 (ほかの機能と同じ `openExternal` を会話のセッションに渡す) | UI | `src/front/main.tsx`、`src/front/lib/conversation/session.ts` | 足す |
+| Ctrl+v のクリップボードの読み取り、入力欄の縮小の表示 | UI | `src/front/buffer/PromptEditor.tsx`、`src/front/buffer/clipboard.ts`、`src/front/buffer/controller.ts`、`src/front/lib/browser.ts` | 足す |
+| 画像の段のキー (選ぶ、`d` で外す、Enter で開く) と `:images clear` (開いている入力欄の画像に効かせる) | UI | `src/front/buffer/PromptEditor.tsx`、`src/front/buffer/controller.ts`、`src/front/lib/conversation/session.ts` | 足す |
+| 割り当ての `prompt-images` の文脈と既定のキー | UI | `src/front/buffer/keymap/registry.ts`、`src/front/buffer/keymap/defaults.ts` | 足す |
+| API のハンドラ | API ハンドラ | `src/server/modules/conversation/adapter/http.ts` | 足す |
+| テーブルの読み書き | インフラ (Repository) | `src/server/modules/conversation/adapter/repository.ts` | 足す |
+| 会話の実行 (開く、届ける、預かった指示を届ける、止める、再開する) → conversations、conversation_events、queued_instructions、stock_items (`sent_seq`) | ユースケース | `src/runner/modules/conversation/usecase/start.ts`、`src/runner/modules/conversation/usecase/send.ts`、`src/runner/modules/conversation/usecase/deliver-queue.ts`、`src/runner/modules/conversation/usecase/stop.ts`、`src/runner/modules/conversation/usecase/resume.ts` | 足す |
+| issue の会話へ届ける前の `flow` の判定の呼び出し (上のユースケースの送信と再開から呼ぶ) | ユースケース | `src/runner/modules/flow/usecase/reject-design.ts`、`src/runner/modules/flow/usecase/impl-instruction.ts`、`src/runner/modules/flow/usecase/retry-stage-worktree.ts` | 足す |
+| 質問と許可の確認の保留、回答の受け渡し → questions、pending_answers (削除)、conversation_events | ユースケース | `src/runner/modules/conversation/usecase/answers.ts`、`src/runner/modules/conversation/usecase/permissions.ts` | 足す |
+| 利用枠の戻りを待つタイマー (自動フローの会話は一時停止を `flow` に問う)、再起動のあとの状態の付け直し | ユースケース | `src/runner/modules/conversation/usecase/usage-limit-timer.ts`、`src/runner/modules/conversation/usecase/recover.ts` | 足す |
+| スキルとコマンドの一覧の記憶 | インフラ | `src/runner/modules/conversation/adapter/command-cache.ts` | 足す |
+| 会話の画面、入力欄、質問の区画、届く前の指示の行 | UI | `src/front/pages/conversation/ConversationPage.tsx`、`src/front/components/conversation/ConversationSwitch.tsx`、`src/front/lib/conversation/lines.ts` | 足す |
+| 入力欄の ↑ と ↓ で届く前の指示を選んで直す、直した指示をすぐに届ける、指示を直すあいだ書きかけを脇に置く (「届く前の指示を入力欄で直す」) | UI | `src/front/lib/conversation/session.ts`、`src/front/lib/conversation/keymap.ts` | 足す |
+| 書きかけの同期と未送信の扱い | UI | `src/front/lib/conversation/draft-sync.ts` | 足す |
 
 ## エッジケースの決定
 
 1. 空・最小データ: 指示を送っていない会話は、本文に「i で指示を書いて送ると、AI が作業を始めます。」の 1 行だけを出す。文も画像も無い送信は、預かった指示が無ければ送らず、入力欄を開いたままにする
 2. 上限・境界値: 画像は 1 枚 5 MB、1 通に 20 枚まで。ツールの結果の画像も 1 枚 5 MB、1 件の結果に 20 枚までを保存し、超えた分は保存できなかった画像として数える。書きかけと指示の文は 100,000 文字まで。差分は 25 行を超えると畳む。イベントの読み込みは 1 回 2,000 件で、会話の長さに上限は設けない
-3. エラー時に利用者へ見えるもの: 送信・保存・回答・停止の失敗は、`message` をエラーのお知らせに出す。Ctrl+v でクリップボードを読めないときは、理由をお知らせに出す (「貼り付けた画像」)。ツールの結果の画像を保存できなくても番は止めず、会話に保存できなかった件数の行を出し、ログに理由を残す。送信の失敗では入力欄の中身を残し「未送信」と出す。worktree を作れなかったときは会話を作らず、理由をお知らせに出す
-4. 並行操作・二重実行: 送信の 2 回目は、ランナーが同じ `client_id` で見分けて無視する。届く前の指示の取り消しと配達が重なったら、先に通った方だけが効き、取り消しは 404 になる。止める操作が二重に届いたら 2 回目は 409 にする。2 つの端末で回答を保存したら後から届いた方を残す。書きかけは後から書いた方を残す。2 つの端末で貼った画像を外したときも同じである。同じ会話を動かす実行は 1 つだけで、ランナーは会話ごとに操作を順に処理する
+3. エラー時に利用者へ見えるもの: 送信・保存・回答・停止の失敗は、`message` をエラーのお知らせに出す。Ctrl+v でクリップボードを読めないときは、理由をお知らせに出す (「貼り付けた画像」)。ツールの結果の画像を保存できなくても番は止めず、会話に保存できなかった件数の行を出し、ログに理由を残す。送信の失敗では入力欄の中身を残し「未送信」と出す。届く前の指示を直した内容を保存できなかったときは、404 を除いて、その指示に留まる (「届く前の指示を入力欄で直す」)。worktree を作れなかったときは会話を作らず、理由をお知らせに出す
+4. 並行操作・二重実行: 送信の 2 回目は、ランナーが同じ `client_id` で見分けて無視する。届く前の指示の取り消しと配達が重なったら、先に通った方だけが効き、取り消しは 404 になる。直している指示が先に届くか取り消されたら、書きかけに戻る (「届く前の指示を入力欄で直す」)。止める操作が二重に届いたら 2 回目は 409 にする。2 つの端末で回答を保存したら後から届いた方を残す。書きかけは後から書いた方を残す。2 つの端末で貼った画像を外したときも同じである。同じ会話を動かす実行は 1 つだけで、ランナーは会話ごとに操作を順に処理する
 5. 再表示時の整合: 画面を開くたびに、会話の状態とイベントを API で読み直す。配信が途切れたら、覚えている最後の `seq` から読み直す。書きかけ・届く前の指示・送る前の回答は、サーバーの値で表示する
-6. 表示の寿命: 「未送信」の表示は、送信に成功するか入力欄を空にすると消える。「✓ 選んだ (まだ送っていない)」は送るか AI が次の応答を始めると消える。止まった理由の行は会話の記録として残る。書きかけの区画は、その発言の記録か番の終わりが届くと消える。置き換えのお知らせは 4 秒で消える
-7. 送る前のデータ: 書きかけ・届く前の指示・送る前の回答はサーバーに置き、送るか開発者が消すまで残す (P1)。会話を閉じても残る (BR-097)。送る前の回答は AI が次の応答を始めると消える。届く前の指示を取り消すと、ストックか書きかけに戻る
+6. 表示の寿命: 「未送信」の表示は、送信に成功するか入力欄を空にすると消える。「✓ 選んだ (まだ送っていない)」は送るか AI が次の応答を始めると消える。止まった理由の行は会話の記録として残る。書きかけの区画は、その発言の記録か番の終わりが届くと消える。置き換えのお知らせは 4 秒で消える。欄の名前「預けた指示を直す (k / n 件目)」は、書きかけに戻るか入力欄を閉じると消える
+7. 送る前のデータ: 書きかけ・届く前の指示・送る前の回答はサーバーに置き、送るか開発者が消すまで残す (P1)。会話を閉じても残る (BR-097)。送る前の回答は AI が次の応答を始めると消える。届く前の指示を取り消すと、ストックか書きかけに戻る。指示を直しているあいだも、書きかけはサーバーに残ったままで、入力欄の内容を書きかけとして保存しない
 8. 状態の移り変わり: 「状態と止まった理由」の表のとおり。止まった会話に指示を送ると `working` に移る。再開は `stopped` (`restarted`)・`failed`・`usage_limited` からだけできる
 9. 自動で進むこと: 番が正常に終わったときの預かった指示の配達と、利用枠が戻ったときの再開だけを自動で行う。自動フローの会話は、一時停止のあいだと、その段階を自動で処理する段階から外しているあいだは、枠が戻っても再開しない。失敗の再開、未送信の送信、止めたあとの預かった指示の配達は自動では行わない (P2)
 10. 端末と画面をまたぐこと: 書きかけ・届く前の指示・送る前の回答・会話の状態は、サーバーの値をどの端末でも同じに見せる。入力欄が開いているか、カーソル、差分の畳みの開閉は、タブごとに持つ (P3)。貼った画像は書きかけと一緒にどの端末でも同じに見え、縮小の番号は書きかけの画像の並びで決まる
-11. 並びと数え方: 会話の行は `seq` の順。届く前の指示は書いた順で、1 通にまとめるときもこの順。作業中の工程の経過は `features/work-monitor.md` の起点から数える。「回答をまとめて送る (n / m 件)」の n は答えた質問の数、m は質問の数。貼った画像の番号は貼った順に 1 から数え、ツールの結果の画像の「<k> / <n>」は結果の中の画像の順に数える
+11. 並びと数え方: 会話の行は `seq` の順。届く前の指示は書いた順で、1 通にまとめるときもこの順。入力欄の ↑ は新しい指示から古い指示へたどり、k は古い方から数える。作業中の工程の経過は `features/work-monitor.md` の起点から数える。「回答をまとめて送る (n / m 件)」の n は答えた質問の数、m は質問の数。貼った画像の番号は貼った順に 1 から数え、ツールの結果の画像の「<k> / <n>」は結果の中の画像の順に数える
 
 ## テスト方針
 
@@ -573,6 +616,9 @@ DESIGN.md「API 一覧」のうち本機能の分を書く。エラーの形と�
 | （US-015）AI が作業中に割り込みを選んで指示を送ると、AI が作業を止め、新しい指示がすぐに届く | 結合 |
 | （US-015）届く前の指示があるときに割り込みで指示を送ると、届く前の指示が新しい指示の前に付いて一緒に届く | 結合 |
 | （US-015）届く前の指示があるときに AI を止めると、その指示は届かずに残り、編集、取り消し、送信ができる | 結合 |
+| （US-015）入力欄で ↑ を押すと、届く前の指示を新しいものから順に呼び出して直せ、↓ で書きかけに戻ると、書きかけが元のまま残っている | 単体 |
+| （US-015）入力欄で Ctrl+Enter を押すと、Insert モードのままでも送れ、AI が作業中なら AI を止めてすぐに届く | 単体 |
+| （US-015）AI が作業中に、↑ で呼び出した届く前の指示を直して Ctrl+Enter を押すと、AI が止まり、直した内容で届く前の指示がすぐに届く | E2E |
 | （US-017）AI が作業中に画面を閉じても AI は作業を続け、開き直すと続きが表示される | 結合 |
 | （US-064）入力の途中で別の会話へ切り替えて戻ると、書きかけの入力が残っている | 結合 |
 | （US-032）利用枠切れか API のエラーで AI が止まると、理由が表示されて判断待ちになり、再開を選ぶと続きから動く | 結合 |
@@ -593,6 +639,7 @@ DESIGN.md「API 一覧」のうち本機能の分を書く。エラーの形と�
 - （US-040）の結合のテストは、`/dev-spec` で始まる文がそのまま偽物に届き、実行の設定がユーザー設定を読み込む形であることを確かめる
 - Ctrl+v の E2E は、ページを開く前にプラットフォームの名前を macOS に差し替え、アプリがクリップボードを読む経路を通す。ブラウザにクリップボードの読み取りを許可し、画像をクリップボードに入れておく。入力欄で Ctrl+v を押すと、画像を読み込んだ縮小と番号 1 が出て、送ると発言に「画像 1 件」が出るまでを通す。macOS の案内の単体のテストは、クリップボードを読めない状態とプラットフォームの名前を偽物にして確かめる
 - （US-014）の画像の結合のテストは、偽物の台本で画像付きのツールの結果を流し、画像のファイルが保存され、記録に画像の ID が入り、画像の API でそのバイト列が返ることを確かめる。画像の行と Enter で開く URL は、記録の見本から行を組み立てる単体のテストで確かめる
+- （US-015）の ↑ と Ctrl+Enter の E2E は、偽物の台本で作業を続けさせたまま指示を 2 件預ける。入力欄に書きかけを書いてから ↑ で 2 件目を呼び出して直し、Ctrl+Enter を押す。偽物が受け取った 1 通が、1 件目と直した 2 件目を書いた順に含むことと、そのあと i で開いた入力欄に書きかけの文が出ることを確かめる
 - （US-024）の E2E は、偽物の台本で質問を 2 問出させ、キーだけで会話を始め、指示を送り、2 問に答えて送り、AI の続きの発言が出るまでを通す
 
 E2E 対象動線: （US-024）会話を始めてから指示を送り、質問に答えるまでを、Vim と同じ操作感のキーボード操作だけで行える
@@ -600,3 +647,5 @@ E2E 対象動線: （US-024）会話を始めてから指示を送り、質問�
 E2E 対象動線: （US-016）別のタブで回答を減らしたあと、確認時の回答では送れず、最新の回答を見て確認し直すと AI に届く
 
 E2E 対象動線: （US-047）入力欄で Ctrl+v を押すと、クリップボードの画像が添付され、入力欄に縮小が番号付きで並ぶ
+
+E2E 対象動線: （US-015）AI が作業中に、↑ で呼び出した届く前の指示を直して Ctrl+Enter を押すと、AI が止まり、直した内容で届く前の指示がすぐに届く

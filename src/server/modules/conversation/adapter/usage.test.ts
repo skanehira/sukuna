@@ -88,10 +88,6 @@ function turn(conversationId: string, seq: number, createdAt: number, input: num
 function request() {
   return createApp({
     build: "test",
-    resolveIdentity: async () => ({
-      allowed: true,
-      identity: { login: "tester", device: "local" },
-    }),
     usage: createUsageDependencies(
       () => database.db,
       () => now,

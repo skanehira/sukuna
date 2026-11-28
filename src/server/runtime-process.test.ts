@@ -25,7 +25,6 @@ function startProcess(home: string, role: "runner" | "server") {
       ...process.env,
       NODE_ENV: "development",
       SUKUNA_HOME: home,
-      SUKUNA_DEV_IDENTITY: "dev@example.com",
       SUKUNA_RUNNER_SOCKET: join(home, "runner.sock"),
       SUKUNA_AGENT: "fake",
       SUKUNA_AGENT_SCRIPT: join(home, "agent.json"),

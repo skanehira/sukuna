@@ -4,7 +4,6 @@ import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
-import { ok } from "neverthrow";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import WebSocket from "ws";
 import {
@@ -23,9 +22,8 @@ import {
 } from "../../../../shared/settings/restore-schema";
 import { createApp } from "../../../app";
 import { attachUpgradeHandler } from "../../../runtime";
+import { restrictNetworkAccess } from "../../../network-access";
 import { WsHub } from "../../../ws-hub";
-import { createClockFake, createTailscaleFake } from "../../identity/test-support";
-import { createResolveIdentity } from "../../identity/usecase/resolve-identity";
 import { createSettingsDependencies } from "./dependencies";
 
 const keymap = {
@@ -56,23 +54,9 @@ describe("設定と配信", () => {
       () => database.close(),
     );
     const hub = new WsHub(database.sqlite);
-    const tailscale = createTailscaleFake({
-      whois: async ({ address }) =>
-        ok({
-          loginName: address === "100.64.0.2" ? "dev@example.com" : "other@example.com",
-          deviceName: "test",
-        }),
-    });
-    const resolve = createResolveIdentity({
-      login: "dev@example.com",
-      devIdentity: undefined,
-      tailscale: tailscale.api,
-      clock: createClockFake(),
-    });
     const app = createApp({
       build: "settings-test",
       restoreGeneration,
-      resolveIdentity: resolve,
       settings: createSettingsDependencies(
         () => database.db,
         home,
@@ -84,14 +68,16 @@ describe("設定と配信", () => {
       server.on("connection", (socket) => {
         Object.defineProperty(socket, "remoteAddress", { value: address });
       });
-      attachUpgradeHandler(server, { resolve, hub: () => hub });
+      restrictNetworkAccess(server);
+      attachUpgradeHandler(server, { hub: () => hub });
       server.listen(0, "127.0.0.1");
       await once(server, "listening");
       cleanup.push(() => close(server));
       return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     };
     const owner = await serve("100.64.0.2");
-    const other = await serve("100.64.0.3");
+    const peer = await serve("100.64.0.3");
+    const lan = await serve("192.168.0.3");
     const connect = (url: string) => {
       const ws = new WebSocket(url.replace(/^http/, "ws") + "/ws");
       cleanup.push(() => ws.terminate());
@@ -112,7 +98,7 @@ describe("設定と配信", () => {
         },
         body: JSON.stringify(body),
       });
-    return { home, database, hub, tailscale, owner, other, connect, read, save };
+    return { home, database, hub, owner, peer, lan, connect, read, save };
   }
 
   it("初期値と、保存済み設定・稼働中の件数・新しい順のバックアップ・公開鍵を返す", async () => {
@@ -261,7 +247,7 @@ describe("設定と配信", () => {
     expect(await f.read()).toEqual({ ...initial, keymap });
   });
 
-  it("本物の /ws upgrade で本人には記録を再送し、別の端末の接続には 401 を返す", async () => {
+  it("Tailscale の接続へ記録を再送し、LAN からの HTTP と WebSocket は切断する", async () => {
     const f = await fixture();
     f.database.db
       .insert(conversations)
@@ -273,44 +259,21 @@ describe("設定と配信", () => {
       )
       .run(JSON.stringify({ text: "saved reply" }));
 
-    const allowed = f.connect(f.owner);
-    await once(allowed, "open");
-    const replay = nextMessage(allowed);
-    allowed.send(JSON.stringify({ op: "subscribe", topic: "conversation:c", after: 0 }));
-    await expect(replay).resolves.toMatchObject({
-      topic: "conversation:c",
-      type: "event",
-      payload: { payload: { text: "saved reply" } },
-    });
+    for (const url of [f.owner, f.peer]) {
+      const allowed = f.connect(url);
+      await once(allowed, "open");
+      const replay = nextMessage(allowed);
+      allowed.send(JSON.stringify({ op: "subscribe", topic: "conversation:c", after: 0 }));
+      await expect(replay).resolves.toMatchObject({
+        topic: "conversation:c",
+        type: "event",
+        payload: { payload: { text: "saved reply" } },
+      });
+    }
 
-    const denied = f.connect(f.other);
-    denied.on("error", () => undefined);
-    const messages: unknown[] = [];
-    denied.on("open", () =>
-      denied.send(JSON.stringify({ op: "subscribe", topic: "conversation:c", after: 0 })),
-    );
-    denied.on("message", (message) => messages.push(message));
-    const rejection = new Promise<{ status: number | undefined; body: string }>(
-      (resolve, reject) => {
-        denied.once("unexpected-response", (_request, response) => {
-          response.setEncoding("utf8");
-          let body = "";
-          response.on("data", (chunk: string) => {
-            body += chunk;
-          });
-          response.on("end", () => resolve({ status: response.statusCode, body }));
-        });
-        denied.once("open", () => reject(new Error("本人でない接続が切り替わりました")));
-      },
-    );
-    const response = await rejection;
-    expect(response.status).toBe(401);
-    expect(JSON.parse(response.body)).toMatchObject({ error: { code: "unauthorized" } });
-    expect(messages).toEqual([]);
-    expect(f.tailscale.whoisCalls.map(({ address }) => address)).toEqual([
-      "100.64.0.2",
-      "100.64.0.3",
-    ]);
+    await expect(fetch(f.lan + "/api/settings")).rejects.toThrow();
+    const rejected = f.connect(f.lan);
+    await expect(once(rejected, "open")).rejects.toThrow();
   });
 });
 

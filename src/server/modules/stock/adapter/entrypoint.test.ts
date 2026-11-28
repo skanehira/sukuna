@@ -12,6 +12,7 @@ import { startRunnerApp } from "../../../../runner/app";
 import { ScriptedAgent } from "../../../../runner/modules/conversation/adapter/scripted-agent";
 import { incomingWith } from "../../identity/test-support";
 import { getDatabase, getRunnerLink, getWsHub, initializeRuntime } from "../../../runtime";
+import type { HubClient } from "../../../ws-hub";
 import { stockItemResponseSchema, finishThreadResponseSchema } from "../../../../shared/stock";
 
 it("開発の入口からもストックを保存・配信でき、スレッドの実行を解放して閉じられる", async () => {
@@ -45,8 +46,7 @@ it("開発の入口からもストックを保存・配信でき、スレッド�
     log: () => {},
   });
   await initializeRuntime({ homeDir: home }, { socket: join(home, "runner.sock"), log: () => {} });
-  const previousIdentity = process.env.SUKUNA_DEV_IDENTITY;
-  process.env.SUKUNA_DEV_IDENTITY = "fixture@example.com";
+  let client: HubClient | undefined;
   try {
     const { default: app } = await import("../../../dev");
     const db = getDatabase().sqlite;
@@ -71,7 +71,7 @@ it("開発の入口からもストックを保存・配信でき、スレッド�
     ).run(home);
     const messages: unknown[] = [];
     await new Promise<void>((resolve) => {
-      const client = {
+      client = {
         bufferedAmount: 0,
         close: () => {},
         send: (message: string) => {
@@ -126,8 +126,7 @@ it("開発の入口からもストックを保存・配信でき、スレッド�
       closed_at: result.thread.closedAt,
     });
   } finally {
-    if (previousIdentity === undefined) delete process.env.SUKUNA_DEV_IDENTITY;
-    else process.env.SUKUNA_DEV_IDENTITY = previousIdentity;
+    if (client) getWsHub().remove(client);
     getRunnerLink().stop();
     await runner.shutdown();
     getDatabase().close();

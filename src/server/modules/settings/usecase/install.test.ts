@@ -8,7 +8,6 @@ const config = {
   home: "/data/sukuna",
   userHome: "/home/dev",
   port: 4580,
-  login: "developer@example.com",
   path: "/bin",
 };
 
@@ -47,7 +46,7 @@ it("同じ導入を二回行うと同じplistが登録され、通常更新は�
     files,
     launchd,
     output: (message: string) => trace.push(message),
-    identity: async () => ({ login: config.login, dns: "studio.example.test" }),
+    dnsName: async () => "studio.example.test",
     ready: async () => [],
   };
 
@@ -106,7 +105,7 @@ it("待ち受けを確認できないときは導入と両サービス更新で�
     output: (message: string) => {
       actions.push(message);
     },
-    identity: async () => ({ login: config.login, dns: "studio.example.test" }),
+    dnsName: async () => "studio.example.test",
     ready: async () => ["runner" as const],
   };
   await expect(installApplication(config, deps)).rejects.toThrow("起動を確認");

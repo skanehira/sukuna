@@ -24,7 +24,7 @@ import { createIpcRoutes } from "../../../runner/modules/conversation/adapter/ip
 import { createRunnerAllowMerge } from "../../../runner/modules/flow/adapter/allow-merge-dependencies";
 import { createPrDependencies } from "./adapter/pr-dependencies";
 import { createApp } from "../../app";
-import { incomingWith, createTailscaleFake } from "../identity/test-support";
+import { incomingWith } from "../identity/test-support";
 import type { CommandOptions, CommandResult } from "../../../shared/command";
 export const headSha = "a".repeat(40);
 export const prUrl = "https://github.com/example/review-fixture/pull/128";
@@ -193,12 +193,6 @@ export function prFixture(options: { interruptBusy?: () => Promise<void>; gh?: G
   const app = createApp({
     build: "test",
     pr: deps,
-    identity: {
-      login: "dev",
-      devIdentity: "1",
-      tailscale: createTailscaleFake().api,
-      clock: { now: () => 0 },
-    },
   });
   database.db
     .insert(projects)

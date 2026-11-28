@@ -1,7 +1,7 @@
 import { TERMINAL_CLEANUP_HEADER } from "../../../../shared/ipc";
 import { createServer, type RequestListener, type ServerResponse } from "node:http";
 import { connect, type Socket } from "node:net";
-import { chmodSync, existsSync, unlinkSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, unlinkSync } from "node:fs";
 import { getRequestListener } from "@hono/node-server";
 import type { Hono } from "hono";
 import { acquireLock } from "../../../../shared/db/startup";
@@ -31,6 +31,8 @@ async function bindRunnerSocket(path: string) {
     });
     if (active) throw new Error("別のランナーが動いています。");
     try {
+      if (!lstatSync(path).isSocket())
+        throw new Error("ランナーのソケットのパスに別のファイルがあります。");
       unlinkSync(path);
     } catch (error) {
       if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;

@@ -1,10 +1,6 @@
 import { createApp } from "../server/app";
 import { createLifecycleDependencies } from "../server/modules/conversation/adapter/lifecycle-dependencies";
-import {
-  createClockFake,
-  createTailscaleFake,
-  incomingWith,
-} from "../server/modules/identity/test-support";
+import { incomingWith } from "../server/modules/identity/test-support";
 import { createWorkspaceDependencies } from "../server/modules/workspace/adapter/dependencies";
 import { createTempHome, openMigratedDatabase, removeTempHome } from "../shared/db/test-helpers";
 
@@ -27,12 +23,6 @@ export function createLifecycleSearchFixture() {
     .run();
   const app = createApp({
     build: "test",
-    identity: {
-      login: "test@example.com",
-      devIdentity: "1",
-      tailscale: createTailscaleFake().api,
-      clock: createClockFake(),
-    },
     lifecycle: createLifecycleDependencies({
       database: () => database,
       home,

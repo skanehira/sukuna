@@ -14,7 +14,7 @@ import { createApp } from "../../../server/app";
 import { RunnerLink } from "../../../server/runner-link";
 import { createIssueDependencies } from "../../../server/modules/issue/adapter/dependencies";
 import { createPrDependencies } from "../../../server/modules/flow/adapter/pr-dependencies";
-import { createTailscaleFake, incomingWith } from "../../../server/modules/identity/test-support";
+import { incomingWith } from "../../../server/modules/identity/test-support";
 import type { AgentPort } from "../conversation/domain/agent-port";
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -127,12 +127,6 @@ export async function fixture(options: { failSdkOpen?: boolean } = {}) {
       () => {},
       { now: () => 1000, id: () => "unused" },
     ),
-    identity: {
-      login: "dev",
-      devIdentity: "1",
-      tailscale: createTailscaleFake().api,
-      clock: { now: () => 1000 },
-    },
   });
   const permit = async () => {
     const response = await app.request(

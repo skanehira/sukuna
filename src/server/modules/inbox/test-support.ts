@@ -13,7 +13,7 @@ import {
   issueEvents,
 } from "../../../shared/db/schema";
 import { createApp } from "../../app";
-import { incomingWith, createTailscaleFake } from "../identity/test-support";
+import { incomingWith } from "../identity/test-support";
 import { createInboxRepository } from "./adapter/inbox-repository";
 import type { InboxRow } from "../../../shared/inbox/schema";
 export function inboxFixture() {
@@ -32,12 +32,6 @@ export function inboxFixture() {
       .run();
     app = createApp({
       build: "test",
-      identity: {
-        login: "dev@example.com",
-        devIdentity: "1",
-        tailscale: createTailscaleFake().api,
-        clock: { now: () => 0 },
-      },
       inbox: { repository: createInboxRepository(() => opened.db), resetTime: () => "12:34" },
     });
   });

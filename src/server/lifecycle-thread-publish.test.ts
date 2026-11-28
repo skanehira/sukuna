@@ -10,12 +10,7 @@ import { createTempHome, openMigratedDatabase, removeTempHome } from "../shared/
 import { readEnvironment } from "../shared/env";
 import { serverMessageSchema, type ServerMessage } from "../shared/ws";
 import { createApp } from "./app";
-import {
-  createClockFake,
-  createTailscaleFake,
-  incomingWith,
-} from "./modules/identity/test-support";
-import { createResolveIdentity } from "./modules/identity/usecase/resolve-identity";
+import { incomingWith } from "./modules/identity/test-support";
 import { createStockDependencies } from "./modules/stock/adapter/dependencies";
 import { createWorkspaceAgent } from "./modules/workspace/adapter/worktree-conversation-test-support";
 import { createWorkspaceDependencies } from "./modules/workspace/adapter/dependencies";
@@ -79,15 +74,8 @@ it("既存スレッドだけの削除で、別タブの元会話に参照が消�
       now: () => 1000,
       id: () => "unused",
     });
-    const identity = {
-      login: "test@example.com",
-      devIdentity: "1",
-      tailscale: createTailscaleFake().api,
-      clock: createClockFake(),
-    };
     const app = createApp({
       build: "review",
-      identity,
       lifecycle: getLifecycleDependencies(),
       stock,
     });
@@ -105,7 +93,6 @@ it("既存スレッドだけの削除で、別タブの元会話に参照が消�
       return { status: response.status, body: await response.json() };
     };
     attachUpgradeHandler(websocketHttp, {
-      resolve: createResolveIdentity(identity),
       hub: getWsHub,
     });
     await new Promise<void>((resolve) => websocketHttp.listen(0, "127.0.0.1", resolve));

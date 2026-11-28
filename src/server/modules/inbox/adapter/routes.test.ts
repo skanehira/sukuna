@@ -923,22 +923,6 @@ describe("一覧のHTTP APIとSQLite", () => {
       });
     },
   );
-  it("本人でない接続は全ての一覧APIで既存の認証を通して拒否する", async () => {
-    for (const path of ["/api/inbox", "/api/projects", "/api/projects/p/overview"]) {
-      const response = await f.request(path, "192.168.0.2");
-      expect({ status: response.status, body: await response.json() }).toEqual({
-        status: 401,
-        body: {
-          error: {
-            code: "unauthorized",
-            message:
-              "Tailscale の本人として確認できませんでした。自分のアカウントで Tailscale につないでから、再読み込みしてください。",
-            details: { reason: "identity" },
-          },
-        },
-      });
-    }
-  });
 });
 
 function record(

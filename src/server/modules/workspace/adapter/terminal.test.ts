@@ -31,9 +31,6 @@ import { openMigratedDatabase } from "../../../../shared/db/test-helpers";
 import { createWorktreeActivity } from "../../../../shared/workspace/sqlite-worktree-activity";
 import { createApp } from "../../../app";
 import { createUpgradeHandler } from "../../../runtime";
-import { createTailscaleLocalApi } from "../../identity/adapter/tailscale-local-api";
-import { createUpgradeAuthorizer } from "../../identity/adapter/middleware";
-import { createResolveIdentity } from "../../identity/usecase/resolve-identity";
 import { createPtySessions } from "./pty-session";
 import { activeFixtureJob } from "./terminal-test-helpers";
 import { createWorktreeDependencies } from "./worktree-dependencies";
@@ -195,33 +192,15 @@ describe("ターミナル API と WebSocket", () => {
         return pty;
       },
     });
-    const identity = {
-      login: "owner@example.invalid",
-      devIdentity: "owner@example.invalid",
-      tailscale: createTailscaleLocalApi(),
-      clock: { now: () => 0 },
-    };
     const app = createApp({
       build: "terminal-test",
-      identity,
       worktrees: createWorktreeDependencies(() => database, { terminals: sessions }),
     });
     server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 });
     await once(server, "listening");
     baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const authorize = createUpgradeAuthorizer({
-      resolve: createResolveIdentity({
-        ...identity,
-        get devIdentity() {
-          return allowTerminal ? identity.devIdentity : undefined;
-        },
-      }),
-    });
-    allowTerminal = true;
-    server.on("upgrade", createUpgradeHandler({ authorize, terminals: sessions }));
+    server.on("upgrade", createUpgradeHandler({ terminals: sessions }));
   });
-
-  let allowTerminal: boolean;
 
   afterEach(async () => {
     for (const client of clients ?? []) client.terminate();
@@ -244,19 +223,9 @@ describe("ターミナル API と WebSocket", () => {
     await terminal.wait((frame) => frame.type === "exit");
     const ended = await request(`/api/terminals/${id}`, "HEAD");
     const missing = await request("/api/terminals/missing-id", "HEAD");
-    const anonymous = createApp({
-      build: "test",
-      resolveIdentity: async () => ({ allowed: false, reason: "identity" }),
-      worktrees: createWorktreeDependencies(() => database, { terminals: sessions }),
-    });
-    const denied = await anonymous.request(`/api/terminals/${id}`, { method: "HEAD" });
-    expect([
-      active.status,
-      otherOrigin.status,
-      ended.status,
-      missing.status,
-      denied.status,
-    ]).toEqual([204, 401, 204, 404, 401]);
+    expect([active.status, otherOrigin.status, ended.status, missing.status]).toEqual([
+      204, 401, 204, 404,
+    ]);
     expect(ended.headers.get("cache-control")).toBe("no-store");
     expect(await ended.text()).toBe("");
     expect(sessions.runningId(worktree)).toBe(null);
@@ -543,8 +512,7 @@ describe("ターミナル API と WebSocket", () => {
     });
   });
 
-  it("本人の判定をターミナルの有無より先に通す", async () => {
-    const id = await openId();
+  it("存在しないターミナルの接続は 404 を返す", async () => {
     const denied = async (id: string) => {
       const { socket } = connect(id);
       return await new Promise<number | undefined>((resolve) =>
@@ -556,9 +524,6 @@ describe("ターミナル API と WebSocket", () => {
       );
     };
     expect(await denied("missing")).toBe(404);
-    allowTerminal = false;
-    expect(await denied(id)).toBe(401);
-    expect(await denied("missing")).toBe(401);
   });
 
   it("ターミナルはアプリを開いたオリジンから利用できる", async () => {

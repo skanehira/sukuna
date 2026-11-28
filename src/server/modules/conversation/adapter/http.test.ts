@@ -35,7 +35,7 @@ import { startRunnerApp } from "../../../../runner/app";
 import { createApp } from "../../../app";
 import { RunnerLink, runnerUnavailable } from "../../../runner-link";
 import { WsHub } from "../../../ws-hub";
-import { createClockFake, createTailscaleFake, incomingWith } from "../../identity/test-support";
+import { incomingWith } from "../../identity/test-support";
 import { createConversationDependencies } from "./dependencies";
 
 function deferred() {
@@ -169,12 +169,6 @@ async function fixture(
   });
   const app = createApp({
     build: "test",
-    identity: {
-      login: "test@example.com",
-      devIdentity: "1",
-      tailscale: createTailscaleFake().api,
-      clock: createClockFake(),
-    },
     conversations: deps,
   });
   const request = async <T = unknown>(path: string, method = "GET", input?: unknown) => {

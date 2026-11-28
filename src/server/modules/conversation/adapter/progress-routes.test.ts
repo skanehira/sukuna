@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { createApp } from "../../../app";
-import { createClockFake, createTailscaleFake, incomingWith } from "../../identity/test-support";
+import { incomingWith } from "../../identity/test-support";
 import {
   createTempHome,
   openMigratedDatabase,
@@ -42,12 +42,6 @@ function app(runner?: MessageDependencies["runner"]) {
   return createApp({
     build: "test",
     messages: runner ? { runner, repository: createMessageRepository(database.db) } : undefined,
-    identity: {
-      login: "test@example.com",
-      devIdentity: "1",
-      tailscale: createTailscaleFake().api,
-      clock: createClockFake(),
-    },
     progress: {
       repository: createProgressRepository(database.db),
       timeline: createTimelineFilePort({ configDir: home, sleep: async () => {} }),

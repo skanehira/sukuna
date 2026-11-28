@@ -16,7 +16,7 @@ import {
   getWsHub,
   initializeRuntime,
 } from "../../../runtime";
-import { createClockFake, createTailscaleFake, incomingWith } from "../../identity/test-support";
+import { incomingWith } from "../../identity/test-support";
 import type { DismissNotification } from "../../inbox/domain/push-port";
 import { createWorkspaceAgent } from "../../workspace/adapter/worktree-conversation-test-support";
 
@@ -86,12 +86,6 @@ it("会話の閉鎖と削除は、対象の未取り下げ通知だけを端末�
     addNotice.run("thread-already-dismissed", "thread", 12, 13);
     const app = createApp({
       build: "test",
-      identity: {
-        login: "test@example.com",
-        devIdentity: "1",
-        tailscale: createTailscaleFake().api,
-        clock: createClockFake(),
-      },
       lifecycle: getLifecycleDependencies(),
     });
     const request = (method: string, route: string) =>

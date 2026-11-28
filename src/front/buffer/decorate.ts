@@ -19,6 +19,7 @@ import {
   MENU_NUMBER,
   MENU_START,
   STRONG,
+  TOOL_ELBOW,
   speakerTagClass,
   toneClass,
 } from "./theme";
@@ -34,6 +35,8 @@ const BOUNDARY: ReadonlySet<LineKind> = new Set<LineKind>([
 ]);
 
 const PAD: Partial<Record<LineKind, number>> = { heading: 14, speaker: 4, section: 8 };
+
+const TOOL_RESULT_HEAD = "  ⎿";
 
 const MENU_WIDTHS = [1.4, 17, 13];
 const MENU_SHARE = 76;
@@ -218,6 +221,11 @@ export function buildDecorations(
       ranges.push(
         Decoration.mark({ class: speakerTagClass(band) }).range(docLine.from, docLine.to),
       );
+    }
+
+    if (line.kind === "tool" && line.text.startsWith(TOOL_RESULT_HEAD)) {
+      const elbow = docLine.from + TOOL_RESULT_HEAD.length - 1;
+      ranges.push(Decoration.mark({ class: TOOL_ELBOW }).range(elbow, elbow + 1));
     }
 
     const spans = columnSpans(line);

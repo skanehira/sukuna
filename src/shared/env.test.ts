@@ -23,12 +23,6 @@ describe("起動の環境変数", () => {
       { NODE_ENV: "production", SUKUNA_GH: "/script" },
       "本番では SUKUNA_GH を指定できません。",
     ],
-    ["server", { NODE_ENV: "production" }, "本番では SUKUNA_LOGIN が必要です。"],
-    [
-      "server",
-      { NODE_ENV: "production", SUKUNA_LOGIN: "dev", SUKUNA_DEV_IDENTITY: "dev" },
-      "本番では SUKUNA_DEV_IDENTITY を指定できません。",
-    ],
     [
       "runner",
       { SUKUNA_AGENT: "fake" },
@@ -58,6 +52,12 @@ describe("起動の環境変数", () => {
     });
   });
 
+  it("本番の画面サーバーはログイン名なしで起動できる", () => {
+    expect(
+      readEnvironment("server", { NODE_ENV: "production" }, "/home/test", () => false).isOk(),
+    ).toBe(true);
+  });
+
   it("既定と有効な偽物の設定を読む", () => {
     expect(
       readEnvironment(
@@ -74,8 +74,6 @@ describe("起動の環境変数", () => {
       home: "/home/test/.sukuna",
       socket: "a".repeat(103),
       port: 4580,
-      login: null,
-      devIdentity: null,
       agent: "fake",
       agentScript: "/script",
       ghScript: null,
@@ -84,7 +82,7 @@ describe("起動の環境変数", () => {
     expect(
       readEnvironment(
         "server",
-        { NODE_ENV: "production", SUKUNA_LOGIN: "dev", PORT: "5180" },
+        { NODE_ENV: "production", PORT: "5180" },
         "/home/test",
         () => false,
       )._unsafeUnwrap(),
@@ -92,8 +90,6 @@ describe("起動の環境変数", () => {
       home: "/home/test/.sukuna",
       socket: "/home/test/.sukuna/runner.sock",
       port: 5180,
-      login: "dev",
-      devIdentity: null,
       agent: "real",
       agentScript: null,
       ghScript: null,

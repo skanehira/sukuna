@@ -14,11 +14,7 @@ import { startRunnerApp } from "../../../app";
 import { RunnerLink } from "../../../../server/runner-link";
 import { createApp } from "../../../../server/app";
 import { createMessageRepository } from "../../../../server/modules/conversation/adapter/message-repository";
-import {
-  createClockFake,
-  createTailscaleFake,
-  incomingWith,
-} from "../../../../server/modules/identity/test-support";
+import { incomingWith } from "../../../../server/modules/identity/test-support";
 import type { AgentOutput, AgentSession, OpenParams } from "../domain/agent-port";
 import type { Clock } from "../domain/clock";
 import { ScriptedAgent, turnEnd } from "./scripted-agent";
@@ -112,12 +108,6 @@ async function fixture(clock?: Clock) {
   await expect.poll(() => connected).toBe(true);
   const app = createApp({
     build: "test",
-    identity: {
-      login: "test@example.com",
-      devIdentity: "1",
-      tailscale: createTailscaleFake().api,
-      clock: createClockFake(),
-    },
     messages: { runner: link, repository: createMessageRepository(database.db) },
   });
   const id = (

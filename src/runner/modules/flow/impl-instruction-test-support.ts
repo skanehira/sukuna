@@ -7,7 +7,7 @@ import { git } from "../../../server/modules/flow/design-test-support";
 import { issueFixture } from "../../../server/modules/issue/test-support";
 import { createApp } from "../../../server/app";
 import { createConversationDependencies } from "../../../server/modules/conversation/adapter/dependencies";
-import { incomingWith, createTailscaleFake } from "../../../server/modules/identity/test-support";
+import { incomingWith } from "../../../server/modules/identity/test-support";
 import { createPrDependencies } from "../../../server/modules/flow/adapter/pr-dependencies";
 import { createStockDependencies } from "../../../server/modules/stock/adapter/dependencies";
 import { createWorkspaceDependencies } from "../../../server/modules/workspace/adapter/dependencies";
@@ -65,12 +65,6 @@ export function implementation() {
 function app() {
   return createApp({
     build: "test",
-    identity: {
-      login: "review@example.com",
-      devIdentity: "review",
-      tailscale: createTailscaleFake().api,
-      clock: { now: () => 1_000_000 },
-    },
     conversations: createConversationDependencies({
       sqlite: f.opened.sqlite,
       home: f.home,

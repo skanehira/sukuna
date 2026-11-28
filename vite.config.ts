@@ -4,24 +4,54 @@ import devServer from "@hono/vite-dev-server";
 import { execSync } from "node:child_process";
 import { defineConfig } from "vite-plus";
 import type { Plugin } from "vite";
+import { launchDevRunner } from "./scripts/dev-runner";
+import {
+  allowsRequestAuthority,
+  restrictNetworkAccess,
+  serverHostnames,
+} from "./src/server/network-access";
 
 type RuntimeModule = Pick<
   typeof import("./src/server/runtime"),
-  "initializeRuntime" | "handleUpgrade" | "getPtySessions"
+  "initializeRuntime" | "createRuntimeUpgradeHandler" | "getPtySessions" | "getRunnerLink"
 >;
 
 function webSocketUpgrade(): Plugin {
-  let closeTerminals: (() => Promise<void>) | undefined;
+  let hostnames: ReadonlySet<string> = new Set();
+  let closeDevServices: (() => Promise<void>) | undefined;
   return {
     name: "sukuna:ws-upgrade",
+    async config(_config, { command }) {
+      if (command !== "serve") return;
+      hostnames = await serverHostnames();
+      return { server: { allowedHosts: Array.from(hostnames) } };
+    },
     async configureServer(server) {
       const httpServer = server.httpServer;
       if (httpServer === null) return;
+      restrictNetworkAccess(httpServer);
+      server.middlewares.use((request, response, next) => {
+        if (allowsRequestAuthority(request.headers.host, hostnames)) return next();
+        response.writeHead(403).end("Forbidden");
+      });
       const runtime = (await server.ssrLoadModule("/src/server/runtime.ts")) as RuntimeModule;
       const initialized = await runtime.initializeRuntime();
       if (initialized.isErr()) throw new Error(initialized.error.message);
-      httpServer.on("upgrade", runtime.handleUpgrade);
+      const handleUpgrade = runtime.createRuntimeUpgradeHandler({ hostnames });
+      httpServer.on("upgrade", handleUpgrade);
       const terminals = runtime.getPtySessions();
+      const runnerLink = runtime.getRunnerLink();
+      const runnerStartup = new AbortController();
+      let runnerLaunch: ReturnType<typeof launchDevRunner> | undefined;
+      const startRunner = () => {
+        runnerLaunch = launchDevRunner(
+          server.config.root,
+          runnerLink.socketPath,
+          runnerStartup.signal,
+          (message) => server.config.logger.error(message),
+        );
+      };
+      httpServer.once("listening", startRunner);
       const interrupt = () => {
         void server.close().then(
           () => process.exit(130),
@@ -32,17 +62,20 @@ function webSocketUpgrade(): Plugin {
         );
       };
       process.on("SIGINT", interrupt);
-      closeTerminals = async () => {
-        httpServer.off("upgrade", runtime.handleUpgrade);
+      closeDevServices = async () => {
+        httpServer.off("upgrade", handleUpgrade);
+        httpServer.off("listening", startRunner);
+        runnerStartup.abort();
+        runnerLink.stop();
         try {
-          await terminals.close();
+          await Promise.all([terminals.close(), runnerLaunch?.then((stop) => stop?.())]);
         } finally {
           process.off("SIGINT", interrupt);
         }
       };
     },
     closeServer() {
-      return closeTerminals?.();
+      return closeDevServices?.();
     },
   };
 }
@@ -71,13 +104,13 @@ export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
+    !isTest && webSocketUpgrade(),
     !isTest &&
       devServer({
         entry: "src/server/dev.ts",
         exclude: [/^(?!\/api(\/|$)).*/],
         injectClientScript: false,
       }),
-    !isTest && webSocketUpgrade(),
   ],
 
   environments: {

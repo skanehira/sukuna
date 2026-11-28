@@ -18,7 +18,7 @@ import { ScriptedGh } from "../../../../shared/gh/scripted-gh";
 import { createApp } from "../../../app";
 import { RunnerLink, runnerUnavailable } from "../../../runner-link";
 import { WsHub } from "../../../ws-hub";
-import { createClockFake, createTailscaleFake, incomingWith } from "../../identity/test-support";
+import { incomingWith } from "../../identity/test-support";
 import { createProjectDependencies } from "./project-dependencies";
 import { createWorktreeDependencies } from "./worktree-dependencies";
 import { WorkspaceClock } from "./worktree-conversation-test-support";
@@ -162,12 +162,6 @@ async function fixture(options: { ghExit?: number; ghStderr?: string } = {}) {
       id: () => `p${++projectNumber}`,
     }),
     worktrees: createWorktreeDependencies(() => database, { gh, now: clock.now }),
-    identity: {
-      login: "dev@example.invalid",
-      devIdentity: "1",
-      clock: createClockFake(),
-      tailscale: createTailscaleFake().api,
-    },
   });
   async function request(path: string, method = "GET", body?: unknown) {
     const response = await app.request(

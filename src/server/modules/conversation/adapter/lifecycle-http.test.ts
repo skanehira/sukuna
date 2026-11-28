@@ -19,7 +19,7 @@ import { readEnvironment } from "../../../../shared/env";
 import { closingSummarySchema, lifecycleSearchResponseSchema } from "../../../../shared/lifecycle";
 import { createApp } from "../../../app";
 import { RunnerLink } from "../../../runner-link";
-import { createClockFake, createTailscaleFake, incomingWith } from "../../identity/test-support";
+import { incomingWith } from "../../identity/test-support";
 import { createInboxRepository } from "../../inbox/adapter/inbox-repository";
 import {
   createWorkspaceAgent,
@@ -141,12 +141,6 @@ async function fixture(
   let beforeWithdraw: (() => Promise<void>) | undefined;
   const app = createApp({
     build: "test",
-    identity: {
-      login: "test@example.com",
-      devIdentity: "1",
-      tailscale: createTailscaleFake().api,
-      clock: createClockFake(),
-    },
     conversations: createConversationDependencies({
       sqlite,
       home,

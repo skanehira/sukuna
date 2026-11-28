@@ -47,22 +47,18 @@ async function requireReady(deps: UpdateDependencies, targets: readonly Persiste
 export async function installApplication(
   config: LaunchdPlistConfig,
   deps: UpdateDependencies & {
-    identity(): Promise<{ login: string; dns: string } | null>;
+    dnsName(): Promise<string | null>;
   },
 ): Promise<void> {
   const hash = await deps.files.runnerHash();
   deps.files.prepare();
-  const identity = await deps.identity();
-  if (identity === null) {
-    deps.output("Tailscale のログイン名と MagicDNS を取得できませんでした。");
-  } else if (identity.login !== config.login) {
-    deps.output("指定したログイン名が、この Mac の Tailscale のログイン名と異なります。");
-  }
   for (const service of services) deps.files.writePlist(service, launchdPlist(service, config));
   await replaceServices(deps.launchd, services);
   await requireReady(deps, persistentServices);
   deps.files.writeRunnerHash(hash);
-  if (identity?.dns) deps.output(`http://${identity.dns}:${config.port}`);
+  const dns = await deps.dnsName();
+  if (dns) deps.output("http://" + dns + ":" + config.port);
+  else deps.output("Tailscale の MagicDNS 名を取得できませんでした。");
 }
 
 export async function updateApplication(

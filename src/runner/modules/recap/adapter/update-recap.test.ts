@@ -16,7 +16,6 @@ import {
 } from "../../../../shared/recap/api";
 import { createApp } from "../../../../server/app";
 import { incomingWith } from "../../../../server/modules/identity/test-support";
-import { createTailscaleLocalApi } from "../../../../server/modules/identity/adapter/tailscale-local-api";
 import { createRecapDependencies } from "../../../../server/modules/recap/adapter/dependencies";
 import { RunnerLink } from "../../../../server/runner-link";
 import { startRunnerApp } from "../../../app";
@@ -105,12 +104,6 @@ async function fixture(responses: unknown[], clock?: Clock) {
   });
   const api = createApp({
     build: "test",
-    identity: {
-      login: "dev@example.com",
-      devIdentity: "dev@example.com",
-      clock: { now: () => 0 },
-      tailscale: createTailscaleLocalApi(),
-    },
     recap: createRecapDependencies(
       () => database.db,
       {

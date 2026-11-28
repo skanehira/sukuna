@@ -24,6 +24,7 @@ import type { MessageDependencies } from "./modules/conversation/domain/message-
 import { createMessageHandler } from "./modules/conversation/adapter/message-routes";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
+import { allowsRequestAuthority } from "./network-access";
 import { isReadOnlyHttpMethod, type HealthResponse } from "../shared/api";
 import {
   initialRestoreGeneration,
@@ -32,13 +33,7 @@ import {
   restoreRequestHeader,
   type RestoreGeneration,
 } from "../shared/settings/restore-schema";
-import { createIdentityMiddleware, type IdentityEnv } from "./modules/identity/adapter/middleware";
-import { createMeHandler } from "./modules/identity/adapter/routes";
-import { defaultIdentityOptions, type IdentityOptions } from "./modules/identity/adapter/options";
-import {
-  createResolveIdentity,
-  type ResolveIdentity,
-} from "./modules/identity/usecase/resolve-identity";
+import { createMeHandler } from "./modules/settings/adapter/server-state";
 import { createWorkspaceRoutes } from "./modules/workspace/adapter/http";
 import type { WorkspaceDependencies } from "./modules/workspace/domain/ports";
 
@@ -54,18 +49,15 @@ import type { RecapDependencies } from "./modules/recap/domain/ports";
 import { createSettingsRoutes } from "./modules/settings/adapter/routes";
 import type { SettingsDependencies } from "./modules/settings/domain/ports";
 
-export type { IdentityOptions } from "./modules/identity/adapter/options";
-
 export type AppOptions = {
   projects?: ProjectDependencies;
   githubImport?: ReturnType<typeof createGithubImportDependencies>;
   usage?: UsageDependencies;
   pr?: PrDependencies;
   clientDir?: string;
+  hostnames?: ReadonlySet<string>;
   build: string;
   restoreGeneration?: RestoreGeneration;
-  identity?: IdentityOptions;
-  resolveIdentity?: ResolveIdentity;
   settings?: SettingsDependencies;
   workspace?: WorkspaceDependencies;
   progress?: ProgressDependencies;
@@ -81,22 +73,28 @@ export type AppOptions = {
   recap?: RecapDependencies;
 };
 
-export function createApp(options: AppOptions): Hono<IdentityEnv> {
-  const resolveIdentity =
-    options.resolveIdentity ?? createResolveIdentity(options.identity ?? defaultIdentityOptions());
-  const app = new Hono<IdentityEnv>();
+export function createApp(options: AppOptions): Hono {
+  const app = new Hono();
 
-  app.use("*", createIdentityMiddleware({ resolve: resolveIdentity }));
+  const { hostnames } = options;
+  if (hostnames)
+    app.use("*", async (c, next) =>
+      allowsRequestAuthority(c.req.header("host"), hostnames)
+        ? next()
+        : c.json({ error: { code: "forbidden", message: "このホスト名では開けません。" } }, 403),
+    );
   const restoreGeneration = options.restoreGeneration;
   const currentGeneration = restoreGeneration?.id ?? initialRestoreGeneration;
   app.use("/api/*", async (c, next) => {
+    if (isReadOnlyHttpMethod(c.req.method)) return next();
+    const origin = c.req.header("origin");
+    if (origin !== undefined && origin !== new URL(c.req.url).origin)
+      return c.json(
+        { error: { code: "unauthorized", message: "アプリを開いた画面から接続してください。" } },
+        401,
+      );
     const expected = c.req.header(restoreGenerationCheckHeader);
-    if (
-      isReadOnlyHttpMethod(c.req.method) ||
-      expected === undefined ||
-      expected === currentGeneration
-    )
-      return next();
+    if (expected === undefined || expected === currentGeneration) return next();
     c.header("Cache-Control", "no-store");
     c.header(restoreGenerationHeader, currentGeneration);
     if (restoreGeneration?.requestId) c.header(restoreRequestHeader, restoreGeneration.requestId);

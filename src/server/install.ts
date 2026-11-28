@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { parseArgs } from "node:util";
-import { createTailscaleLocalApi } from "./modules/identity/adapter/tailscale-local-api";
+import { tailscaleDnsName } from "./network-access";
 import { launchdEnvironment } from "./modules/settings/adapter/launchd-environment";
 import { createRestoreFiles } from "./modules/settings/adapter/restore-files";
 import {
@@ -79,15 +79,13 @@ async function main() {
     {
       NODE_ENV: "production",
       PORT: values.port,
-      SUKUNA_LOGIN: values.login,
       SUKUNA_HOME: home,
     },
     userHome,
     () => true,
   );
   if (checked.isErr()) throw new Error(checked.error.message);
-  const { port, login } = checked.value;
-  if (!login) throw new Error("--login に Tailscale のログイン名を指定してください。");
+  const { port } = checked.value;
   await installApplication(
     {
       repository,
@@ -95,7 +93,6 @@ async function main() {
       home,
       userHome,
       port,
-      login,
       path: process.env.PATH ?? "",
       ...(process.env.CLAUDE_CONFIG_DIR === undefined
         ? {}
@@ -105,7 +102,7 @@ async function main() {
       files,
       launchd,
       output: console.log,
-      identity: () => createTailscaleLocalApi().identity(),
+      dnsName: tailscaleDnsName,
       ready: readiness(port),
     },
   );
