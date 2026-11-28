@@ -1,6 +1,10 @@
 import type { LineInfo } from "../../buffer/line";
 import type { Event, Project } from "./types";
 
+const RESULT_HEAD = "  ⎿  ";
+const RESULT_INDENT = "     ";
+const RESULT_ROWS = 3;
+
 function record(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
@@ -118,8 +122,21 @@ export function eventLines(
         }),
       ];
     }
-    case "tool_result":
-      return [line("tool", `⎿ ${event.payload.content.split("\n")[0]}`, { seqLine: 0 })];
+    case "tool_result": {
+      const { content, truncated } = event.payload;
+      const output = content.replace(/\n+$/, "");
+      if (output === "") return [line("tool", `${RESULT_HEAD}(出力なし)`)];
+      const rows = output.split("\n");
+      const shown = rows
+        .slice(0, RESULT_ROWS)
+        .map((text, seqLine) =>
+          line("tool", `${seqLine === 0 ? RESULT_HEAD : RESULT_INDENT}${text}`, { seqLine }),
+        );
+      const rest = rows.length - RESULT_ROWS;
+      return rest > 0
+        ? [...shown, line("tool", `${RESULT_INDENT}… +${rest} 行${truncated ? "以上" : ""}`)]
+        : shown;
+    }
     case "diff": {
       let seqLine = 0;
       const created = (event.payload.content ?? "").split("\n");

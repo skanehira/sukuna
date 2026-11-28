@@ -72,3 +72,37 @@ test.prop([
     text.length > 25 ? expected.slice(0, 10) : expected,
   );
 });
+
+test.prop([
+  fc
+    .array(
+      fc.string().filter((text) => !text.includes("\n")),
+      { minLength: 1, maxLength: 20 },
+    )
+    .filter((text) => text.at(-1) !== ""),
+  fc.boolean(),
+])("ツールの結果は先頭 3 行を字下げして出し、残りの行数を数えて添える", (text, newline) => {
+  const event: Event = {
+    seq: 9,
+    createdAt: 0,
+    type: "tool_result",
+    payload: {
+      tool_use_id: "tool",
+      is_error: false,
+      content: text.join("\n") + (newline ? "\n" : ""),
+      truncated: false,
+      bytes: 0,
+    },
+  };
+  const shown = text.slice(0, 3).map((line, index) => ({
+    kind: "tool",
+    text: `${index === 0 ? "  ⎿  " : "     "}${line}`,
+    seq: 9,
+    seqLine: index,
+  }));
+  expect(eventLines(event, "c1", "/project")).toEqual(
+    text.length > 3
+      ? [...shown, { kind: "tool", text: `     … +${text.length - 3} 行`, seq: 9 }]
+      : shown,
+  );
+});

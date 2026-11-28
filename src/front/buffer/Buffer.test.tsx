@@ -263,6 +263,23 @@ describe("末尾について行く", () => {
   });
 });
 
+describe("ツールの行", () => {
+  it("結果の行の ⎿ だけを 1 マス幅の印で囲み、続きの行と字の頭を揃える", () => {
+    const { view } = mount({
+      lines: [
+        { kind: "tool", text: "● Bash(rg ⎿)" },
+        { kind: "tool", text: "  ⎿  一" },
+        { kind: "tool", text: "     二" },
+      ],
+    });
+    const from = view.state.doc.line(2).from;
+
+    expect(decorations(view.state).filter((item) => item.from !== item.to)).toEqual([
+      { from: from + 2, to: from + 3, class: "cm-tool-elbow" },
+    ]);
+  });
+});
+
 describe("発言の帯と札", () => {
   it("追記で発言が続いても、前の最終行から作り直されて途切れない", async () => {
     const { handle, view } = mount({
