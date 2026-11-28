@@ -1,6 +1,34 @@
 {
   "rules": [
     {
+      "match": "^#6601「設計レビューの一覧確認」を精査してください。",
+      "steps": [
+        {
+          "tool": "mcp__sukuna__report_triage",
+          "input": {
+            "number": 6601,
+            "result": "design",
+            "kind": "enhancement",
+            "summary": "設計へ進む"
+          }
+        },
+        { "end": "success" }
+      ]
+    },
+    {
+      "match": "^#6601「設計レビューの一覧確認」を設計してください。",
+      "steps": [
+        {
+          "shell": "printf '予約の記録を設計する\n' > design.md && git add design.md && git -c user.name='Test' -c user.email='test@example.test' -c commit.gpgsign=false commit -qm design"
+        },
+        {
+          "tool": "mcp__sukuna__report_design",
+          "input": { "number": 6601, "policy": "予約の記録を設計する", "checks": [] }
+        },
+        { "end": "success" }
+      ]
+    },
+    {
       "match": "^E2E performance [0-9]+$",
       "steps": [
         { "stream": { "prefix": "連続出力 ", "count": 300, "interval_ms": 100 } },
