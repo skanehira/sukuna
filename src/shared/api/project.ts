@@ -80,3 +80,10 @@ export type ProjectRegistration = z.infer<typeof projectRegistrationSchema>;
 export type ProjectRegistered = z.infer<typeof projectRegistrationResponseSchema>;
 export type ProjectSettings = z.infer<typeof projectSettingsSchema>;
 export type ProjectPatch = z.infer<typeof projectPatchSchema>;
+
+export const pathCandidatesSchema = z.object({
+  candidates: z.array(z.object({ name: z.string(), text: z.string(), repository: z.boolean() })),
+  truncated: z.boolean(),
+  note: z.string().nullable(),
+});
+export type PathCandidates = z.infer<typeof pathCandidatesSchema>;

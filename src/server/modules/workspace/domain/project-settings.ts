@@ -1,5 +1,6 @@
 import type { Result } from "neverthrow";
 import type { ProjectPatch, ProjectSettings } from "../../../../shared/api/project";
+import type { DirectoryListing } from "./path-candidates";
 
 export type ProjectError = {
   code:
@@ -58,6 +59,7 @@ export type ProjectDependencies = {
   repository: ProjectRepository;
   transaction<T>(operation: () => T): T;
   resolvePath(input: string): Promise<Result<string, ProjectError>>;
+  readDirectory(directory: string, accept: (name: string) => boolean): Promise<DirectoryListing>;
   git: ProjectGit;
   github: {
     inspect(origin: string | null, cwd: string): Promise<{ available: boolean; reason?: string }>;
