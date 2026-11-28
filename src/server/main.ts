@@ -16,12 +16,12 @@ import { fileURLToPath } from "node:url";
 import { readEnvironment } from "../shared/env";
 import { createLogger } from "../shared/log";
 import { createApp } from "./app";
+import { restrictNetworkAccess, serverHostnames } from "./network-access";
 import { buildId } from "./build-id";
 import {
   attachUpgradeHandler,
   getPrDependencies,
   getDatabase,
-  getRuntimeIdentity,
   getProgressDependencies,
   getConversationDependencies,
   getLifecycleDependencies,
@@ -77,14 +77,22 @@ if (initialized.isErr()) {
   log({ level: "error", component: "db.migrate", message: initialized.error.message });
   process.exit(1);
 }
+const hostnames = await serverHostnames();
+const refreshHostnames = setInterval(() => {
+  void serverHostnames().then((latest) => {
+    hostnames.clear();
+    for (const name of latest) hostnames.add(name);
+  });
+}, 30_000);
+refreshHostnames.unref();
 const workspace = createWorkspaceDependencies(() => getDatabase().db);
 const server = serve(
   {
     fetch: createApp({
       clientDir,
+      hostnames,
       build: buildId,
       restoreGeneration: readRestoreGeneration(getDatabase().sqlite),
-      resolveIdentity: getRuntimeIdentity(),
       settings: createSettingsDependencies(
         () => getDatabase().db,
         env.home,
@@ -166,7 +174,8 @@ server.on("error", (error) => {
   log({ level: "error", component: "server", message: "サーバーを起動できませんでした。", error });
   process.exit(1);
 });
-attachUpgradeHandler(server);
+restrictNetworkAccess(server);
+attachUpgradeHandler(server, { hostnames });
 
 function shutdownTerminals() {
   void getPtySessions()

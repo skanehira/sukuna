@@ -13,7 +13,6 @@ import { createIssueDependencies } from "./modules/issue/adapter/dependencies";
 import {
   getPrDependencies,
   getDatabase,
-  getRuntimeIdentity,
   getRunnerLink,
   getWsHub,
   writeRuntimeLog,
@@ -33,7 +32,6 @@ const workspace = createWorkspaceDependencies(() => getDatabase().db);
 export default createApp({
   build: buildId,
   restoreGeneration: readRestoreGeneration(getDatabase().sqlite),
-  resolveIdentity: getRuntimeIdentity(),
   settings: createSettingsDependencies(
     () => getDatabase().db,
     dirname(getDatabase().sqlite.name),

@@ -95,7 +95,6 @@ function devEnvironment(home: string) {
     SHELL: "/bin/sh",
     SUKUNA_HOME: home,
     SUKUNA_RUNNER_SOCKET: join(home, "runner.sock"),
-    SUKUNA_DEV_IDENTITY: "terminal-hmr@example.invalid",
   };
   delete env.VITEST;
   return env;

@@ -13,7 +13,6 @@ import { createApp } from "../../../app";
 import { mapSdkMessage } from "../../../../runner/modules/conversation/adapter/sdk-message-mapping";
 import { outputEvents } from "../../../../runner/modules/conversation/domain/event-mapping";
 import { incomingWith } from "../../identity/test-support";
-import { createTailscaleLocalApi } from "../../identity/adapter/tailscale-local-api";
 import type { SearchClockPort } from "../domain/ports";
 import {
   changesResponseSchema,
@@ -64,12 +63,6 @@ describe("会話のファイル API", () => {
   function request(path: string, clock?: SearchClockPort) {
     const app = createApp({
       build: "test",
-      identity: {
-        login: "dev@example.com",
-        devIdentity: "dev@example.com",
-        clock: { now: () => 0 },
-        tailscale: createTailscaleLocalApi(),
-      },
       workspace: createWorkspaceDependencies(() => database.db, clock),
     });
     return app.request(path, undefined, incomingWith("127.0.0.1", 50000));

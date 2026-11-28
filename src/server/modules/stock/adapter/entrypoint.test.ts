@@ -45,8 +45,6 @@ it("開発の入口からもストックを保存・配信でき、スレッド�
     log: () => {},
   });
   await initializeRuntime({ homeDir: home }, { socket: join(home, "runner.sock"), log: () => {} });
-  const previousIdentity = process.env.SUKUNA_DEV_IDENTITY;
-  process.env.SUKUNA_DEV_IDENTITY = "fixture@example.com";
   try {
     const { default: app } = await import("../../../dev");
     const db = getDatabase().sqlite;
@@ -126,8 +124,6 @@ it("開発の入口からもストックを保存・配信でき、スレッド�
       closed_at: result.thread.closedAt,
     });
   } finally {
-    if (previousIdentity === undefined) delete process.env.SUKUNA_DEV_IDENTITY;
-    else process.env.SUKUNA_DEV_IDENTITY = previousIdentity;
     getRunnerLink().stop();
     await runner.shutdown();
     getDatabase().close();

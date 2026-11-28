@@ -4,22 +4,12 @@ import { join } from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 import { healthResponseSchema } from "../shared/api";
 import { createApp } from "./app";
-import {
-  createClockFake,
-  createTailscaleFake,
-  incomingWith,
-} from "./modules/identity/test-support";
+import { incomingWith } from "./modules/identity/test-support";
 
 function createTestApp(options: { clientDir?: string } = {}) {
   return createApp({
     build: "test-build",
     clientDir: options.clientDir,
-    identity: {
-      login: "dev@example.com",
-      devIdentity: "dev@example.com",
-      tailscale: createTailscaleFake().api,
-      clock: createClockFake(),
-    },
   });
 }
 

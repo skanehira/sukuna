@@ -8,8 +8,6 @@ if [[ -z "$SUKUNA_HOME" ]]; then
   SUKUNA_HOME="$(mktemp -d)"
   cleanup_home="$SUKUNA_HOME"
 fi
-SUKUNA_LOGIN="dev@example.com"
-SUKUNA_DEV_IDENTITY="dev@example.com"
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 SUKUNA_RUNNER_SOCKET="$SUKUNA_HOME/runner.sock"
 SUKUNA_AGENT="fake"
@@ -23,7 +21,7 @@ exec /usr/bin/env -i PATH=/usr/bin:/bin TERM=xterm-256color /bin/sh -i
 TERMINAL_SHELL
 chmod 700 "$SHELL"
 export SHELL
-export SUKUNA_HOME SUKUNA_LOGIN SUKUNA_DEV_IDENTITY SUKUNA_RUNNER_SOCKET
+export SUKUNA_HOME SUKUNA_RUNNER_SOCKET
 export SUKUNA_AGENT SUKUNA_AGENT_SCRIPT SUKUNA_GH CLAUDE_CONFIG_DIR
 
 runner_pid=""

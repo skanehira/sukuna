@@ -67,10 +67,6 @@ function fixture(gh: GhRunner) {
   let nextId = 0;
   const app = createApp({
     build: "test",
-    resolveIdentity: async () => ({
-      allowed: true,
-      identity: { login: "tester", device: "local" },
-    }),
     githubImport: createGithubImportDependencies(() => database.db, gh, {
       now: () => 1000,
       id: () => "imported-" + ++nextId,

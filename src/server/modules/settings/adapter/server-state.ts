@@ -5,17 +5,12 @@ import {
   restoreRequestHeader,
   type RestoreGeneration,
 } from "../../../../shared/settings/restore-schema";
-import type { IdentityEnv } from "./middleware";
 
-export function createMeHandler(
-  build: string,
-  restoreGeneration?: RestoreGeneration,
-): Handler<IdentityEnv> {
+export function createMeHandler(build: string, restoreGeneration?: RestoreGeneration): Handler {
   return (c) => {
-    const identity = c.get("identity");
     const body: MeResponse = {
-      login: identity.login,
-      device: identity.device,
+      login: "",
+      device: "",
       build,
     };
     c.header("Cache-Control", "no-store");

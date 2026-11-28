@@ -557,12 +557,18 @@ describe("設計のAPIとランナー", () => {
     ]);
   });
 
-  it("他者は承認経路に入れない", async () => {
+  it("別オリジンからの承認は拒否する", async () => {
     const tree = await f.prepare();
     const before = f.events();
     expect(
-      (await f.request(`${path}/approve`, "POST", { headCommit: tree.head }, "198.51.100.3"))
-        .status,
+      (
+        await f.request(
+          `${path}/approve`,
+          "POST",
+          { headCommit: tree.head },
+          "https://other.example.invalid",
+        )
+      ).status,
     ).toBe(401);
     expect(f.events()).toEqual(before);
   });

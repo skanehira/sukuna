@@ -17,7 +17,6 @@ import {
   type ConversationDependencies,
   type ConversationWorktrees,
 } from "../domain/ports";
-import type { IdentityEnv } from "../../identity/adapter/middleware";
 import { createMessageHandler } from "./message-routes";
 import { startConversation } from "../usecase/start-conversation";
 import { switchWorkspace } from "../usecase/switch-workspace";
@@ -63,7 +62,7 @@ export function createConversationRoutes(
   deps: ConversationDependencies,
   worktrees?: ConversationWorktrees,
 ) {
-  const app = new Hono<IdentityEnv>();
+  const app = new Hono();
   app.onError((_error, c) =>
     c.json(
       {

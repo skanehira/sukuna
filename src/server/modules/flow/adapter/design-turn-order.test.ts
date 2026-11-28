@@ -17,7 +17,7 @@ import { AsyncQueue } from "../../../../shared/async-queue";
 import { RUNNER_IPC_TIMEOUT_MS } from "../../../../shared/ipc";
 import { reserveProjectActivity } from "../../../../shared/project/sqlite-project-run-activity";
 import { createApp } from "../../../app";
-import { createClockFake, createTailscaleFake, incomingWith } from "../../identity/test-support";
+import { incomingWith } from "../../identity/test-support";
 import { createProgressRepository } from "../../conversation/adapter/progress-repository";
 import { createTimelineFilePort } from "../../conversation/adapter/timeline-file";
 import { designFixture } from "../design-test-support";
@@ -83,12 +83,6 @@ describe("差し戻しの番と受理した指摘", () => {
   const progress = () =>
     createApp({
       build: "review",
-      identity: {
-        login: "dev@example.test",
-        devIdentity: "1",
-        tailscale: createTailscaleFake().api,
-        clock: createClockFake(),
-      },
       progress: {
         repository: createProgressRepository(f.db),
         timeline: createTimelineFilePort({ configDir: f.home, sleep: async () => {} }),

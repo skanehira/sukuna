@@ -11,7 +11,6 @@ import {
 import { openDatabase } from "../../../../shared/db/open";
 import { createApp } from "../../../app";
 import { incomingWith } from "../../identity/test-support";
-import { createTailscaleLocalApi } from "../../identity/adapter/tailscale-local-api";
 import { createRecapDependencies } from "./dependencies";
 import {
   recapResponseSchema,
@@ -80,12 +79,6 @@ describe("会話の直近・目次・決まったこと API", () => {
   function request(path: string, method = "GET", body?: unknown) {
     return createApp({
       build: "test",
-      identity: {
-        login: "dev@example.com",
-        devIdentity: "dev@example.com",
-        clock: { now: () => 0 },
-        tailscale: createTailscaleLocalApi(),
-      },
       recap: deps,
     }).request(
       `/api/conversations/${path}`,

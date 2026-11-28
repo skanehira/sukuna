@@ -10,7 +10,7 @@ import {
 import { readEnvironment } from "../../../../shared/env";
 import { ScriptedGh } from "../../../../shared/gh/scripted-gh";
 import { createApp } from "../../../app";
-import { createClockFake, createTailscaleFake, incomingWith } from "../../identity/test-support";
+import { incomingWith } from "../../identity/test-support";
 import type {
   NotificationPush,
   NotificationPushMessage,
@@ -95,12 +95,6 @@ async function fixture(notificationPush: NotificationPush) {
   const hub = runtime.getWsHub();
   const app = createApp({
     build: "test",
-    identity: {
-      login: "test@example.com",
-      devIdentity: "1",
-      tailscale: createTailscaleFake().api,
-      clock: createClockFake(),
-    },
     lifecycle: runtime.getLifecycleDependencies(),
     conversations: runtime.getConversationDependencies(),
     projects: createProjectDependencies(runtime.getDatabase, {

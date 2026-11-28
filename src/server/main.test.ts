@@ -4,19 +4,7 @@ import { fileURLToPath } from "node:url";
 import { expect, it } from "vite-plus/test";
 import { createTempHome, removeTempHome } from "../shared/db/test-helpers";
 it.each([
-  [{ NODE_ENV: "production" }, "本番では SUKUNA_LOGIN が必要です。"],
-  [
-    {
-      NODE_ENV: "production",
-      SUKUNA_LOGIN: "dev@example.com",
-      SUKUNA_DEV_IDENTITY: "dev@example.com",
-    },
-    "本番では SUKUNA_DEV_IDENTITY を指定できません。",
-  ],
-  [
-    { NODE_ENV: "production", SUKUNA_LOGIN: "dev@example.com", SUKUNA_GH: "/unused.json" },
-    "本番では SUKUNA_GH を指定できません。",
-  ],
+  [{ NODE_ENV: "production", SUKUNA_GH: "/unused.json" }, "本番では SUKUNA_GH を指定できません。"],
   [
     { SUKUNA_RUNNER_SOCKET: "/" + "x".repeat(103) },
     "SUKUNA_RUNNER_SOCKET は 103 バイト以内で指定してください。",

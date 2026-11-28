@@ -5,8 +5,6 @@ export type Environment = {
   home: string;
   socket: string;
   port: number;
-  login: string | null;
-  devIdentity: string | null;
   agent: "fake" | "real";
   agentScript: string | null;
   ghScript: string | null;
@@ -21,15 +19,11 @@ export function readEnvironment(
 ): Result<Environment, { message: string }> {
   const production = env.NODE_ENV === "production";
   const forbidden =
-    role === "runner"
-      ? ["SUKUNA_AGENT", "SUKUNA_AGENT_SCRIPT", "SUKUNA_GH"]
-      : ["SUKUNA_GH", "SUKUNA_DEV_IDENTITY"];
+    role === "runner" ? ["SUKUNA_AGENT", "SUKUNA_AGENT_SCRIPT", "SUKUNA_GH"] : ["SUKUNA_GH"];
   for (const key of forbidden) {
     if (production && env[key] !== undefined)
       return err({ message: `本番では ${key} を指定できません。` });
   }
-  if (role === "server" && production && !env.SUKUNA_LOGIN)
-    return err({ message: "本番では SUKUNA_LOGIN が必要です。" });
   const home = env.SUKUNA_HOME ?? join(userHome, ".sukuna");
   const socket = env.SUKUNA_RUNNER_SOCKET ?? join(home, "runner.sock");
   if (Buffer.byteLength(socket) > 103)
@@ -52,8 +46,6 @@ export function readEnvironment(
     home,
     socket,
     port,
-    login: env.SUKUNA_LOGIN ?? null,
-    devIdentity: env.SUKUNA_DEV_IDENTITY ?? null,
     agent: env.SUKUNA_AGENT === "fake" ? "fake" : "real",
     agentScript: env.SUKUNA_AGENT_SCRIPT ?? null,
     ghScript: env.SUKUNA_GH ?? null,

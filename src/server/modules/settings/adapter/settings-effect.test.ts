@@ -10,7 +10,7 @@ import type { ServerMessage } from "../../../../shared/ws";
 import { createApp } from "../../../app";
 import { createConversationDependencies } from "../../conversation/adapter/dependencies";
 import { git } from "../../flow/design-test-support";
-import { createTailscaleFake, incomingWith } from "../../identity/test-support";
+import { incomingWith } from "../../identity/test-support";
 import { issueFixture } from "../../issue/test-support";
 import { createProjectDependencies } from "../../workspace/adapter/project-dependencies";
 import { createSettingsDependencies } from "./dependencies";
@@ -53,12 +53,6 @@ beforeEach(() => {
   flow.hub.receive(client, { op: "subscribe", topic: "inbox" });
   app = createApp({
     build: "settings-effect",
-    identity: {
-      login: "dev@example.com",
-      devIdentity: "1",
-      tailscale: createTailscaleFake().api,
-      clock: { now: Date.now },
-    },
     settings: createSettingsDependencies(
       () => flow.db,
       cwd,

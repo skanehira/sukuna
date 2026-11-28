@@ -33,11 +33,10 @@ async function startBuiltServer(t: TestContext): Promise<number> {
     env: {
       HOME: home,
       CLAUDE_CONFIG_DIR: join(home, "claude"),
-      NODE_ENV: "test",
+      NODE_ENV: "production",
       PORT: String(port),
       SUKUNA_HOME: home,
       SUKUNA_RUNNER_SOCKET: join(home, "runner.sock"),
-      SUKUNA_DEV_IDENTITY: "built-server@example.invalid",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -109,6 +108,12 @@ await test("ビルド済みサーバーの入口", { timeout: 20_000 }, async (t
     assert.equal(response.status, 200);
     assert.match(response.headers.get("content-type") ?? "", /^application\/json\b/);
     assert.deepEqual(await response.json(), { status: "ok" });
+  });
+
+  await t.test("ログイン設定なしでビルド情報を返す", async () => {
+    const response = await fetch(base + "/api/me", request);
+    assert.equal(response.status, 200);
+    assert.equal(typeof (await response.json()).build, "string");
   });
 
   await t.test("未登録の API は 404 を返す", async () => {

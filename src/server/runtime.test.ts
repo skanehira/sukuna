@@ -40,10 +40,6 @@ describe("attachUpgradeHandler", () => {
       rawSockets.add(socket);
     });
     attachUpgradeHandler(httpServer, {
-      resolve: async () => ({
-        allowed: true,
-        identity: { login: "dev@example.com", device: "local" },
-      }),
       hub: () => undefined,
     });
     server = httpServer;
@@ -54,6 +50,13 @@ describe("attachUpgradeHandler", () => {
     clients.push(accepted);
     expect(await settle(accepted)).toBe("open");
     expect(accepted.readyState).toBe(WebSocket.OPEN);
+
+    const crossOrigin = new WebSocket("ws://127.0.0.1:" + port + "/ws", {
+      origin: "https://other.example.invalid",
+      handshakeTimeout: 500,
+    });
+    clients.push(crossOrigin);
+    expect(await settle(crossOrigin)).toBe("error");
 
     const rejected = new WebSocket(`ws://127.0.0.1:${port}/other`, { handshakeTimeout: 500 });
     clients.push(rejected);
@@ -154,7 +157,6 @@ it("設定ルートと共有スキーマを HMR で読み直しても同じ SQLi
       env: {
         ...process.env,
         SUKUNA_HOME: home,
-        SUKUNA_DEV_IDENTITY: "dev@example.test",
         SUKUNA_RUNNER_SOCKET: home + "/runner.sock",
       },
       timeout: 20_000,

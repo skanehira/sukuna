@@ -5,7 +5,7 @@ import { App } from "./App";
 import { createBrowserController } from "./lib/browser";
 import { createBuildCheck } from "./lib/build-check";
 import { parseRoute } from "./lib/routes";
-import { AuthenticationGuard, createIdentityLoader } from "./shell/AuthenticationGuard";
+import { ServerConnectionGate, createServerStateLoader } from "./shell/ServerConnectionGate";
 import { createNavigation } from "./shell/navigation";
 import { createNotices } from "./shell/notices";
 import { ShellBoundary } from "./shell/ShellBoundary";
@@ -269,18 +269,18 @@ const connection = {
     return () => dispose.forEach((unregister) => unregister());
   },
 };
-const loadIdentity = createIdentityLoader(restoreConnection.readIdentity);
+const loadServerState = createServerStateLoader(restoreConnection.readServerState);
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ShellBoundary onReload={reload}>
-      <AuthenticationGuard load={loadIdentity} onReload={reload}>
-        {(identityRecovery) => (
+      <ServerConnectionGate load={loadServerState} onReload={reload}>
+        {(serverRecovery) => (
           <App
             controller={controller}
             navigation={navigation}
             notices={notices}
-            identityRecovery={identityRecovery}
+            serverRecovery={serverRecovery}
             loadScreen={loadScreen}
             renderTree={(route) => <Tree store={inbox} route={route} />}
             renderRight={(view) =>
@@ -289,7 +289,7 @@ createRoot(document.getElementById("root")!).render(
             connection={connection}
           />
         )}
-      </AuthenticationGuard>
+      </ServerConnectionGate>
     </ShellBoundary>
   </StrictMode>,
 );

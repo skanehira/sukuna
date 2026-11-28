@@ -39,7 +39,7 @@ export function createRestoreConnection({
       reload(response.headers.get(restoreRequestHeader));
     }
   }
-  async function readIdentity(url: string, signal?: AbortSignal): Promise<Response> {
+  async function readServerState(url: string, signal?: AbortSignal): Promise<Response> {
     const response = await fetcher(url, { cache: "no-store", signal });
     if (response.ok && !signal?.aborted) observe(response);
     return response;
@@ -62,13 +62,13 @@ export function createRestoreConnection({
     return response;
   };
   return {
-    readIdentity,
+    readServerState,
     request,
     async verify(
       signal?: AbortSignal,
       onVerified?: (response: Response, signal?: AbortSignal) => Promise<void>,
     ) {
-      const response = await readIdentity("/api/me", signal);
+      const response = await readServerState("/api/me", signal);
       if (!response.ok || reloading || signal?.aborted) return false;
       await onVerified?.(response, signal);
       return !reloading && !signal?.aborted;

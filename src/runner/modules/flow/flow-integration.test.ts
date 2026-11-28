@@ -1,11 +1,7 @@
 import { RunnerLink } from "../../../server/runner-link";
 import { createApp } from "../../../server/app";
 import { createConversationDependencies } from "../../../server/modules/conversation/adapter/dependencies";
-import {
-  createClockFake,
-  createTailscaleFake,
-  incomingWith,
-} from "../../../server/modules/identity/test-support";
+import { incomingWith } from "../../../server/modules/identity/test-support";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { and, eq } from "drizzle-orm";
@@ -879,12 +875,6 @@ it("再試行中に最後の指示が取り消されたら AI を開かない", 
   });
   const server = createApp({
     build: "review",
-    identity: {
-      login: "test@example.com",
-      devIdentity: "1",
-      tailscale: createTailscaleFake().api,
-      clock: createClockFake(),
-    },
     conversations: createConversationDependencies({
       sqlite: f.opened.sqlite,
       home: f.home,

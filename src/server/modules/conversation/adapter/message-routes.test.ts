@@ -12,7 +12,7 @@ import { startRunnerApp } from "../../../../runner/app";
 import { ScriptedAgent } from "../../../../runner/modules/conversation/adapter/scripted-agent";
 import { createApp } from "../../../app";
 import { RunnerLink, runnerUnavailable } from "../../../runner-link";
-import { createClockFake, createTailscaleFake, incomingWith } from "../../identity/test-support";
+import { incomingWith } from "../../identity/test-support";
 import { createMessageRepository } from "./message-repository";
 import { createProgressRepository } from "./progress-repository";
 import { createTimelineFilePort } from "./timeline-file";
@@ -42,12 +42,6 @@ async function fixture() {
   });
   const server = createApp({
     build: "test",
-    identity: {
-      login: "test@example.com",
-      devIdentity: "1",
-      tailscale: createTailscaleFake().api,
-      clock: createClockFake(),
-    },
     messages: {
       runner: {
         call: (method, path, input) => {
@@ -100,19 +94,8 @@ const input = {
   timeline_comments: [],
 };
 
-it("公開送信は本人判定を通し、入力名・由来・画像IDをIPCへ渡す", async () => {
+it("公開送信は入力名・由来・画像IDをIPCへ渡す", async () => {
   const f = await fixture();
-  expect(await f.request(input, "192.168.1.1")).toEqual({
-    status: 401,
-    body: {
-      error: {
-        code: "unauthorized",
-        message:
-          "Tailscale の本人として確認できませんでした。自分のアカウントで Tailscale につないでから、再読み込みしてください。",
-        details: { reason: "identity" },
-      },
-    },
-  });
   const comments = [{ task_id: "a", text: "  本文\n" }];
   expect(
     await f.request({
@@ -443,12 +426,6 @@ it("IPCが成功状態で壊れた受付結果を返したら500にする", asyn
   const f = await fixture();
   const server = createApp({
     build: "test",
-    identity: {
-      login: "test@example.com",
-      devIdentity: "1",
-      tailscale: createTailscaleFake().api,
-      clock: createClockFake(),
-    },
     messages: {
       runner: { call: async () => ok({ status: 200, body: { result: "queued" } }) },
       repository: createMessageRepository(f.database.db),

@@ -36,7 +36,6 @@ import { ScriptedGh } from "../../../../shared/gh/scripted-gh";
 import { worktreeCreatedSchema, worktreeListSchema } from "../../../../shared/api/worktree";
 import { createApp } from "../../../app";
 import { incomingWith } from "../../identity/test-support";
-import { createTailscaleLocalApi } from "../../identity/adapter/tailscale-local-api";
 import { createWorktreeDependencies } from "./worktree-dependencies";
 import { createGitCli, type GitRunner } from "./git-cli";
 
@@ -114,12 +113,6 @@ describe("worktree API", () => {
     });
     const app = createApp({
       build: "test",
-      identity: {
-        login: "dev@example.com",
-        devIdentity: "dev@example.com",
-        clock: { now: () => 0 },
-        tailscale: createTailscaleLocalApi(),
-      },
       worktrees: configure ? configure(deps) : deps,
     });
     return app.request(
@@ -2373,23 +2366,18 @@ describe("worktree API", () => {
     },
   );
 
-  it("本人でない接続は一覧を読む前に拒む", async () => {
+  it("信頼しないホスト名では一覧の処理を行わない", async () => {
     const app = createApp({
       build: "test",
-      identity: {
-        login: "dev@example.com",
-        devIdentity: "dev@example.com",
-        clock: { now: () => 0 },
-        tailscale: createTailscaleLocalApi(),
-      },
+      hostnames: new Set(["macstudio"]),
       worktrees: createWorktreeDependencies(() => database, { gh }),
     });
     const response = await app.request(
       "/api/projects/p/worktrees",
-      undefined,
-      incomingWith("192.0.2.1", 50000),
+      { headers: { host: "other.example.invalid" } },
+      incomingWith("127.0.0.1", 50000),
     );
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(403);
     expect(database.sqlite.prepare("SELECT COUNT(*) AS count FROM worktrees").get()).toEqual({
       count: 0,
     });

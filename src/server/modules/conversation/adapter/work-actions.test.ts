@@ -13,7 +13,7 @@ import { startRunnerApp } from "../../../../runner/app";
 import { ScriptedAgent } from "../../../../runner/modules/conversation/adapter/scripted-agent";
 import { createApp } from "../../../app";
 import { RunnerLink } from "../../../runner-link";
-import { createClockFake, createTailscaleFake, incomingWith } from "../../identity/test-support";
+import { incomingWith } from "../../identity/test-support";
 import { createConversationDependencies } from "./dependencies";
 import { createConversationApi } from "../../../../front/lib/conversation/api";
 import { ConversationSession } from "../../../../front/lib/conversation/session";
@@ -85,12 +85,6 @@ async function fixture() {
   const now = () => ++tick;
   const server = createApp({
     build: "test",
-    identity: {
-      login: "test@example.com",
-      devIdentity: "1",
-      tailscale: createTailscaleFake().api,
-      clock: createClockFake(),
-    },
     progress: {
       repository: createProgressRepository(database.db),
       timeline: createTimelineFilePort({ configDir: home, sleep: async () => {} }),

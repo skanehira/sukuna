@@ -36,7 +36,7 @@ it("再接続先が同じデータベースならそのまま使い、復元さ�
     storage: window.sessionStorage,
     reload,
   });
-  await connection.readIdentity("/api/me");
+  await connection.readServerState("/api/me");
   expect(await connection.verify()).toBe(false);
   expect(await connection.verify()).toBe(true);
   expect(reload).not.toHaveBeenCalled();
@@ -54,7 +54,7 @@ it("復元されたデータベースで開き直すと、会話を開いたと�
     storage,
     reload,
   });
-  await before.readIdentity("/api/me");
+  await before.readServerState("/api/me");
   storage.setItem("sukuna:recap:conversation", "saved");
   storage.setItem("sukuna:positions:v1", "history");
   const after = createRestoreConnection({
@@ -63,7 +63,7 @@ it("復元されたデータベースで開き直すと、会話を開いたと�
     storage,
     reload,
   });
-  await after.readIdentity("/api/me");
+  await after.readServerState("/api/me");
   expect(storage.getItem("sukuna:recap:conversation")).toBeNull();
   expect(storage.getItem("sukuna:positions:v1")).toBe("history");
   expect(reload).not.toHaveBeenCalled();
@@ -89,7 +89,7 @@ it("画面が取得した世代で書き込み、復元先に拒否された書�
     storage: window.sessionStorage,
     reload,
   });
-  await connection.readIdentity("/api/me");
+  await connection.readServerState("/api/me");
   const headers = { "content-type": "application/json" };
   const result = await connection.request("/api/conversations/1/draft", {
     method: "PUT",

@@ -1,10 +1,4 @@
-import { defaultIdentityOptions } from "./modules/identity/adapter/options";
-import { createUpgradeAuthorizer } from "./modules/identity/adapter/middleware";
-import {
-  createResolveIdentity,
-  type ResolveIdentity,
-} from "./modules/identity/usecase/resolve-identity";
-import { deniedMessage, type DeniedReason } from "../shared/denied";
+import { allowsRequestAuthority } from "./network-access";
 import { createLifecycleDependencies } from "./modules/conversation/adapter/lifecycle-dependencies";
 import type { LifecycleDependencies } from "./modules/conversation/domain/lifecycle";
 import { createWorkspaceDependencies } from "./modules/workspace/adapter/dependencies";
@@ -47,17 +41,11 @@ export type UpgradeCapableServer = {
 const WS_PATH = "/ws";
 const TERMINAL_PREFIX = "/ws/terminals/";
 
-function rejectUpgrade(
-  socket: Duplex,
-  status: 401 | 404,
-  message: string,
-  deniedReason?: DeniedReason,
-): void {
+function rejectUpgrade(socket: Duplex, status: 401 | 404, message: string): void {
   const body = JSON.stringify({
     error: {
       code: status === 401 ? "unauthorized" : "not_found",
       message,
-      ...(deniedReason && { details: { reason: deniedReason } }),
     },
   });
   const reason = status === 401 ? "Unauthorized" : "Not Found";
@@ -67,8 +55,8 @@ function rejectUpgrade(
 }
 
 export function createUpgradeHandler(options: {
-  authorize: ReturnType<typeof createUpgradeAuthorizer>;
   terminals: Pick<PtySessions, "find">;
+  hostnames?: ReadonlySet<string>;
   connectHub?: (client: WebSocket) => void;
 }): UpgradeHandler {
   const wss = new WebSocketServer({ noServer: true });
@@ -84,23 +72,10 @@ export function createUpgradeHandler(options: {
     const connectHub = path === WS_PATH ? options.connectHub : undefined;
     const isTerminal = path.startsWith(TERMINAL_PREFIX);
     if (!connectHub && !isTerminal) return;
-    const abandon = () => socket.destroy();
-    socket.once("error", abandon);
-    void (async () => {
-      const decision = await options.authorize(request);
-      if (socket.destroyed || !socket.writable) return;
-      if (!decision.allowed) {
-        rejectUpgrade(
-          socket,
-          401,
-          deniedMessage(decision.reason),
-          connectHub ? decision.reason : undefined,
-        );
-        return;
-      }
-      if (connectHub) {
-        socket.removeListener("error", abandon);
-        wss.handleUpgrade(request, socket, head, connectHub);
+    if (socket.destroyed || !socket.writable) return;
+    try {
+      if (options.hostnames && !allowsRequestAuthority(request.headers.host, options.hostnames)) {
+        socket.destroy();
         return;
       }
       const origin = request.headers.origin;
@@ -112,18 +87,19 @@ export function createUpgradeHandler(options: {
         rejectUpgrade(socket, 401, "アプリを開いた画面から接続してください。");
         return;
       }
+      if (connectHub) {
+        wss.handleUpgrade(request, socket, head, connectHub);
+        return;
+      }
       const terminal = options.terminals.find(path.slice(TERMINAL_PREFIX.length));
       if (!terminal) {
         rejectUpgrade(socket, 404, "ターミナルは終了しています。");
         return;
       }
-      socket.removeListener("error", abandon);
       wss.handleUpgrade(request, socket, head, (client) => connectTerminal(client, terminal));
-    })().catch(() => {
-      if (socket.destroyed || !socket.writable) return;
-      if (connectHub) rejectUpgrade(socket, 401, deniedMessage("unavailable"), "unavailable");
-      else socket.destroy();
-    });
+    } catch {
+      socket.destroy();
+    }
   };
 }
 
@@ -162,32 +138,24 @@ function connectWsHub(client: WebSocket, target?: WsHub): void {
   });
 }
 
-let runtimeIdentity: ResolveIdentity | undefined;
-export function getRuntimeIdentity(): ResolveIdentity {
-  runtimeIdentity ??= createResolveIdentity(defaultIdentityOptions());
-  return runtimeIdentity;
-}
+type UpgradeDependencies = { hub?: () => WsHub | undefined; hostnames?: ReadonlySet<string> };
 
-type UpgradeDependencies = { resolve: ResolveIdentity; hub: () => WsHub | undefined };
-
-function runtimeUpgradeHandler(deps: UpgradeDependencies): UpgradeHandler {
+export function createRuntimeUpgradeHandler({
+  hub: getHub = () => hub,
+  hostnames,
+}: UpgradeDependencies = {}): UpgradeHandler {
   return createUpgradeHandler({
-    authorize: createUpgradeAuthorizer({ resolve: deps.resolve }),
     terminals: terminalSessions,
-    connectHub: (client) => connectWsHub(client, deps.hub()),
+    hostnames,
+    connectHub: (client) => connectWsHub(client, getHub()),
   });
 }
-
-export const handleUpgrade = runtimeUpgradeHandler({
-  resolve: (source) => getRuntimeIdentity()(source),
-  hub: () => hub,
-});
 
 export function attachUpgradeHandler(
   server: UpgradeCapableServer,
   deps?: UpgradeDependencies,
 ): void {
-  server.on("upgrade", deps === undefined ? handleUpgrade : runtimeUpgradeHandler(deps));
+  server.on("upgrade", createRuntimeUpgradeHandler(deps));
 }
 
 let database: OpenedDatabase | undefined;

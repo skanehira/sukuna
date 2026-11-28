@@ -22,7 +22,7 @@ import { ScriptedAgent } from "../../../runner/modules/conversation/adapter/scri
 import { RunnerLink } from "../../runner-link";
 import { createApp } from "../../app";
 import { supplyDesignPrFields } from "../flow/design-test-support";
-import { incomingWith, createTailscaleFake } from "../identity/test-support";
+import { incomingWith } from "../identity/test-support";
 import { createIssueDependencies } from "./adapter/dependencies";
 import { createLogger } from "../../../shared/log";
 
@@ -139,12 +139,6 @@ export function issueFixture(
     });
     app = createApp({
       build: "test",
-      identity: {
-        login: "dev@example.com",
-        devIdentity: "1",
-        tailscale: createTailscaleFake().api,
-        clock: { now: () => time },
-      },
       issues: createIssueDependencies(
         () => opened.db,
         () => link,

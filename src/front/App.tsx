@@ -15,7 +15,7 @@ import { createNavigation } from "./shell/navigation";
 import { Notices, type NoticePort } from "./shell/notices";
 import { ShellBoundary, WindowError } from "./shell/ShellBoundary";
 import { Skeleton } from "./shell/loading";
-import type { IdentityRecovery } from "./shell/AuthenticationGuard";
+import type { ServerRecovery } from "./shell/ServerConnectionGate";
 import type { RightView } from "./buffer/right-window";
 
 const empty: LineInfo[] = [];
@@ -56,7 +56,7 @@ type AppProps = {
   navigation?: NavigationPort;
   connection?: StorePort<boolean>;
   notices?: NoticePort;
-  identityRecovery?: IdentityRecovery;
+  serverRecovery?: ServerRecovery;
   loadScreen?: ScreenLoader;
   main?: ReactNode;
   right?: ReactNode;
@@ -70,7 +70,7 @@ export function App({
   connection = online,
   notices,
   loadScreen,
-  identityRecovery,
+  serverRecovery,
   main,
   right,
   renderRight,
@@ -93,7 +93,7 @@ export function App({
       route={route}
       connected={connected}
       loadScreen={loadScreen}
-      identityRecovery={identityRecovery}
+      serverRecovery={serverRecovery}
       main={main}
       onHome={() => {
         void navigation.navigate("/");
@@ -151,14 +151,14 @@ function MainWindow({
   route,
   connected,
   loadScreen,
-  identityRecovery,
+  serverRecovery,
   main,
   onHome,
   onReload,
 }: {
   route: Route;
   connected: boolean;
-  identityRecovery?: IdentityRecovery;
+  serverRecovery?: ServerRecovery;
   loadScreen?: ScreenLoader;
   main?: ReactNode;
   onHome: () => void;
@@ -198,9 +198,9 @@ function MainWindow({
           ? missing
           : undefined;
   const recovery =
-    !failure && (!connected || networkFailure !== undefined || identityRecovery !== undefined);
+    !failure && (!connected || networkFailure !== undefined || serverRecovery !== undefined);
   const reload = () => {
-    if (identityRecovery) identityRecovery.onReload();
+    if (serverRecovery) serverRecovery.onReload();
     else if (loadScreen) void mutate().catch(() => undefined);
     else onReload();
   };
@@ -208,7 +208,7 @@ function MainWindow({
     <div className="shrink-0 border-t border-line bg-ground">
       <WindowError
         message={
-          identityRecovery?.message ??
+          serverRecovery?.message ??
           networkFailure?.message ??
           "サーバーにつながりません。最後に取得した内容を表示しています。"
         }
@@ -236,7 +236,7 @@ function MainWindow({
       <ShellBoundary key={screenKey(route)}>
         {failure ? (
           <WindowError
-            message={identityRecovery?.message ?? failure.message}
+            message={serverRecovery?.message ?? failure.message}
             onHome={onHome}
             onReload={reload}
             keyboardBuffer={route.kind === "conversation" && route.view === "file"}
