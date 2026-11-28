@@ -36,12 +36,12 @@ flowchart LR
   R --- D
   R -- 子プロセス --> C[Claude Code]
   R -- gh / git --> G[GitHub とリポジトリ]
-  S -- whois --> T[Tailscale のローカル API]
+  S -->|MagicDNS 名の取得| T[Tailscale CLI]
 ```
 
 | プロセス | 役割 |
 | --- | --- |
-| 画面のサーバー | SPA の配信、API、WebSocket での配信、本人の判定、ファイルの読み取りと検索、ターミナル、Web Push の送信。開発者の操作で行う `git` と `gh` の実行 (worktree の一覧・作成・削除、設計の差分、PR の取得と投稿、issue の取り込み) |
+| 画面のサーバー | SPA の配信、API、WebSocket での配信、接続範囲の制御、ファイルの読み取りと検索、ターミナル、Web Push の送信。開発者の操作で行う `git` と `gh` の実行 (worktree の一覧・作成・削除、設計の差分、PR の取得と投稿、issue の取り込み) |
 | ランナー | 会話ごとの Agent SDK の実行、会話のイベントの保存、自動フローの進行、目次などの更新、利用枠の戻りを待つタイマー |
 
 - 2 つのプロセスは同じリポジトリの別の入口から起動する。データは同じ SQLite のファイルを共有する
@@ -62,7 +62,7 @@ flowchart LR
 
 - `domain` はフレームワークにも外側の層にも依存しない。`usecase` は `domain` だけに依存する。`src/front` は `src/server` と `src/runner` を import しない。境界は lint で強制する (PoC `vite-plus-node-stack`)
 - 外界 (Agent SDK、`git`、`gh`、時計、乱数、Tailscale、Web Push) は `domain` の Port で受け、組み立ての場所で実物を渡す。テストでは偽物に差し替える
-- コンテキストは次の 9 つとする: `conversation`、`recap`、`stock`、`issue`、`flow`、`workspace` (プロジェクト・worktree・ファイル・ターミナル)、`inbox` (一覧・未読・通知)、`identity` (本人の判定)、`settings`
+- コンテキストは次の 8 つとする: `conversation`、`recap`、`stock`、`issue`、`flow`、`workspace` (プロジェクト・worktree・ファイル・ターミナル)、`inbox` (一覧・未読・通知)、`settings`
 
 ### 技術選定
 
@@ -77,7 +77,7 @@ flowchart LR
 | 画面との通信 | REST の API と WebSocket (`ws`) | 操作は API、AI の出力と状態の変化の配信は WebSocket に分ける |
 | 検証と型 | Zod、neverthrow、ulid | テンプレートと同じ |
 | テスト | Vitest (`vp test`)、Testing Library、Playwright、fast-check (`@fast-check/vitest`)、Stryker | 画面 (jsdom) とサーバー (本物の SQLite) を 1 つの設定で流せた (PoC `vite-plus-node-stack`)。fast-check と Stryker は、Vitest と Vite+ の設定を変えずに、2 つの project の両方で動く |
-| 本人の判定 | Tailscale のローカル API の whois | `tailscale serve` を使わない構成で、接続元の持ち主を 1 ミリ秒未満で判定できた (PoC `tailscale-identity`) |
+| 接続範囲 | ループバックと Tailscale IPv4 | TCP の接続元で判定する |
 | 通知 | Web Push (`web-push`、VAPID)、Service Worker | 購読・送信・ページを閉じた状態での受信・取り下げが通った (PoC `web-push-tailscale`) |
 | ターミナル | `node-pty`、xterm.js | 擬似端末がビルドの成果物から動いた (PoC `vite-plus-node-stack`) |
 
@@ -104,8 +104,8 @@ flowchart LR
 | 用途 | コマンド |
 | --- | --- |
 | 依存の導入 | `vp install` |
-| 開発 (SPA と画面のサーバー) | `vp dev --port <port> --strictPort` |
-| 開発 (ランナー) | `vp run dev:runner` |
+| 開発 (画面のサーバーとランナー) | `vp dev --port <port> --strictPort` |
+| 開発 (ランナーだけ) | `vp run dev:runner` |
 | テスト (画面とサーバーとランナー) | `CI=1 vp test --run` |
 | 型・lint・フォーマットの検査 | `vp check` |
 | ビルド | `vp build` |
@@ -118,6 +118,7 @@ flowchart LR
 | 本番の起動 | `PORT=<port> node dist/server/main.js` と `node dist/runner/main.js` |
 
 - コマンドは `vp` に揃え、`pnpm`・`vite`・`vitest` を直接実行しない
+- `vp dev` は画面サーバーとランナーを起動する。ランナーのソケットに接続できれば、そのランナーを使う。`vp dev` の終了や全体の再起動では、自分が起動したランナーを止める
 - 入出力を持たない関数で入力の組み合わせが多いものは、fast-check の property テストで性質を確かめる。ファイルは対象の隣に `<対象>.prop.test.ts` の名前で置く。性質には、対象を何もしない処理に置き換えると落ちる正の性質を 1 つ以上入れる。不変条件だけでは、何もしない処理でも通るためである
 - property テストの seed は、いつものテストでは実行のたびに変わり、落ちたテストの名前に出る。Stryker が流すときだけ、`src/test/fast-check.ts` が seed を固定する。変異ごとに入力が変わると、同じ変異でも、捕まえたかどうかが実行のたびに変わるためである
 - 変異テストの設定は `stryker.config.json` に置き、レポートは `reports/mutation/mutation.html` に出る。`mutation:changed` は `scripts/mutation-changed.sh` を呼び、基準から変えた `src` のソース (テスト・`.d.ts`・`src/test/` を除く) の、変えた行だけを対象にする。行の範囲は、Stryker の `--mutate` に `<パス>:<開始行>-<終了行>` の形で渡す。数行だけ変えたファイルでも、変えていない行は変異させない。対象の行が無ければ流さずに終わる
@@ -133,13 +134,11 @@ flowchart LR
 | `SUKUNA_HOME` | データの置き場所 |
 | `PORT` | 画面のサーバーが待ち受けるポート |
 | `CLAUDE_CONFIG_DIR` | Claude Code の設定の置き場所。タイムラインのファイルを探すときに読む |
-| `SUKUNA_LOGIN` | 開発者の Tailscale のログイン名。本人の判定がすべての API を塞ぐので、画面からは設定しない |
 | `SUKUNA_RUNNER_SOCKET` | ランナーのソケットのパス |
 | `SUKUNA_AGENT`、`SUKUNA_AGENT_SCRIPT` | Agent SDK を偽物に差し替える指定と、その台本 |
 | `SUKUNA_GH` | `gh` を偽物に差し替える指定 |
-| `SUKUNA_DEV_IDENTITY` | 開発と E2E で、手元 (`127.0.0.1` と `::1`) からの接続を本人として扱う指定 |
 | `SUKUNA_LOG_LEVEL` | ログの細かさ |
-| `NODE_ENV` | `production` のときを本番の起動とする。本番の起動では、偽物の指定と `SUKUNA_DEV_IDENTITY` があると起動を失敗させる |
+| `NODE_ENV` | `production` のときを本番の起動とする。本番の起動では、偽物の指定があると起動を失敗させる |
 
 - `.gitignore` に `.claude/worktrees/` を入れる
 
@@ -200,7 +199,7 @@ SQLite のファイルを 1 つ使う。識別子は ULID の文字列、時刻�
 
 | メソッド | パス | 概要 | 機能設計書 |
 | --- | --- | --- | --- |
-| GET | `/api/me` | 本人の判定の結果 | `features/operations.md` |
+| GET | `/api/me` | ビルドと復元世代 | `features/operations.md` |
 | GET | `/api/inbox` | 一覧 (セクション分け、未読、作業中の状況) | `features/inbox.md` |
 | GET | `/api/projects` | プロジェクトと、その会話・issue のツリー | `features/inbox.md` |
 | GET | `/api/projects/:id/overview` | プロジェクトの画面 (状態ごとの issue と会話) | `features/inbox.md` |
@@ -304,22 +303,21 @@ P1 の例外が 1 つある。引用に質問か指示を書いている途中�
 ### エラー応答
 
 - 失敗した API は、HTTP の状態コードと `{ "error": { "code": "<コード>", "message": "<開発者に見せる文>" } }` を返す。`error` には、機能が決めた `details` を足してよい。中身は各機能設計書の「API」節で決める
-- 共通のコード: `unauthorized` (401。本人ではない)、`not_found` (404)、`invalid_input` (400。Zod の検査に落ちた)、`conflict` (409。状態が合わない操作)、`runner_unavailable` (503。ランナーにつながらない)、`github_unavailable` (502。GitHub から取得できない)、`internal` (500)
+- 共通のコード: `unauthorized` (401。ブラウザーのオリジンが一致しない)、`not_found` (404)、`invalid_input` (400。Zod の検査に落ちた)、`conflict` (409。状態が合わない操作)、`runner_unavailable` (503。ランナーにつながらない)、`github_unavailable` (502。GitHub から取得できない)、`internal` (500)
 - 機能に固有のコードは、各機能設計書の「API」節で足してよい (例: `dependency_cycle`、`unanswered_questions`)。HTTP の状態コードは、上の共通のコードと同じ分け方に合わせる
 - `message` は、何が起きたかと、次にできることを日本語で書く。画面は `message` をそのままお知らせに出す
 - サーバーとランナーの内側では、失敗を neverthrow の `Result` で返し、例外は境界 (API のハンドラ、ランナーの実行の入口) でだけ捕まえる
 
-### 本人の判定
+### 接続範囲
 
-- すべての API と WebSocket の接続で、ソケットの接続元の IP アドレスだけを見て判定する。`X-Forwarded-For` などのヘッダーは使わない
-- 接続元が Tailscale の範囲 (100.64.0.0/10) に入らなければ、問い合わせをせずに拒否する
-- 入っていれば、Tailscale のローカル API の whois で持ち主のログイン名を取り、環境変数 `SUKUNA_LOGIN` に設定した開発者のログイン名と一致するときだけ通す。問い合わせの失敗と不一致は拒否する
-- 開発 (`vp dev`) と E2E のためだけに、環境変数 `SUKUNA_DEV_IDENTITY` を設定したときは 127.0.0.1 からの接続を本人として扱う。本番の起動 (`NODE_ENV=production`) では、この変数があると起動を失敗させる
-- ログイン画面は作らない (BR-068)
+- 開発サーバーと本番サーバーは、TCP の接続元がループバック (`127.0.0.1`、`::1`) または Tailscale IPv4 (`100.64.0.0/10`) のときに接続を受け付ける。範囲外の接続は HTTP の処理に渡す前に閉じる
+- 同じ接続範囲を静的ファイル、API、WebSocket に適用する。Tailnet 内の端末やユーザーのアクセス制御は Tailscale に任せる (BR-067、BR-068)。
+- 本番サーバーは IPv4 で待ち受ける。同じ Mac からは `127.0.0.1` で開く
+- 開発・本番ともに、ループバック名、IP アドレス、端末のホスト名と MagicDNS 名を自動で受け付ける。開発サーバーは起動時に名前を取得し、本番は稼働中も定期的に取り直す。別端末から開くときは、`vp dev --host "$(tailscale ip -4)" --port 5173 --strictPort` で起動し、Tailscale の IP または MagicDNS 名で開く
 
 ### 配信
 
-- `/ws` は、接続のたびに本人の判定を通す。画面は、見ている対象 (一覧、会話、issue) を購読として送り、サーバーはその対象の変化だけを配信する。死活確認の `app` の `ping` は購読によらず全接続へ送る (`features/runtime.md`「配信」)
+- `/ws` にも HTTP と同じ接続範囲とホスト名の検証を適用する。ブラウザーからの変更要求と WebSocket は、Origin があるときに接続先と一致することを確かめる。画面は、見ている対象 (一覧、会話、issue) を購読として送り、サーバーはその対象の変化だけを配信する。死活確認の `app` の `ping` は購読によらず全接続へ送る (`features/runtime.md`「配信」)
 - 配信の 1 件は `{ "topic": "<対象>", "seq": <通し番号>, "type": "<種類>", "payload": { ... } }` とする。画面は、受け取った `seq` を覚え、つなぎ直したときに続きから受け取る
 - 配信が途切れたあいだの分は、つなぎ直したときに API で読み直す。配信だけを頼りに画面の状態を作らない
 - 画面の入力 (指示の送信、停止など) は WebSocket ではなく API で送る
@@ -356,7 +354,7 @@ P1 の例外が 1 つある。引用に質問か指示を書いている途中�
 | 項目 | 決定 |
 | --- | --- |
 | グローバルレイアウト | ヘッダーは置かない。左にツリー、中央に主のウィンドウ、右のウィンドウは必要なときだけ出す。下にステータス行を置く。入力欄は `i` を押したときだけ出す。主のウィンドウの本文は、ウィンドウの幅いっぱいまで使う |
-| 認証ガード | ログイン画面は作らない。`/api/me` が本人ではないと返したら、アプリの代わりに拒否の画面を出す |
+| 初回接続 | `/api/me` でサーバーの状態とデータベースの復元世代を確認してから開く |
 | 404 / 権限なし / ネットワークエラー | 主のウィンドウの中に出し、「一覧へ戻る」と「再読み込み」を置く。ツリーは使えるまま残す。サーバーにつながらないあいだは、最後に取得した内容と、つながらないことを表示する |
 | グローバルトースト (お知らせ) | ステータス行のすぐ上の右端に出す。エラーは最新の 1 件だけを、Esc で消すまで残し、画面を移っても消さない。ほかのお知らせは最新の 1 件だけを、エラーの下に出し、4 秒で消す |
 | ErrorBoundary | アプリ全体と、ウィンドウごとの 2 段に置く。1 つのウィンドウが壊れても、ほかのウィンドウは使える |
@@ -366,8 +364,7 @@ P1 の例外が 1 つある。引用に質問か指示を書いている途中�
 
 | 確かめること (アプリシェルの決定から起こした) | レベル |
 | --- | --- |
-| Tailscale の範囲に入らない接続元から API を呼ぶと、401 と `unauthorized` が返る | 結合 |
-| 本人ではないと判定されたときにアプリを開くと、拒否の画面が出て、ツリーも主のウィンドウも出ない | 単体 |
+| 範囲内から HTTP と WebSocket を開ける。範囲外の接続は閉じる | 結合 |
 | 存在しない会話か issue を開くと、主のウィンドウに見つからないことが出て、「一覧へ戻る」を選ぶと一覧が開く | E2E |
 | サーバーにつながらないあいだは、最後に取得した内容とつながらないことが出て、つながると自動で消える | 単体 |
 | エラーのお知らせは、画面を移っても Esc を押すまで残り、ほかのお知らせは 4 秒で消える | 単体 |
@@ -441,8 +438,6 @@ issue の状態の移り変わりは `features/issue-flow.md` の表が正本で
 - `vp dev` のデータベースの接続・配信・WebSocket の受け口は、プロセスに 1 つのモジュールで持つ。HTTP ハンドラだけの HMR では、既存の接続と端末を保つ。`src/server/runtime.ts` やその依存を変更したときは、開発サーバーを再起動する。モジュールの再評価で接続の状態が失われるためである
 - Vite+ は SSR のモジュールローダーを閉じたあとに `closeServer` を呼ぶ。起動時に WebSocket の受け口と共有した端末の管理先を閉じ、ジョブの終了を待つ。`SIGINT` でも開発サーバーの終了処理を呼ぶ
 - ブラウザの WebSocket API は、制御フレームの Ping/Pong を公開しない。死活確認は `app` の `ping` メッセージで行う。形と間隔は `features/runtime.md`「配信」に従う (WHATWG WebSockets「Ping and Pong frames」)
-- `vp dev` では Vite が `/api` 以外のパスを配るため、本人の判定を受けるのは API だけになる。本番の起動では画面のサーバーが静的ファイルと SPA の HTML も判定し、本人でなければ拒否の HTML を返す
-- `vp dev` の `localhost` は `::1` で待ち受けることがあるため、開発用の本人の値は `127.0.0.1` と `::1` の両方を手元として扱う
 - SQLite の `PRAGMA journal_mode = WAL` はファイルに残るが、`busy_timeout` と `foreign_keys` は接続ごとの設定である。`journal_mode` と `foreign_keys` はトランザクションの中では変えられない。接続を開いた直後に 3 つとも設定する
 - ロックファイルの PID を読んでから削除する間には、別のプロセスが同じパスを取得できる。読み直すだけではこの競合を防げない。ファイルの作成・確認・削除を OS の排他の中で行う手順は `features/operations.md`「データベースのロック」に従う
 - Node.js の ECDH で得た P-256 の秘密鍵が 32 バイトより短いときは、先頭をゼロで埋める。VAPID の鍵は 32 バイトで保存する

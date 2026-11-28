@@ -1466,7 +1466,7 @@ const SCREENS = [
   ["PC", "タイムライン", "タスクの木、詳細、履歴、報告 (右のウィンドウ)", "US-069〜072"],
   ["PC", "ファイル / 検索結果 / ターミナル", "ファイルツリー、rg の結果、コマンドの実行", "US-066〜068"],
   ["PC", "検索 / ヘルプ / 設定 / 会話とスレッドの一覧", "issue と会話の検索、:h、プロジェクトの設定", "US-026, 027"],
-  ["PC", "エラー", "本人以外の拒否、404、接続切れ、ウィンドウの例外", "US-030"],
+  ["PC", "エラー", "404、接続切れ、ウィンドウの例外", "US-030"],
   ["スマホ", "一覧 / プロジェクト / 検索", "判断待ち・指示待ち・作業中の一覧、プロジェクトごとの会話と issue、issue と会話の検索", "US-028"],
   ["スマホ", "会話", "判断することの帯、会話、選択肢で答える、文を押して質問・指示をストックする", "US-029"],
   ["スマホ", "PR の確認 / 止まった issue", "merge の許可、再開", "US-029"],
@@ -1482,7 +1482,7 @@ const FLOWS = [
 ];
 const SHELL = [
   ["グローバルレイアウト", "ヘッダーなし。左にツリー、中央に主のウィンドウ、右は必要なときだけ。下にステータス行。プロンプトは i を押したときだけ出す"],
-  ["本人確認", "ログイン画面は作らない。Tailscale の本人情報で判定し、本人以外には拒否の画面を出す"],
+  ["初回接続", "サーバーの状態と復元世代を確認してからメイン画面を開く"],
   ["404 / 権限なし / ネットワークエラー", "主のウィンドウの中に出し「一覧へ戻る」「再読み込み」を置く。ツリーは使えるまま残す"],
   ["通知", "ステータス行のすぐ上の右端に、最新の 1 件だけを出す。成功・情報は 4 秒で消え、エラーは Esc で消すまで残す"],
   ["ErrorBoundary", "アプリ全体とウィンドウごとの 2 段"],
@@ -1508,9 +1508,6 @@ const INTERACTIONS = [
   ["Space / と Space f", "コマンド行に rg / find を出す", "語を入れて Enter で検索する"],
   [":h", "ヘルプを開く", "今の割り当てでのキーとコマンドを表示する"],
 ];
-function Denied() {
-  return <div className="border border-line p-8 max-w-[36rem]"><p className="font-bold text-lg">このアプリは使えません</p><p className="text-muted my-3">Tailscale の本人として確認できませんでした。自分のアカウントで Tailscale につないでから、再読み込みしてください。</p><button className={BTN}>再読み込み</button></div>;
-}
 function Table({ head, rows }) {
   return <table className="w-full text-sm border-collapse"><thead><tr>{head.map((h) => <th key={h} className="text-left border-b border-line py-2 pr-6">{h}</th>)}</tr></thead><tbody>{rows.map((r, n) => <tr key={n}>{r.map((c, m) => <td key={m} className="border-b border-line py-3 pr-6 align-top">{c}</td>)}</tr>)}</tbody></table>;
 }
@@ -1537,7 +1534,7 @@ const PAGES = {
   "ユーザーフロー": () => <div className="space-y-8">{FLOWS.map((f) => <div key={f.t}><h3 className="font-bold text-lg">{f.t}</h3><p className="my-1">{f.d}</p><p className="text-[12px] text-muted mb-3">関連: {f.us}</p><div className="flex flex-wrap items-center gap-2 text-sm">{f.s.map((x, n) => <React.Fragment key={n}><span className="border border-line px-3 py-2">{x}</span>{n < f.s.length - 1 && <span aria-hidden="true">→</span>}</React.Fragment>)}</div></div>)}</div>,
   "操作": () => <Table head={["トリガー", "アクション", "結果"]} rows={INTERACTIONS} />,
   "デザイン方針": () => <Table head={["項目", "決定"]} rows={POLICY} />,
-  "アプリシェル": () => <div className="space-y-6"><Table head={["項目", "決定"]} rows={SHELL} /><Denied /></div>,
+  "アプリシェル": () => <Table head={["項目", "決定"]} rows={SHELL} />,
 };
 /* ------------------------------------------------------------------ *
  * 画面を URL から直接開く口。`#screen=<画面 ID>` で開くと、その画面と状態を最初から描く。

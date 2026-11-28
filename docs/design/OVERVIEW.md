@@ -105,7 +105,7 @@ stateDiagram-v2
 | issue を進める | [PR のレビュー](features/pr-review.md) | PR を読み、直させるか merge を許可する |
 | worktree とターミナル | [worktree とターミナル](features/worktree-terminal.md) | worktree を作って消し、ターミナルでコマンドを実行する |
 | 設定と運用 | [プロジェクトの設定](features/project-settings.md) | プロジェクトを登録し、AI の動かし方と自動フローを設定する |
-| 設定と運用 | [導入と運用](features/operations.md) | 常駐、本人の確認、更新、バックアップ、キーの割り当て |
+| 設定と運用 | [導入と運用](features/operations.md) | 常駐、接続範囲、更新、バックアップ、キーの割り当て |
 | 土台 | [バッファの土台](features/buffer-ui.md) | すべてのウィンドウを Vim のバッファとして作る |
 | 土台 | [実行の土台](features/runtime.md) | AI を動かす部分と画面を分け、出力を保存して届ける |
 
