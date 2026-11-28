@@ -537,6 +537,7 @@ Space を押すと、ステータス行の上に、続けて押せるキーの�
 | `/search?q=<語>` | issue と会話の検索結果 | `conversation-lifecycle` |
 | `/conversations/<元の会話の識別子>?thread=<スレッドの識別子>` | 元の会話を開き、右のウィンドウにそのスレッドを出す | `stock-thread` |
 | `/issues/<識別子>` | issue | `issue` |
+| `/terminals/<識別子>` | ターミナル | `worktree-terminal` |
 | `/conversations/<識別子>/file`、`/grep`、`/files`、`/changes` | ファイル、中身の検索、名前の検索、AI が変えた箇所 (引数は `features/files.md`) | `files` |
 | `/help` | ヘルプ | `operations` |
 | `/settings` | 設定 | `operations` |

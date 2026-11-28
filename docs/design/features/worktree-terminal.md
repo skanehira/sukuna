@@ -264,6 +264,16 @@ worktree の一覧の行で Enter を押すと、いま主のウィンドウに�
 - 404 `not_found`: プロジェクト、worktree、会話のどれかが無い / worktree のフォルダが無い
 - 409 `conflict`: 動いているターミナルが 20 個ある
 
+### HEAD `/api/terminals/:id`
+
+WebSocket の接続に失敗したとき、画面はこの API で ID の有無を確かめる。ブラウザの WebSocket API からは、接続を拒んだときの HTTP 状態を取得できないためである。
+
+- `204`: 稼働中か、終了して出力を保持している ID
+- `404`: ターミナルの ID が無い
+- `401`: 本人の判定かオリジンの照合に通らない
+
+レスポンスに本文は無い。サーバーは照合結果をキャッシュさせず、シェルの起動や端末への接続も行わない。
+
 ### WebSocket `/ws/terminals/:id`
 
 接続のたびに本人の判定を通す。本人でなければ upgrade を 401 で断り、擬似端末にはつながない。id のターミナルが無ければ upgrade を 404 で断る。
@@ -297,7 +307,7 @@ worktree の一覧の行で Enter を押すと、いま主のウィンドウに�
 | ターミナルを開く、作業ディレクトリと送り先を決める、数の上限 | ユースケース | `src/server/modules/workspace/usecase/open-terminal.ts` |
 | ターミナルの持ち方 (擬似端末と端末の状態) | インフラ (擬似端末の Port) | `src/server/modules/workspace/adapter/pty-session.ts` |
 | `/ws/terminals/:id` の upgrade とフレームの処理 | API ハンドラ | `src/server/modules/workspace/adapter/terminal-ws.ts` |
-| API ハンドラ (worktree の 3 本とターミナルを開く) | API ハンドラ | `src/server/modules/workspace/adapter/worktree-routes.ts` |
+| API ハンドラ (worktree の 3 本とターミナルの作成・照会) | API ハンドラ | `src/server/modules/workspace/adapter/worktree-routes.ts` |
 | 会話の作業場所の切り替え (確かめてランナーに渡す) と、その API ハンドラ | ユースケース、API ハンドラ | `src/server/modules/conversation/usecase/switch-workspace.ts`、`src/server/modules/conversation/adapter/http.ts` |
 | 開いている実行を閉じ、作業ディレクトリを書く → conversations | ユースケース (ランナー) | `src/runner/modules/conversation/usecase/switch-workspace.ts` |
 | 入出力とフレームの Zod のスキーマ | 共有 | `src/shared/api/worktree.ts`、`src/shared/api/terminal.ts` |
