@@ -22,6 +22,7 @@ import {
 import { readEnvironment } from "../../../../shared/env";
 import type { AgentScript } from "../../../../shared/agent-script";
 import type {
+  AgentOutput,
   AgentSession,
   OpenParams,
 } from "../../../../runner/modules/conversation/domain/agent-port";
@@ -47,18 +48,22 @@ class RecordingAgent extends ScriptedAgent {
   beforeInterrupt?: () => Promise<void>;
   beforeOutputEnd?: () => Promise<void>;
   beforeTurnEnd?: () => Promise<void>;
+  beforeOutput?: (output: AgentOutput) => Promise<void> | undefined;
   beforeSend?: (params: OpenParams) => void;
   override open(params: OpenParams): AgentSession {
     const index = this.opened.length;
     const session = super.open(params);
     const finishOutput = () => this.beforeOutputEnd?.();
     const beforeTurnEnd = () => this.beforeTurnEnd?.();
+    const beforeOutput = (output: AgentOutput) => this.beforeOutput?.(output);
     return {
       ...session,
       output: {
         async *[Symbol.asyncIterator]() {
           for await (const output of session.output) {
             if (output.kind === "turn_end") await beforeTurnEnd();
+            const ready = beforeOutput(output);
+            if (ready) await ready;
             yield output;
           }
           if (index === 0) await finishOutput();
@@ -1480,6 +1485,373 @@ it("同じ番の発言では未回答の質問を保ち、次の番の発言で�
   expect((await f.snapshot(id)).body.pendingAnswers).toBeNull();
   expect((await f.request(path, "PUT", pending)).status).toBe(409);
 });
+async function saveStoppedAnswer(f: Awaited<ReturnType<typeof fixture>>, id: string) {
+  expect(await f.send(id, "質問")).toEqual(delivered);
+  const { events } = (await f.request<ConversationEventsPage>(`/conversations/${id}/events`)).body;
+  const requested = events.find((event) => event.type === "question");
+  if (!requested) throw new Error("質問がありません。");
+  const pending = { questionSeq: requested.seq, answers: { "0": { choices: ["A"], text: null } } };
+  const path = `/conversations/${id}/answers`;
+  expect(await f.request(path, "PUT", pending)).toEqual({
+    status: 200,
+    body: { pendingAnswers: pending },
+  });
+  expect((await f.request(`/conversations/${id}/stop`, "POST")).status).toBe(202);
+  expect((await f.snapshot(id)).body.pendingAnswers).toEqual(pending);
+  return { path, pending };
+}
+
+it.each([
+  {
+    first: "tool_use",
+    steps: [{ tool: "Read", input: { file_path: "notes.txt" }, result: "確認しました" }],
+  },
+  { first: "question", steps: [{ ask: [question("新しい質問")] }] },
+  {
+    first: "permission_request",
+    steps: [{ permission: { tool_name: "Bash", input: { command: "pwd" } } }],
+  },
+] satisfies { first: string; steps: AgentScript["rules"][number]["steps"] }[])(
+  "別の番が $first から始まった時点で前の回答を送れなくなる",
+  async ({ first, steps }) => {
+    const f = await fixture({
+      rules: [
+        { match: "^質問$", steps: [{ ask: [question("前の質問")] }] },
+        { match: "^別の指示$", steps: [...steps, { end: "success" }] },
+      ],
+    });
+    const id = await f.start();
+    const { path, pending } = await saveStoppedAnswer(f, id);
+    const toolResult = deferred();
+    f.agent.beforeOutput = (output) =>
+      output.kind === "tool_result" ? toolResult.promise : undefined;
+
+    try {
+      expect(await f.send(id, "別の指示")).toEqual(delivered);
+      await expect
+        .poll(async () => {
+          const { events } = (
+            await f.request<ConversationEventsPage>(`/conversations/${id}/events`)
+          ).body;
+          return events.find((event) => event.seq > pending.questionSeq && event.type === first)
+            ?.type;
+        })
+        .toBe(first);
+      expect((await f.snapshot(id)).body.pendingAnswers).toBeNull();
+      expect(
+        f.database.sqlite
+          .prepare(
+            "SELECT answered, EXISTS (SELECT 1 FROM pending_answers WHERE conversation_id=q.conversation_id AND question_seq=q.seq) AS pending FROM questions AS q WHERE q.conversation_id=? AND q.seq=?",
+          )
+          .get(id, pending.questionSeq),
+      ).toEqual({ answered: 1, pending: 0 });
+      expect((await f.request(path, "PUT", pending)).status).toBe(409);
+      expect((await f.request(`${path}/send`, "POST", { confirmUnanswered: false })).status).toBe(
+        409,
+      );
+      expect(f.agent.sent.map((message) => message.text)).toEqual(["質問", "別の指示"]);
+    } finally {
+      toolResult.resolve();
+    }
+  },
+);
+
+it("新しい質問と同じ番の発言が続いても、保存した新しい回答をAIに送れる", async () => {
+  const f = await fixture({
+    rules: [
+      { match: "^質問$", steps: [{ ask: [question("前の質問")] }] },
+      {
+        match: "^別の指示$",
+        steps: [{ text: "新しい相談です" }, { ask: [question("新しい質問")] }, { end: "success" }],
+      },
+    ],
+  });
+  const id = await f.start();
+  const { path, pending } = await saveStoppedAnswer(f, id);
+  const persistText = deferred();
+  f.agent.beforeOutput = (output) =>
+    output.kind === "assistant_text" ? persistText.promise : undefined;
+
+  try {
+    expect(await f.send(id, "別の指示")).toEqual(delivered);
+    const { events } = (await f.request<ConversationEventsPage>(`/conversations/${id}/events`))
+      .body;
+    const requested = events.find(
+      (event) => event.type === "question" && event.seq > pending.questionSeq,
+    );
+    if (requested?.type !== "question") throw new Error("新しい質問がありません。");
+    const newPending = {
+      questionSeq: requested.seq,
+      answers: { "0": { choices: ["B"], text: null } },
+    };
+    expect(await f.request(path, "PUT", newPending)).toEqual({
+      status: 200,
+      body: { pendingAnswers: newPending },
+    });
+    persistText.resolve();
+    await expect
+      .poll(async () => {
+        const { events: updated } = (
+          await f.request<ConversationEventsPage>(`/conversations/${id}/events`)
+        ).body;
+        return updated.find((event) => event.type === "assistant_text")?.payload;
+      })
+      .toEqual({ text: "新しい相談です", parent_tool_use_id: null });
+    expect((await f.snapshot(id)).body.pendingAnswers).toEqual(newPending);
+    expect(
+      await f.request(`${path}/send`, "POST", {
+        questionSeq: requested.seq,
+        confirmUnanswered: false,
+      }),
+    ).toEqual({
+      status: 202,
+      body: { result: "answered" },
+    });
+    expect(f.agent.receivedAnswers).toEqual([
+      { requestId: requested.payload.request_id, answers: { 新しい質問: "B" } },
+    ]);
+  } finally {
+    persistText.resolve();
+  }
+});
+
+it("別の質問で用意した送信が遅れても、新しい質問の回答を配達しない", async () => {
+  const f = await fixture({
+    rules: [
+      { match: "^質問$", steps: [{ ask: [question("前の質問")] }] },
+      { match: "^別の指示$", steps: [{ ask: [question("新しい質問")] }, { end: "success" }] },
+    ],
+  });
+  const id = await f.start();
+  const { path, pending } = await saveStoppedAnswer(f, id);
+  const oldSend = { questionSeq: pending.questionSeq, confirmUnanswered: false };
+  expect(await f.send(id, "別の指示")).toEqual(delivered);
+  const { events } = (await f.request<ConversationEventsPage>(`/conversations/${id}/events`)).body;
+  const current = events.find(
+    (event) => event.type === "question" && event.seq > pending.questionSeq,
+  );
+  if (current?.type !== "question") throw new Error("新しい質問がありません。");
+  const different = { questionSeq: current.seq, answers: { "0": { choices: ["B"], text: null } } };
+  expect(await f.request(path, "PUT", different)).toEqual({
+    status: 200,
+    body: { pendingAnswers: different },
+  });
+
+  const send = `${path}/send`;
+  const conflict = {
+    status: 409,
+    body: {
+      error: { code: "conflict", message: "回答する質問が変わりました。読み直してください。" },
+    },
+  };
+  expect(await f.request(send, "POST", oldSend)).toEqual(conflict);
+  expect(await f.request(send, "POST", { confirmUnanswered: false })).toEqual(conflict);
+  expect((await f.snapshot(id)).body.pendingAnswers).toEqual(different);
+  expect(
+    await f.request(send, "POST", { questionSeq: current.seq, confirmUnanswered: false }),
+  ).toEqual({
+    status: 202,
+    body: { result: "answered" },
+  });
+  expect(f.agent.receivedAnswers).toEqual([
+    { requestId: current.payload.request_id, answers: { 新しい質問: "B" } },
+  ]);
+});
+
+it("旧形式は最初の質問へだけ送り、遅れて届いても次の質問の回答を配達しない", async () => {
+  const f = await fixture({
+    rules: [
+      { match: "^次の指示$", steps: [{ ask: [question("別の番の質問")] }, { end: "success" }] },
+    ],
+    fallback: [
+      { ask: [question("最初の質問")] },
+      { ask: [question("次の質問")] },
+      { end: "success" },
+    ],
+  });
+  const id = await f.start();
+  await f.send(id, "質問");
+  const path = `/conversations/${id}/answers`;
+  const response = { status: 202, body: { result: "answered" } };
+  const answers = { "0": { choices: ["A"], text: null } };
+  const legacySend = { confirmUnanswered: false };
+  const sentAnswers: unknown[] = [];
+  const call = f.link.call.bind(f.link);
+  f.link.call = (method, ipcPath, input) => {
+    if (method === "POST" && ipcPath === path) sentAnswers.push(input);
+    return call(method, ipcPath, input);
+  };
+
+  const saveAnswer = async (index: number) => {
+    await expect
+      .poll(async () => {
+        const { events } = (await f.request<ConversationEventsPage>(`/conversations/${id}/events`))
+          .body;
+        return events.filter((event) => event.type === "question").length;
+      })
+      .toBe(index + 1);
+    const { events } = (await f.request<ConversationEventsPage>(`/conversations/${id}/events`))
+      .body;
+    const current = events.filter((event) => event.type === "question")[index]!;
+    const pending = { questionSeq: current.seq, answers };
+    expect(await f.request(path, "PUT", pending)).toEqual({
+      status: 200,
+      body: { pendingAnswers: pending },
+    });
+    return current;
+  };
+
+  const first = await saveAnswer(0);
+  expect(await f.request(`${path}/send`, "POST", legacySend)).toEqual(response);
+  expect(sentAnswers.splice(0)).toEqual([{ request_id: first.payload.request_id, answers }]);
+  const rejectLegacyAndSendCurrent = async (index: number) => {
+    const current = await saveAnswer(index);
+    expect(await f.request(`${path}/send`, "POST", legacySend)).toEqual({
+      status: 409,
+      body: {
+        error: { code: "conflict", message: "回答する質問が変わりました。読み直してください。" },
+      },
+    });
+    expect(sentAnswers).toEqual([]);
+    expect(
+      await f.request(`${path}/send`, "POST", { ...legacySend, questionSeq: current.seq }),
+    ).toEqual(response);
+    expect(sentAnswers.splice(0)).toEqual([{ request_id: current.payload.request_id, answers }]);
+  };
+  await rejectLegacyAndSendCurrent(1);
+  await settled(f, id, "idle");
+  expect(await f.send(id, "次の指示")).toEqual(delivered);
+  await rejectLegacyAndSendCurrent(2);
+
+  expect(f.agent.receivedAnswers.map((answer) => answer.answers)).toEqual([
+    { 最初の質問: "A" },
+    { 次の質問: "A" },
+    { 別の番の質問: "A" },
+  ]);
+});
+
+it("再起動しても前の番の回答を再利用せず、出力なしで終わった番より前の回答は保つ", async () => {
+  const f = await fixture({
+    rules: [
+      { match: "^質問$", steps: [{ ask: [question("前の質問")] }] },
+      {
+        match: "^ツールだけ$",
+        steps: [{ tool: "Read", input: { file_path: "notes.txt" } }, { end: "success" }],
+      },
+      { match: "^出力せずに終わる$", steps: [{ end: "success" }] },
+    ],
+  });
+  const obsolete = await f.start();
+  const valid = await f.start();
+  const old = await saveStoppedAnswer(f, obsolete);
+  const current = await saveStoppedAnswer(f, valid);
+  expect(await f.send(obsolete, "ツールだけ")).toEqual(delivered);
+  expect(await f.send(valid, "出力せずに終わる")).toEqual(delivered);
+  await settled(f, obsolete, "idle");
+  await settled(f, valid, "idle");
+
+  f.database.sqlite.transaction(() => {
+    f.database.sqlite
+      .prepare("UPDATE questions SET answered=0 WHERE conversation_id=? AND seq=?")
+      .run(obsolete, old.pending.questionSeq);
+    f.database.sqlite
+      .prepare(
+        "INSERT OR REPLACE INTO pending_answers (conversation_id,question_seq,answers,updated_at) VALUES (?,?,?,?)",
+      )
+      .run(obsolete, old.pending.questionSeq, JSON.stringify(old.pending.answers), f.clock.now());
+  })();
+  await f.restart();
+
+  expect((await f.snapshot(obsolete)).body.pendingAnswers).toBeNull();
+  expect((await f.request(old.path, "PUT", old.pending)).status).toBe(409);
+  expect((await f.request(`${old.path}/send`, "POST", { confirmUnanswered: false })).status).toBe(
+    409,
+  );
+  expect((await f.snapshot(valid)).body.pendingAnswers).toEqual(current.pending);
+  expect(await f.request(`${current.path}/send`, "POST", { confirmUnanswered: false })).toEqual({
+    status: 202,
+    body: { result: "delivered" },
+  });
+  expect(f.agent.sent.map((message) => message.text)).toEqual([
+    "質問",
+    "質問",
+    "ツールだけ",
+    "出力せずに終わる",
+    "Q: 前の質問\nA: A",
+  ]);
+});
+
+it("出力のない次の番を止めても前の回答を送れる", async () => {
+  const f = await fixture({
+    rules: [
+      { match: "^質問$", steps: [{ ask: [question("前の質問")] }] },
+      { match: "^出力を待つ$", steps: [{ hold: true }] },
+    ],
+  });
+  const id = await f.start();
+  const { path, pending } = await saveStoppedAnswer(f, id);
+
+  expect(await f.send(id, "出力を待つ")).toEqual(delivered);
+  expect((await f.snapshot(id)).body.pendingAnswers).toEqual(pending);
+  expect((await f.request(`/conversations/${id}/stop`, "POST")).status).toBe(202);
+  expect(await f.request(`${path}/send`, "POST", { confirmUnanswered: false })).toEqual({
+    status: 202,
+    body: { result: "delivered" },
+  });
+  expect(f.agent.sent.map((message) => message.text)).toEqual([
+    "質問",
+    "出力を待つ",
+    "Q: 前の質問\nA: A",
+  ]);
+});
+
+it("発言が保存されるまで前の回答を保ち、保存をまたいで処理中の回答を拒む", async () => {
+  const f = await fixture({
+    rules: [
+      { match: "^質問$", steps: [{ ask: [question("前の質問")] }] },
+      { match: "^別の指示$", steps: [{ text: "新しい発言" }, { hold: true }] },
+    ],
+  });
+  const id = await f.start();
+  const { path, pending } = await saveStoppedAnswer(f, id);
+  const persistText = deferred();
+  const reachedText = deferred();
+  f.agent.beforeOutput = (output) => {
+    if (output.kind !== "assistant_text") return;
+    reachedText.resolve();
+    return persistText.promise;
+  };
+  const answerChecked = deferred();
+  const continueAnswer = deferred();
+  f.runner().runtime.runOptions.registerDeliveryGuard(async (_conversation, input) => {
+    if (input.origin === "answer_text") {
+      answerChecked.resolve();
+      await continueAnswer.promise;
+    }
+    return ok(undefined);
+  });
+
+  let answer: Promise<{ status: number; body: unknown }> | undefined;
+  try {
+    expect(await f.send(id, "別の指示")).toEqual(delivered);
+    await reachedText.promise;
+    expect((await f.snapshot(id)).body.pendingAnswers).toEqual(pending);
+    answer = f.request(`${path}/send`, "POST", { confirmUnanswered: false });
+    await answerChecked.promise;
+    persistText.resolve();
+    await expect.poll(async () => (await f.snapshot(id)).body.pendingAnswers).toBeNull();
+    continueAnswer.resolve();
+
+    expect((await answer).status).toBe(409);
+    expect((await f.snapshot(id)).body.queue).toEqual([]);
+    expect(f.agent.sent.map((message) => message.text)).toEqual(["質問", "別の指示"]);
+  } finally {
+    persistText.resolve();
+    continueAnswer.resolve();
+    await answer;
+  }
+});
+
 it("停止した質問への保存済み回答は通常の指示として届けて閉じた会話も開き直す", async () => {
   const f = await fixture({
     rules: [

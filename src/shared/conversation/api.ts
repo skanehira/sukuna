@@ -70,7 +70,11 @@ export const saveConversationAnswersSchema = z.object({
   questionSeq: z.number().int().positive(),
   answers: answersSchema,
 });
-export const sendConversationAnswersSchema = z.object({ confirmUnanswered: z.boolean() });
+export const sendConversationAnswersSchema = z.object({
+  questionSeq: z.number().int().positive().optional(),
+  confirmUnanswered: z.boolean(),
+});
+export type SendConversationAnswers = z.infer<typeof sendConversationAnswersSchema>;
 export const permissionDecisionSchema = z.object({ decision: z.enum(["allow", "deny"]) });
 export const eventPageSchema = z.object({
   after: z.coerce.number().int().nonnegative().default(0),

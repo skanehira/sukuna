@@ -31,8 +31,11 @@ export function answer(
     const execution = this.executions.get(id);
     const waiting =
       execution?.question?.request.requestId === requestId ? execution.question : undefined;
+    const caller = callerInputAcceptance(callerCancelled);
     const acceptance = {
-      ...callerInputAcceptance(callerCancelled),
+      ...caller,
+      check: () =>
+        caller?.check?.() ?? (this.store.isUnanswered(id, question.seq) ? null : conflict()),
       events: [
         {
           type: "answer" as const,

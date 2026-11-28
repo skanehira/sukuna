@@ -50,6 +50,7 @@ export interface ConversationRepository {
   returnStock(id: string): void;
   events(id: string, after?: number, limit?: number): StoredEvent[];
   unansweredQuestion(id: string): Extract<StoredEvent, { type: "question" }> | null;
+  hasQuestionBefore(id: string, beforeSeq: number): boolean;
   pendingAnswers(id: string): PendingAnswers | null;
   saveAnswers(id: string, pending: PendingAnswers, now: number): void;
   reopen(id: string): string[];

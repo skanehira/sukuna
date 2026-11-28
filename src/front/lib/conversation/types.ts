@@ -64,7 +64,12 @@ export type ConversationApi = {
     questionSeq: number,
     answers: Answers,
   ): Promise<{ pendingAnswers: Snapshot["pendingAnswers"] }>;
-  sendAnswers(this: void, id: string, confirmUnanswered: boolean): Promise<unknown>;
+  sendAnswers(
+    this: void,
+    id: string,
+    confirmUnanswered: boolean,
+    questionSeq: number,
+  ): Promise<unknown>;
   permission(
     this: void,
     id: string,

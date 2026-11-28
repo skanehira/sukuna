@@ -198,7 +198,7 @@ export function createConversationRoutes(
   app.post("/conversations/:id/answers/send", async (c) => {
     const input = await body(c, sendConversationAnswersSchema);
     return input.success
-      ? wire(c, await sendAnswers(c.req.param("id"), input.data.confirmUnanswered, deps))
+      ? wire(c, await sendAnswers(c.req.param("id"), input.data, deps))
       : c.json({ error: invalid }, 400);
   });
   app.post("/conversations/:id/stop", async (c) => {

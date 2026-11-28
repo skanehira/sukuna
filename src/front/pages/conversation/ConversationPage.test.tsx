@@ -1281,7 +1281,7 @@ describe("会話の画面", () => {
     );
     key(main(), "y");
     await flush();
-    expect(api.sendAnswers).toHaveBeenCalledWith("c1", true);
+    expect(api.sendAnswers).toHaveBeenCalledWith("c1", true, 1);
     expect(controller.snapshot().notice).toEqual({
       message: "回答 1 件を 1 通にまとめて送りました",
       kind: "info",
