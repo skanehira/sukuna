@@ -159,7 +159,7 @@
 - 名前の先頭との前方一致で絞り、大文字と小文字を区別する
 - `.` で始まる名前は、名前の先頭が `.` で始まるときだけ出す (例: `~/.c` なら `~/.config/` が出る)
 - 並びは名前の文字コードの順 (大文字で始まる名前が先) とし、200 件で切る
-- サーバーは、探すディレクトリを 3 秒で読み切れなければ、読む権限がないときと同じ案内を返す。応答しないボリュームを読んで Tab が効かないままになるのを防ぐためである
+- サーバーは、探すディレクトリの一覧を読み、各候補がディレクトリか (リンクの先を含む) と `.git` の有無を確かめるまでを、合わせて 3 秒で終えられなければ、読む権限がないときと同じ案内を返す。応答しないボリュームを読んで Tab が効かないままになるのを防ぐためである
 - 候補が 0 件のときの案内は、次のとおりにする。`<探すディレクトリ>` には、読み替えた本文に書いたままの形 (例: `~/work/`) を入れる
   - 探すディレクトリが無いか、ディレクトリでない: 「ディレクトリがありません: <探すディレクトリ>」
   - 読む権限がないか、3 秒で読み切れない: 「ディレクトリを読めません: <探すディレクトリ>」。macOS のプライバシー保護で、`~/Documents` などは読めないことがある
@@ -377,7 +377,7 @@
 | 全体の一時停止 → settings | ユースケース | `src/server/modules/settings/usecase/set-flow-paused.ts` | 足す |
 | 取り込みの候補と取り込み → issues | ユースケース | `src/server/modules/issue/usecase/github-import.ts` | 足す |
 | git の実行 (最上位のパス、既定ブランチ、ブランチの有無) | インフラ (git の Port) | `src/server/modules/workspace/adapter/git-cli.ts` | 足す |
-| ディレクトリの直下の名前と種類、`.git` の有無を読む (ホームディレクトリの置き換えは登録のパスと共有する) | インフラ (`ProjectDependencies` の口) | `src/server/modules/workspace/domain/project-settings.ts`、`src/server/modules/workspace/adapter/project-dependencies.ts` | 足す |
+| ディレクトリの直下の名前と種類、`.git` の有無を読む。一覧と確かめを合わせて 3 秒で打ち切る (ホームディレクトリの置き換えは登録のパスと共有する) | インフラ (`ProjectDependencies` の口) | `src/server/modules/workspace/domain/project-settings.ts`、`src/server/modules/workspace/adapter/project-dependencies.ts` | 足す |
 | `gh` の実行 (リポジトリの確かめ、issue の一覧と取得) | インフラ (GitHub の Port) | `src/server/modules/issue/adapter/gh-cli.ts` | 足す |
 | 利用量の集計 (期間、スレッドの付け替え) → conversation_events, conversations, issues, projects, settings | ドメイン / ユースケース | `src/server/modules/conversation/domain/usage.ts`、`src/server/modules/conversation/usecase/get-usage.ts` | 足す |
 | API ハンドラ (プロジェクト、登録のパスの候補、取り込み、利用量) | API ハンドラ | `src/server/modules/workspace/adapter/project-routes.ts`、`src/server/modules/issue/adapter/github-import-routes.ts`、`src/server/modules/conversation/adapter/usage-routes.ts` | 足す |
@@ -421,7 +421,7 @@
 | （US-035）取り込みで GitHub の issue を選ぶと、選んだ issue が下書きとして登録される | 結合 |
 | （US-061）利用量を開くと、issue とプロジェクトごとの利用量が表示される | 結合 |
 
-- 登録のパスの補完の行は、入力欄の問い合わせを偽物に差し替えて確かめる。サーバーが返す候補は、「登録のパスの補完」の表を 1 行ずつ確かめる
+- 登録のパスの補完の行は、入力欄の問い合わせを偽物に差し替えて確かめる。サーバーが返す候補は、一時ディレクトリを読む API のテストで、「登録のパスの補完」の表を 1 行ずつ確かめる
 - 結合: 画面のサーバーとランナーを、本物の SQLite と、一時ディレクトリに作った本物の git のリポジトリで動かす。Agent SDK は台本どおりにイベントを流す偽物、GitHub の Port は決めた issue の一覧を返す偽物に差し替える
 - 設定の行は、偽物の Agent SDK が受け取った実行の設定 (モデルと許可の扱い) の全体を比べる。設定を変える前に始めた会話には、前の値が渡り続けることも確かめる
 - 実装を外す行は、実装待ちの issue に AI が始まらないことを、同じ時点で精査待ちの issue には AI が始まることと対にして確かめる。開発者の会話で `/dev-impl` を送ると、その指示が AI に届き、issue の状態は変わらないことも確かめる
