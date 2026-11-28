@@ -76,7 +76,14 @@ function markedPositions(
         position &&
         position.line === quote.start.line &&
         sameStartSide(position) &&
-        lines[line].startsWith(first),
+        (source.kind === "pr_diff" && quote.kind === "pr_diff" && source.commit === quote.commit
+          ? matchesQuotedLine(
+              lines[line],
+              first,
+              quote.start.col,
+              quote.mode === "block" ? quote.end.col : undefined,
+            )
+          : lines[line].startsWith(first)),
     );
     if (index < 0) return [];
     if (firstOnly || (quote.start.line === quote.end.line && sameEndSide(source.positions[index]!)))
@@ -85,8 +92,13 @@ function markedPositions(
       (position, line) =>
         line >= index && position?.line === quote.end.line && sameEndSide(position),
     );
+    const hiddenEnd =
+      end === -1 &&
+      source.kind === "pr_diff" &&
+      source.hidden?.some((position) => position.line === quote.end.line && sameEndSide(position));
+    const visibleEnd = hiddenEnd ? source.positions.length - 1 : end;
     return source.positions.flatMap((position, line) =>
-      position && line >= index && line <= end ? [line] : [],
+      position && line >= index && line <= visibleEnd ? [line] : [],
     );
   }
   return [];

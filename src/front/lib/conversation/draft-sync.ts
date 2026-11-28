@@ -15,6 +15,9 @@ export class DraftSync {
     this.editedAt = draft?.updatedAt ?? 0;
     this.savedAt = this.editedAt;
   }
+  loadInitial(draft: Draft | null): void {
+    this.adopt(draft);
+  }
   content(): DraftContent {
     return this.value;
   }

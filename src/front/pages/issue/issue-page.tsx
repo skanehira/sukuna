@@ -12,11 +12,14 @@ import type { LifecycleFeed } from "../../components/lifecycle/use-lifecycle";
 import { ListingBuffer } from "../../components/listing-buffer";
 import { ConversationApiError } from "../../lib/conversation/api";
 import type { ConversationSession } from "../../lib/conversation/session";
+import { routeUrl } from "../../lib/routes";
 import { WorkingActivity, type WorkMonitor } from "../../lib/conversation/work-monitor";
 import { ConversationPage } from "../conversation/ConversationPage";
 import type { IssueApi } from "./issue-api";
 import { DesignView, type IssueDesign } from "./design-view";
 import { designViewName } from "./design-lines";
+import { PrView, type PrReviewServices } from "./pr-view";
+import { prView } from "./pr-lines";
 import { issueDataKey, issueFormUrl } from "./issue-form";
 import { issueFormColumns, isClosedIssue } from "./issue-form-lines";
 import {
@@ -32,7 +35,7 @@ import {
   type IssueDisplay,
 } from "./issue-head-lines";
 
-type LoadConversation = (id: string) => Promise<ConversationSession>;
+type LoadConversation = (id: string, current?: () => boolean) => Promise<ConversationSession>;
 type SubscribeConversation = (session: ConversationSession, monitor?: WorkMonitor) => () => void;
 type MonitorConversation = (
   session: ConversationSession,
@@ -219,6 +222,8 @@ export function IssuePage({
   initialDisplay,
   design,
   projectName,
+  project,
+  prReview,
   api,
   controller,
   subscribe,
@@ -235,6 +240,8 @@ export function IssuePage({
   initialDisplay?: IssueDisplay;
   design?: IssueDesign;
   projectName: string;
+  project?: { path: string; usesGithub: boolean };
+  prReview?: PrReviewServices;
   api: IssueApi;
   controller: BufferController;
   subscribe: LifecycleFeed;
@@ -255,6 +262,7 @@ export function IssuePage({
   });
   const issue = data ?? initial;
   const [display, setDisplay] = useState(() => initialDisplay ?? firstIssueDisplay(initial));
+  const displayRef = useRef(display);
   const [conversationId, setConversationId] = useState<string>();
   const showConversation = useCallback((id?: string) => {
     setConversationId(id);
@@ -270,7 +278,7 @@ export function IssuePage({
   useEffect(() => {
     const current = () => opening === controller.screenOpening();
     const removeStop = controller.registerActionInterceptor(timelineStopAction.name, {
-      views: ["issue", designViewName, ...timelineStopAction.views],
+      views: ["issue", designViewName, prView, ...timelineStopAction.views],
       async run({ window }) {
         if (!current()) return false;
         if (window !== "main") {
@@ -320,16 +328,22 @@ export function IssuePage({
 
   useEffect(() => {
     const current = () => opening === controller.screenOpening();
+    const selectDisplay = (next: IssueDisplay) => {
+      if (!current() || displayRef.current === next) return;
+      displayRef.current = next;
+      controller.replaceViewUrl(routeUrl({ kind: "issue", id: issue.id, view: next }));
+      setDisplay(next);
+    };
     const switchDisplay = (direction: number) => {
       if (!current()) return false;
-      setDisplay((selected) => {
-        const index = issueDisplays.indexOf(selected);
-        return issueDisplays[(index + direction + issueDisplays.length) % issueDisplays.length];
-      });
+      const index = issueDisplays.indexOf(displayRef.current);
+      selectDisplay(
+        issueDisplays[(index + direction + issueDisplays.length) % issueDisplays.length],
+      );
       return true;
     };
     controller.options.switchMainView = switchDisplay;
-    const views = ["issue", "conversation", designViewName];
+    const views = ["issue", "conversation", designViewName, prView];
     const action = (name: string, label: string, run: () => void | Promise<void>) =>
       controller.actions.register({ name, label, run, views, where: "issue", group: "そのほか" });
 
@@ -340,9 +354,7 @@ export function IssuePage({
       action("issue.edit", "編集の画面を開く", () => {
         if (current()) return controller.navigate(issueFormUrl(issue.id));
       }),
-      action("issue.diff", "差分の表示を開く", () => {
-        if (current()) setDisplay("diff");
-      }),
+      action("issue.diff", "差分の表示を開く", () => selectDisplay("diff")),
       action("issue.reopen", "この issue を再開する", async () => {
         if (!current() || !isClosedIssue(issue)) return;
         await mutate(api.reopen(issue.id), { revalidate: false });
@@ -385,6 +397,21 @@ export function IssuePage({
         subscribeIssue={subscribe}
         load={loadConversation}
         monitorConversation={monitorConversation}
+      />
+    );
+
+  if (display === "diff" && prReview && project)
+    return (
+      <PrView
+        issue={issue}
+        project={project}
+        controller={controller}
+        services={prReview}
+        subscribe={subscribe}
+        loadConversation={loadConversation}
+        title={title}
+        tabs={<IssueTabs display={display} />}
+        positionKey={`${positionKey}:${display}`}
       />
     );
 

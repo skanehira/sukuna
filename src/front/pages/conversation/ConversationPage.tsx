@@ -1,4 +1,5 @@
 import { useSyncExternalStore, type ReactNode } from "react";
+import { queuedStockIds } from "../../../shared/conversation/api";
 // oxlint-disable-next-line no-restricted-imports -- 外部システムとの同期: 会話画面のキーと入力欄の操作を登録し、画面を離れると解除する
 import { useEffect } from "react";
 import { Buffer } from "../../buffer/Buffer";
@@ -19,6 +20,7 @@ export function ConversationPage({
   recordSeq,
   recordLine,
   recordColumn,
+  queuedStockId,
   marks,
   positionKey,
   title,
@@ -35,6 +37,7 @@ export function ConversationPage({
   recordSeq?: number;
   recordLine?: number;
   recordColumn?: number;
+  queuedStockId?: string;
   marks?: BufferMarks;
   positionKey?: string;
   title?: string;
@@ -69,12 +72,27 @@ export function ConversationPage({
         followTail
         scrollPastEnd
         restorePosition={
-          recordSeq !== undefined ||
-          (!openAtTail && (session.controller.options.restoringPosition === true || !session.recap))
+          queuedStockId === undefined &&
+          (recordSeq !== undefined ||
+            (!openAtTail &&
+              (session.controller.options.restoringPosition === true || !session.recap)))
         }
         onReady={(handle) => {
           session.surround(head, footer);
           session.bind(handle, openAtTail);
+          if (queuedStockId) {
+            const id = session
+              .snapshot()
+              .data?.queue.find((item) => queuedStockIds(item).includes(queuedStockId))?.id;
+            const index = id
+              ? session
+                  .bodyLines()
+                  .findIndex((line) => line.kind === "queued" && line.id === `queue:${id}`)
+              : -1;
+            if (index >= 0) handle.jumpTo(index, { remember: false });
+            else session.controller.notify("選んだ届く前の指示が見つかりません");
+            return;
+          }
           if (recordSeq === undefined) return;
           let record = handle.findSeq(recordSeq, recordLine);
           if (record === null && recordLine !== undefined) {

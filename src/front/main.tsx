@@ -39,6 +39,7 @@ import { createRestoreConnection } from "./lib/restore-connection";
 import { createDesignApi } from "./pages/issue/design-api";
 import { createIssueApi } from "./pages/issue/issue-api";
 import { createIssueWorkspace } from "./pages/issue/issue-workspace";
+import { createPrApi } from "./pages/issue/pr-api";
 import { createWorktreeApi } from "./lib/worktree-api";
 import { createWorktreeWorkspace } from "./lib/worktree-workspace";
 
@@ -171,6 +172,16 @@ const issues = createIssueWorkspace({
     api: createDesignApi(request),
     enterStock: conversations.enterIssueStock,
     stockSession: conversations.stockSession,
+  },
+  prReview: {
+    api: createPrApi(request),
+    schedule: timer.schedule,
+    stock: conversations.reviewStock,
+    trackDraft: conversations.trackReviewDraft,
+    watchDraft: conversations.watchReviewDraft,
+    openExternal: (url) => {
+      window.open(url, "_blank", "noopener,noreferrer");
+    },
   },
   id: ulid,
   storage: window.sessionStorage,

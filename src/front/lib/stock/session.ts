@@ -8,6 +8,7 @@ import type { QuoteSource } from "./quote";
 
 type StockKind = StockItem["kind"];
 type ChangeArea = "stock" | "threads";
+export type QuoteSources = (lines: readonly LineInfo[]) => QuoteSource | readonly QuoteSource[];
 type State = {
   items: StockItem[];
   threads: Thread[];
@@ -98,20 +99,19 @@ export class StockSession {
     this.publish({ placement: { id } });
   }
 
-  marks(
-    source: (lines: readonly LineInfo[]) => QuoteSource,
-    lines: readonly LineInfo[],
-  ): ReadonlyMap<number, StockMark> {
+  marks(source: QuoteSources, lines: readonly LineInfo[]): ReadonlyMap<number, StockMark> {
     if (this.state.items.length === 0 && !this.state.draft) return new Map();
-    return stockMarks(
-      source(lines),
-      lines.map((line) => line.text),
-      this.state.items,
-      this.state.draft?.quote,
+    const value = source(lines);
+    const text = lines.map((line) => line.text);
+    const sources = "kind" in value ? [value] : value;
+    return new Map(
+      sources.flatMap((entry) => [
+        ...stockMarks(entry, text, this.state.items, this.state.draft?.quote),
+      ]),
     );
   }
 
-  bufferMarks(source: (lines: readonly LineInfo[]) => QuoteSource): BufferMarks {
+  bufferMarks(source: QuoteSources): BufferMarks {
     return {
       read: (lines) =>
         new Map([...this.marks(source, lines)].map(([index, mark]) => [index, mark.symbol])),

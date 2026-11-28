@@ -5,13 +5,18 @@ import type { BufferSelection, SelectedRange } from "../../buffer/selection";
 
 type Position = { line: number };
 type ConversationPosition = Position & { seq: number };
-type PrPosition = Position & { side: "old" | "new" };
+export type PrPosition = Position & { side: "old" | "new" };
 type Positions<T> = { positions: readonly (T | undefined)[] };
 export type QuoteSource =
   | ({ kind: "conversation" } & Positions<ConversationPosition>)
   | ({ kind: "file"; path: string } & Positions<Position>)
   | ({ kind: "design_diff"; path: string } & Positions<Omit<DesignQuotePosition, "col">>)
-  | ({ kind: "pr_diff"; path: string; commit: string } & Positions<PrPosition>)
+  | ({
+      kind: "pr_diff";
+      path: string;
+      commit: string;
+      hidden?: readonly PrPosition[];
+    } & Positions<PrPosition>)
   | { kind: "terminal" };
 
 export function conversationSource(lines: readonly LineInfo[]): QuoteSource {

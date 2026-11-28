@@ -74,6 +74,7 @@ export const defaultKeymap: KeymapEntry[] = [
   ...[
     ["<Space>q", "stock.question"],
     ["<Space>c", "stock.instruct"],
+    ["<Space>sg", "stock.publish"],
     ["<Space>q", "files.diff-question"],
     ["<Space>c", "files.diff-instruct"],
     [":", "cmdline"],

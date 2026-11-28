@@ -95,6 +95,7 @@ export type ControllerOptions = {
   entry?: string;
   restoringPosition?: boolean;
   navigate?(url: string, entry?: string, replace?: boolean): void | Promise<void>;
+  replaceViewUrl?(url: string, entry?: string): void;
   openTarget?(this: void, target: OpenTarget, context: ActionContext): boolean;
   back?(): boolean;
   switchMainView?(direction: number): boolean;
@@ -859,6 +860,11 @@ export class BufferController {
   replace(url: string, entry?: string): void | Promise<void> {
     this.changeScreen(url, entry);
     return this.options.navigate?.(url, entry, true);
+  }
+  replaceViewUrl(url: string): void {
+    if (this.options.url === url) return;
+    this.options.url = url;
+    this.options.replaceViewUrl?.(url, this.options.entry);
   }
   pushJump(side: string, line: number): void {
     const handle = this.window(side);

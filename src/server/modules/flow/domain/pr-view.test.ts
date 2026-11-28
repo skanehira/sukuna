@@ -138,6 +138,23 @@ describe("PR の表示の材料", () => {
         ],
       },
     ]));
+  it.each(["char", "block"] as const)(
+    "HEAD が変わると %s の引用は、同じ位置の列途中にあっても行コメントにしない",
+    (mode) => {
+      const partial = {
+        kind: "pr_diff",
+        mode,
+        text: "value",
+        path: "a.ts",
+        commit: sha,
+        start: { side: "new", line: 3, col: 4 },
+        end: { side: "new", line: 3, col: 9 },
+      } as const;
+      const files = parsePrDiff(diff);
+      expect(canCommentOnLine(partial, sha, files)).toBe(true);
+      expect(canCommentOnLine(partial, "b".repeat(40), files)).toBe(false);
+    },
+  );
   it.each([
     [sha, "missing", "new", 7, "anything", true],
     ["b".repeat(40), "a.ts", "new", 3, "new", true],

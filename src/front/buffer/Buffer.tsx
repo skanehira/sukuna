@@ -194,6 +194,53 @@ function cursorSelection(
   return EditorSelection.single(lineStart(nextLines, target));
 }
 
+function carryVisualSelection(
+  doc: Text,
+  selection: EditorSelection,
+  previous: LineInfo[],
+  next: LineInfo[],
+  linewise: boolean,
+): EditorSelection | undefined {
+  const starts: number[] = [];
+  const ids = new Map<string, number>();
+  let offset = 0;
+  for (const [index, line] of next.entries()) {
+    starts.push(offset);
+    offset += line.text.length + 1;
+    if (line.id !== undefined) ids.set(line.id, index);
+  }
+  const findNextLine = (index: number) => {
+    const old = previous[index];
+    return old?.id !== undefined
+      ? ids.get(old.id)
+      : old?.text === next[index]?.text
+        ? index
+        : undefined;
+  };
+  const mapPosition = (position: number) => {
+    const line = doc.lineAt(position);
+    const target = findNextLine(line.number - 1);
+    if (target === undefined || next[target] === undefined) return;
+    const column =
+      linewise && position === line.to ? next[target].text.length : position - line.from;
+    return starts[target] + Math.min(next[target].text.length, column);
+  };
+  const ranges = [];
+  for (const range of selection.ranges) {
+    const first = doc.lineAt(range.from).number - 1;
+    const last = doc.lineAt(range.to).number - 1;
+    const firstNext = findNextLine(first);
+    if (firstNext === undefined) return;
+    for (let index = first + 1; index <= last; index++)
+      if (findNextLine(index) !== firstNext + index - first) return;
+    const anchor = mapPosition(range.anchor);
+    const head = mapPosition(range.head);
+    if (anchor === undefined || head === undefined) return;
+    ranges.push(EditorSelection.range(anchor, head));
+  }
+  return EditorSelection.create(ranges, selection.mainIndex);
+}
+
 export function Buffer({
   side,
   posKey,
@@ -297,11 +344,17 @@ export function Buffer({
       let selection = view.state.selection;
       let currentLines = view.state.field(bufferField).lines;
       const follow = config.followTail && !isBusy(view);
+      const vimState = getCM(view)?.state.vim;
       const number = Number(vimCount(view));
       let menuChanged = false;
       for (const { intent, op, changes } of batch.operations) {
         const nextLines = contentLines(op.content);
-        let resolved = cursorSelection(doc, selection, currentLines, intent, op.content, follow);
+        const visual =
+          intent.kind === "replaceAll" && intent.position === undefined && vimState?.visualMode
+            ? carryVisualSelection(doc, selection, currentLines, nextLines, vimState.visualLine)
+            : undefined;
+        let resolved =
+          visual ?? cursorSelection(doc, selection, currentLines, intent, op.content, follow);
         if (!menuChanged && number && intent.kind === "replaceAll" && intent.missingCursorTarget) {
           const menuId = menuAt(currentLines, number)?.line.id;
           if (menuId && menuAt(nextLines, number)?.line.id !== menuId) {

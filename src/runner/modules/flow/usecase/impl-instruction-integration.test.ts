@@ -429,3 +429,58 @@ it("用意した worktree で AI を開けなければ、次の指示も同じ�
   });
   expect(events().filter(({ type }) => type === "reopened_for_fix")).toHaveLength(1);
 });
+
+it("merge 前の PR の指摘から本文と選んだ指示を実装の会話へ一度で届ける", async () => {
+  const cwd = prepareGit(true);
+  const head = git(cwd, "rev-parse", "HEAD");
+  github(head, "sukuna/issue-42");
+  useAgent({
+    rules: [
+      { match: "^#42", steps: [ready(head), { end: "success" }] },
+      { match: "ストックした指示が 2 件あります。", steps: [ready(head), { end: "success" }] },
+    ],
+  });
+  await startImplementation(true);
+  await waitIdle("merge_confirm");
+  const id = implementation().id;
+  addStock(id, "instruction", "差分の色も確認", head, "selected-color");
+  addStock(id, "instruction", "境界の日付も確認", head, "selected-date");
+  addStock(id, "instruction", "選ばなかった指示", head, "unselected");
+  addStock(id, "question", "日付を変えた理由は何ですか", head);
+  const before = messages().length;
+  const url = `/api/conversations/${id}/messages`;
+  const input = {
+    text: "色を直してください",
+    images: [],
+    mode: "send",
+    clientMessageId: "pr-feedback-1",
+    stockIds: ["selected-color", "selected-date"],
+  };
+  const sent = await request(url, "POST", input);
+  expect(sent.status, await sent.clone().text()).toBe(202);
+  const receipt = await sent.json();
+  await expect
+    .poll(() => events().filter(({ type }) => type === "ready_for_merge"))
+    .toHaveLength(2);
+  await waitIdle("merge_confirm");
+
+  const replay = await request(url, "POST", input);
+  expect(replay.status).toBe(202);
+  expect(await replay.json()).toEqual(receipt);
+  const delivered = messages().slice(before);
+  expect(delivered).toHaveLength(1);
+  expect(delivered[0]?.text).toContain("色を直してください");
+  expect(delivered[0]?.text).toContain("差分の色も確認");
+  expect(delivered[0]?.text).toContain("境界の日付も確認");
+  expect(delivered[0]?.text).not.toContain("選ばなかった指示");
+  expect(delivered[0]?.text).not.toContain("日付を変えた理由は何ですか");
+  const stocks = await request(`/api/conversations/${id}/stock`);
+  expect(await stocks.json()).toMatchObject({
+    items: expect.arrayContaining([
+      expect.objectContaining({ id: "selected-color", state: "sent", sentSeq: expect.any(Number) }),
+      expect.objectContaining({ id: "selected-date", state: "sent", sentSeq: expect.any(Number) }),
+      expect.objectContaining({ id: "unselected", state: "stocked" }),
+      expect.objectContaining({ id: "question", state: "stocked" }),
+    ]),
+  });
+});
