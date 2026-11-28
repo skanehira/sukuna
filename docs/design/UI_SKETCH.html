@@ -613,7 +613,7 @@ function Buffer({ lines, marks, side, crash, posKey, startLine, act, onKeys, onM
 }
 const SKILLS = ["/dev-spec", "/dev-impl", "/workflow-review", "/workflow-commit"];
 /* 入力欄。Vim と同じくモードを持ち、Vim の操作で編集できる */
-function PromptEditor({ label, initial, initialImages, imageSel, working, stocking, plain, onSubmit, onClose, onMode, onView, onFocus, act, recall, onRecall, nowVerb, verbOverride }) {
+function PromptEditor({ label, initial, initialImages, imageSel, working, stocking, plain, plainVerb, onSubmit, onClose, onMode, onView, onFocus, act, recall, onRecall, nowVerb, verbOverride }) {
   const host = useRef(null), view = useRef(null), latest = useRef({}), imgs = useRef(0);
   const [text, setText] = useState(initial || ""), [images, setImages] = useState(initialImages || 0), [pmode, setPmode] = useState(imageSel != null ? "IMAGE" : "INSERT");
   imgs.current = images;
@@ -643,7 +643,7 @@ function PromptEditor({ label, initial, initialImages, imageSel, working, stocki
     else if (isEsc(e) && !vs.insertMode && !vs.visualMode) { eat(); latest.current.onClose(view.current.state.doc.toString()); }
     else if (e.key === "Tab" && cands.length) { eat(); view.current.dispatch({ changes: { from: 0, to: view.current.state.doc.length, insert: cands[0] + " " }, selection: { anchor: cands[0].length + 1 } }); }
   };
-  const verb = verbOverride || (stocking ? "ストックする" : plain ? "決定する" : working ? "預ける (今の作業が終わると届く)" : "送る");
+  const verb = verbOverride || (stocking ? "ストックする" : plain ? plainVerb || "決定する" : working ? "預ける (今の作業が終わると届く)" : "送る");
   const now = nowVerb || (working && !stocking ? "AI を止めてすぐ送る" : verb.split(" ")[0]), up = recall ? [["↑", recall]] : [];
   return (
     <div onKeyDownCapture={onKey}>
@@ -689,7 +689,7 @@ const Hint = ({ items }) => <span className="truncate min-w-0">{items.map(([k, d
  * ------------------------------------------------------------------ */
 const DRAFT = {};
 const CONFIRM = { approve: "設計を承認して、実装へ進めますか?", merge: "merge を許可しますか?", close: "issue を取り下げて閉じますか?", rmworktree: "この worktree を消しますか?", restore: "バックアップから復元しますか?", unregister: "このプロジェクトの登録を解除しますか?" };
-const KIND = { プロンプト: "会話に送る", 質問: "質問", 指示: "指示", 確定事項: "確定事項", 差し戻し: "差し戻しの指摘", 預けた指示の編集: "預けた指示を直す", スレッドへの返信: "スレッドへの返信", 項目: "項目を書く", 回答: "Q2 への回答" };
+const KIND = { プロンプト: "会話に送る", 質問: "質問", 指示: "指示", 確定事項: "確定事項", 差し戻し: "差し戻しの指摘", 預けた指示の編集: "預けた指示を直す", スレッドへの返信: "スレッドへの返信", 項目: "項目を書く", 回答: "Q2 への回答", パス: "プロジェクトのパス" };
 const TABLES = new Set(["convs", "project", "help", "settings", "issueForm", "search", "grep", "404", "offline", "loading"]);
 const issueOf = (v) => (v.s === "issue" ? ISSUES.find((i) => i.id === v.issue && i.project === v.project) : null);
 function PC() {
@@ -867,6 +867,7 @@ function PC() {
     }
     if (a === "approve") { toast("承認しました。設計書を反映し、実装を始めます", "ok"); open({ tab: 0 }, true); }
     else if (a === "reject") ask("差し戻し");
+    else if (a === "project") ask("パス");
     else if (a === "merge") toast("merge を許可しました", "ok");
     else if (a === "stop") toast(working ? `${dest} の AI を止めました。作業は保存され、指示待ちになります` : "止める AI がありません");
     else if (a === "resume") toast("再開しました", "ok");
@@ -930,6 +931,7 @@ function PC() {
     else if (i.kind === "項目") { (i.store === "conf" ? setConf : setForm)((f) => ({ ...f, [i.field]: body })); toast(`${i.field}を書き換えました`, "ok"); }
     else if (i.kind === "差し戻し") toast("差し戻しました。設計した会話の続きで直します", "ok");
     else if (i.kind === "スレッドへの返信") toast("スレッドに送りました", "ok");
+    else if (i.kind === "パス") toast("プロジェクトを登録しました", "ok");
     else if (working && !now) { setQueue((q) => [...q, { id: Date.now(), text: body }]); toast("預けました。今の作業が終わると届きます", "ok"); }
     else {
       /* 割り込みでは、届く前の指示を新しい指示の前に付けて一緒に届ける。閉じた会話は、続きを送ると再開する */
@@ -1157,9 +1159,9 @@ function PC() {
       {input && (
         <div className={`mx-2 mb-2 rounded-lg border bg-raised px-3 py-2 shadow-float ${focus === "prompt" ? "border-accent" : "border-line"}`}>
           <div className="text-[12px] mb-1"><span className="text-ink font-bold">{input.kind === "項目" ? `${input.field}を書く` : input.id && (input.kind === "質問" || input.kind === "指示") ? `${input.kind}を直す` : input.kind === "預けた指示の編集" ? <span data-sketch-change="148:直している指示">{`預けた指示を直す (${queue.findIndex((x) => x.id === input.id) + 1} / ${queue.length} 件目)`}</span> : KIND[input.kind]}</span>
-            <span className="text-muted ml-3">{input.kind === "プロンプト" || input.kind === "預けた指示の編集" ? `送り先: ${dest}${working ? " (AI が作業中)" : ""}` : input.kind === "質問" ? `送り先: ${dest}。送るとスレッドが始まる。送るまではストックに置く` : input.kind === "指示" ? `送り先: ${dest}。ほかの指示とまとめて送る。送るまではストックに置く` : input.kind === "確定事項" ? "AI の案です。直してから指示としてストックに入れる" : ""}</span>
+            <span className="text-muted ml-3">{input.kind === "プロンプト" || input.kind === "預けた指示の編集" ? `送り先: ${dest}${working ? " (AI が作業中)" : ""}` : input.kind === "質問" ? `送り先: ${dest}。送るとスレッドが始まる。送るまではストックに置く` : input.kind === "指示" ? `送り先: ${dest}。ほかの指示とまとめて送る。送るまではストックに置く` : input.kind === "確定事項" ? "AI の案です。直してから指示としてストックに入れる" : input.kind === "パス" ? "Git リポジトリ" : ""}</span>
             {input.quote && <div className="mt-1 font-mono text-muted border-l-2 border-line pl-2">{input.quote.slice(0, 5).map((q, n) => <div key={n} className="truncate"><span className="inline-block w-6 text-right mr-2">{input.line + 1 + n}</span>{q}</div>)}{input.quote.length > 5 && <div>…ほか {input.quote.length - 5} 行</div>}</div>}</div>
-          <PromptEditor key={input.uid} label={KIND[input.kind]} initial={input.text} initialImages={input.images} imageSel={input.sel} working={working && input.kind === "プロンプト"} stocking={["質問", "指示", "確定事項"].includes(input.kind)} plain={input.kind !== "プロンプト"}
+          <PromptEditor key={input.uid} label={KIND[input.kind]} initial={input.text} initialImages={input.images} imageSel={input.sel} working={working && input.kind === "プロンプト"} stocking={["質問", "指示", "確定事項"].includes(input.kind)} plain={input.kind !== "プロンプト"} plainVerb={input.kind === "パス" ? "登録する" : null}
             recall={input.kind === "プロンプト" && queue.length ? "届く前の指示を直す" : input.kind === "預けた指示の編集" && queue.findIndex((x) => x.id === input.id) > 0 ? "前の指示へ" : null}
             onRecall={input.kind === "プロンプト" || input.kind === "預けた指示の編集" ? recallQueue : null}
             nowVerb={input.kind === "預けた指示の編集" ? (working ? "AI を止めて届く前の指示をすぐ送る" : "届く前の指示をすぐ送る") : null} verbOverride={input.kind === "預けた指示の編集" ? "直す" : null}
@@ -1624,6 +1626,7 @@ const SKETCH_VIEWS = {
   "pc-terminal": pc({ s: "terminal", tab: 0 }),
   "pc-help": pc({ s: "help", tab: 0 }),
   "pc-settings": pc({ s: "settings", tab: 0 }),
+  "pc-settings--register": pc({ s: "settings", tab: 0 }, null, { once: { "pc.input": { uid: 1, kind: "パス", text: "~/src/sh" } } }),
   "pc-404": pc({ s: "404", tab: 0 }),
   "pc-offline": pc({ s: "home" }, null, { keep: { "pc.offline": true } }),
   "pc-loading": pc({ s: "loading", tab: 0 }),
