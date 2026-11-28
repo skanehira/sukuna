@@ -1550,6 +1550,7 @@ const STOCK_DEMO = [
   { id: 1, kind: "指示", text: "期限は設定値から読むようにして", quote: [CONV[at("limit")].t], key: "conv-shop-api--0--0-", line: at("limit"), line2: at("limit"), ckey: "shop-api--0-conv-" },
   { id: 2, kind: "質問", text: "定期処理の負荷は問題ない?", quote: [CONV[at("q1") + 1].t], key: "conv-shop-api--0--0-", line: at("q1") + 1, line2: at("q1") + 1, ckey: "shop-api--0-conv-" },
 ];
+const QUEUE_DEMO = [{ id: 1, text: "BOM 付きのときも確かめて" }, { id: 2, text: "終わったらテストの件数を教えて" }];
 const SKETCH_VIEWS = {
   "pc-home": pc({ s: "home" }),
   "pc-home--whichkey": pc({ s: "home" }, null, { once: { "pc.leader": " " } }),
@@ -1566,6 +1567,7 @@ const SKETCH_VIEWS = {
   "pc-convs": pc({ s: "convs", tab: 0 }),
   "pc-conv-other": pc({ s: "conv", project: "shop-api", conv: 1, tab: 0 }),
   "pc-issue-working": pc(issueV("shop-api", 43, 0)),
+  "pc-issue-working--input": pc(issueV("shop-api", 43, 0), null, { keep: { "pc.queue": QUEUE_DEMO }, once: { "pc.input": { uid: 1, kind: "プロンプト", text: "" } } }),
   "pc-issue-working--timeline": pc(issueV("shop-api", 43, 0), "timeline"),
   "pc-issue-working--task": pc(issueV("shop-api", 43, 0), "task"),
   "pc-issue-design": pc(issueV("shop-api", 42, 1)),
