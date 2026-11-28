@@ -294,7 +294,7 @@ type KeymapEntry = {
 | `Ctrl+l` | `view.next` | issue の主のウィンドウで次の表示へ | Normal | `issue` |
 | `Ctrl+o` | `jump.back` | ジャンプの履歴を 1 つ戻る (「ジャンプの履歴」) | Normal | `buffer-ui` |
 | `Ctrl+w h` / `Ctrl+w l` (`Ctrl+w Ctrl+h` / `Ctrl+w Ctrl+l`、`Space w h` / `Space w l`) | `win.left` / `win.right` | 左 / 右のウィンドウへ | Normal、入力欄 (Normal) | `buffer-ui` |
-| `Ctrl+w j` / `Ctrl+w k` (`Space w j` / `Space w k`) | `win.down` / `win.up` | 入力欄へ / 主のウィンドウへ | Normal、入力欄 (Normal) | `buffer-ui` |
+| `Ctrl+w j` / `Ctrl+w k` (`Space w j` / `Space w k`) | `win.down` / `win.up` | 入力欄へ / 主のウィンドウへ。入力欄の本文では `win.down` で画像の段へ、画像の段では `win.up` で本文へ | Normal、入力欄 (Normal)、入力欄の画像の段 | `buffer-ui` |
 | `Space p` | `tree.focus` | ツリーへ移る | Normal | `buffer-ui` |
 | `i` / `a` | `prompt.open` | 入力欄を開く。値の行では値を書く | Normal | `buffer-ui` (開く)、各機能 (送り先) |
 | `dd` | `item.delete` | 行の対象を取り消す・消す | Normal | 各機能 |
@@ -367,7 +367,6 @@ Space を押すと、ステータス行の上に、続けて押せるキーの�
 | `:pause` / `:resume` | 自動フローを止める / 再開する | `project-settings` |
 | `:stop` | AI を止める | `conversation` |
 | `:images clear` | 入力欄に貼った画像をすべて外す | `conversation` |
-| `:images delete <番号>` | 入力欄に貼った画像のうち、その番号の 1 枚を外す (`features/conversation.md`「入力欄で確かめて外す」) | `conversation` |
 | `:close` | 会話を締めくくる | `conversation-lifecycle` |
 | `:convs` | 会話とスレッドの一覧を開く | `conversation-lifecycle` |
 | `:rg <語>` | ファイルの中身を検索する (`Space /` で `:rg ` が入った状態で開く) | `files` |
@@ -458,6 +457,7 @@ Space を押すと、ステータス行の上に、続けて押せるキーの�
 | Normal | Alt+Enter | AI を止めてすぐ送る。AI が作業中の会話への指示のときだけ |
 | Normal (ビジュアルモードでない) | Esc、Ctrl+[ | 閉じる。書きかけの文を、開いた機能に渡す |
 | Normal | `Ctrl+w k` | 入力欄を開いたまま、主のウィンドウへ移る |
+| Normal | `Ctrl+w j` | 開いた機能が画像を渡していれば、画像の段へ移る。画像の段のキーは `features/conversation.md`「入力欄で確かめて外す」に従う |
 | 本文が `/` で始まる 1 語 | Tab | 先頭の候補を入れて空白を足す。続けて Tab を押すと、次の候補に入れ替える |
 | Insert | Ctrl+v | macOS では、アプリがクリップボードを読み、画像は開いた機能の貼り付けの処理に渡し、文字はカーソルの位置に入れる。ほかの端末ではブラウザに渡す。端末とページごとの扱いは `features/conversation.md`「貼り付けた画像」に従う |
 | どれでも | ブラウザの貼り付け | 画像は開いた機能の貼り付けの処理に渡し、文字はカーソルの位置に入れる |
@@ -474,7 +474,8 @@ Space を押すと、ステータス行の上に、続けて押せるキーの�
 - スキルの候補は、入力欄の上に等幅 13px で横に並べ、先頭を accent、ほかを muted にし、最後に「Tab で選ぶ」を出す
 - 貼り付けた画像があれば、本文と下の段のあいだに縮小を貼った順に横に並べ、入りきらなければ折り返す。縮小は高さ 80px、幅は縦横比を保って最大 160px とし、1px の line の枠と角 4px を付ける。左上に、地を raised にした 11px の等幅で 1 から始まる番号を重ねる
 - 縮小を読み込めない画像は、同じ大きさの枠に 12px の muted で「見つかりません」と出す
-- 貼り付けた画像があれば、下の段に「画像 <n> 件 (送信時に一緒に送る)」を accent で出し、続けて muted で「:images delete <番号> で外す」を出す
+- 貼り付けた画像があれば、下の段に「画像 <n> 件 (送信時に一緒に送る)」を accent で出す。本文の Normal では、続けて muted で「Ctrl+w j 画像を選ぶ」を出す
+- 画像の段にいるあいだ、下の段のヒントは「h l 選ぶ」「d 外す」「Enter 開く」「Ctrl+w k 本文へ」とする。画像の段のキーと動きは `features/conversation.md`「入力欄で確かめて外す」に従う
 - 入力欄が開いて主のウィンドウが縮んでも、主のウィンドウのカーソルの行が見えるようにスクロールする
 - IME の変換中のキーでは、送る・閉じるなどのアプリの動きをしない
 
@@ -493,7 +494,7 @@ Space を押すと、ステータス行の上に、続けて押せるキーの�
 
 | 位置 | 中身 | 見た目 |
 | --- | --- | --- |
-| 1 | モードの札: NORMAL、INSERT、REPLACE、VISUAL、VISUAL LINE、VISUAL BLOCK、COMMAND、TERMINAL | 等幅 12px 太字、角 4px、字は ground。地は NORMAL が muted、INSERT と REPLACE が done、VISUAL が accent、COMMAND が ink、TERMINAL が doing |
+| 1 | モードの札: NORMAL、INSERT、REPLACE、VISUAL、VISUAL LINE、VISUAL BLOCK、COMMAND、TERMINAL、IMAGE (入力欄の画像の段) | 等幅 12px 太字、角 4px、字は ground。地は NORMAL が muted、INSERT と REPLACE が done、VISUAL と IMAGE が accent、COMMAND が ink、TERMINAL が doing |
 | 2 | つながらないことの表示 (DESIGN.md「アプリシェル」) | wait の太字 |
 | 3 | 操作中のウィンドウの名前 | ink の中くらいの太さ、20rem で切る |
 | 4 | ヒント | キーは等幅の ink、説明は muted。組の間を 16px 空ける |

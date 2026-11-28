@@ -644,7 +644,7 @@ function PromptEditor({ label, initial, working, stocking, plain, onSubmit, onCl
         {pmode === "INSERT" ? <Hint items={[["Esc", "Normal へ (" + verb.split(" ")[0] + "のは Normal から)"], ...(!plain ? [["Cmd+V", "貼り付け"]] : [])]} /> : <Hint items={[["Enter", verb], ...(working && !stocking ? [["Alt+Enter", "AI を止めてすぐ送る"]] : []), ["Esc", "閉じる (書きかけは残る)"]]} />}
         {!plain && <Hint items={[["/", "スキル"]]} />}
         {images > 0 && <span className="text-accent">画像 {images} 件 (送信時に一緒に送る)</span>}
-        {images > 0 && <span>:images delete &lt;番号&gt; で外す</span>}
+        {images > 0 && pmode !== "INSERT" && <span>Ctrl+w j 画像を選ぶ</span>}
         {!plain && <button type="button" tabIndex={-1} className="underline" onClick={() => setImages((n) => n + 1)}>画像を貼る (見本)</button>}
       </div>
     </div>
