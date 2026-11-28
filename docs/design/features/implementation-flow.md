@@ -85,7 +85,7 @@
 | 元にするもの | GitHub を使うプロジェクトは `git fetch origin <既定ブランチ>` のあと `origin/<既定ブランチ>`、使わないプロジェクトは手元の既定ブランチ。取得に失敗したら手元の既定ブランチから作る |
 | 置き場所 | `features/worktree-terminal.md`「作る場所と名前」 |
 | 記録 | `worktrees` に `origin = flow`、`issue_id`、`port_slot` を入れ、`branch_created` を真にする |
-| 使い直し | その issue の実装の worktree (`origin = flow`、名前が `issue-` で始まる) で片付けていないもののうち、最後の `implementation_done` と `reopened_for_fix` より後に作ったものがあれば、新しく作らずに使う。作った時刻は `worktrees.id` (ULID) の時刻で比べる |
+| 使い直し | その issue の実装の worktree (`origin = flow`、名前が `issue-` で始まる) で片付けていないもののうち、最後の `implementation_done` と `reopened_for_fix` より後に作ったものがあれば、新しく作らずに使う。作った時刻は `worktrees.id` (ULID) の時刻で比べる。作成時の Git 登録とフォルダを照合する |
 
 - 取得に失敗して手元から作っても、お知らせは出さない。merge の前の rebase (「merge の手順」の 7) で既定ブランチの最新を取り込むためである
 - 作った直後に、リポジトリの直下の `.worktreeinclude` に当たるファイルのうち、git が無視するものだけを複製する。手順は `dev-impl` の SKILL.md「2.0 並列実行の可否と枠組み」と同じにする
@@ -159,7 +159,7 @@ merge の手順 (GitHub を使うプロジェクト)
 1. PR の先頭のコミットが手元の HEAD と同じになるまで、10 秒おきに最大 12 回待つ。ならなければ report_needs_human で報告する。
 2. リポジトリに .github/workflows があれば、PR の検査が登録されるまで 10 秒おきに最大 12 回待つ。0 件のままなら CI は無いものとして 4 へ進む。
 3. gh pr checks <PR の URL> --json name,bucket,link を 30 秒おきに見る。全件が pass か skipping になったら 4 へ進む。fail か cancel が 1 件でもあれば、merge せずに report_ci_failed で報告し、番を終える。2 で待ち始めてから 60 分を過ぎても終わらなければ、時間切れとして report_ci_failed で報告する。
-4. report_stage (merge) を呼び、gh pr merge <PR の URL> --repo <リポジトリ名> --squash --match-head-commit <HEAD> --delete-branch で merge する。
+4. report_stage (merge) を呼び、gh pr merge <PR の URL> --repo <リポジトリ名> --squash --match-head-commit <HEAD> で merge する。
 5. gh pr view <PR の URL> --json state,mergeCommit で state が MERGED であることを確かめる。
 6. MERGED なら、指摘の issue と完了のコメントを書き、report_implementation_done で PR の URL と merge のコミットを報告する。
 7. ぶつかって merge できない (mergeable が CONFLICTING、mergeStateStatus が DIRTY か BEHIND) ときは、1 回だけ origin/<既定ブランチ> へ rebase し、全体の検証をもう 1 巡して green を確かめ、git push --force-with-lease で押し直す。そのあと report_ready_for_merge を rebased: true で呼び直し、返ってきた文に従う。2 回目もぶつかったら report_needs_human で報告する。
@@ -205,7 +205,7 @@ AI が `report_ready_for_merge` を呼ぶと、`flow` は次を行う。
 | 上に当たらず、GitHub を使う | 実装中のまま。`stage_changed` (`ci`) | 「CI を待って merge してください」 |
 | 上に当たらず、GitHub を使わない | 実装中のまま | 「merge してください」 |
 
-- 許可済みの rebase とは、`rebased` が真で、この報告より前の最後の `ready_for_merge` より後に `merge_allowed` がある報告を指す
+- 許可済みの rebase は、同じ PR と作業場所に限る。ランナーは GitHub が返す base のコミットを比較に使う。許可した版の変更を今回の比較元に適用した結果が、報告版と一致するときに許可を引き継ぐ
 - 許可済みの rebase で確認で止めないのは、merge のための rebase は issue の差分を変えず、開発者の許可がすでにあるためである。許可の前の rebase と、許可の後に直した報告は、ふつうの報告と同じに確認で止める
 - 一時停止のあいだも、この戻りの文は返す。AI は番の途中で動いているからである (`features/issue-flow.md`「一時停止と自動で処理する段階」)
 
@@ -223,6 +223,7 @@ merge 前の確認を指定した issue (`issues.confirm_before_merge` が真) �
 `projects.uses_github` が偽のプロジェクトでは、PR と CI を使わない (UC-010 B)。
 
 - AI は、テスト・lint・DoD の検証を通した後に、`pr_url` を付けずに `report_ready_for_merge` を呼ぶ
+- merge 前の確認で許可を得た場合は、そのときの作業ブランチの先頭を既定ブランチに入れる。rebase で別の先頭になったときは、その版で許可を得る
 - 確認の指定が無ければ「merge してください」が返り、AI は「merge の手順 (GitHub を使わないプロジェクト)」で既定ブランチへ入れる
 - `flow` は、`report_implementation_done` の `merge_commit` と worktree の `HEAD` が既定ブランチに含まれることを確かめてから完了にする (「完了」の 2)
 
@@ -279,7 +280,10 @@ AI が `report_implementation_done` を呼ぶと、`flow` は merge を確かめ
 消してよいかは、`features/worktree-terminal.md`「消す」の表の 3〜6 で決める。どれかに当てはまれば消さない (BR-051)。表の 1 と 2 は、自動フローの片付けでは当てはまらない。判定は、同書の `src/shared` の関数を画面のサーバーと同じに使う。未 push のコミットの数え方と、`HEAD` が merge を確かめた PR の先頭と同じときの例外も、同書に従う。
 
 - 表の 3 (会話の AI が動いている) は、その issue の段階の会話 (精査・設計・実装の会話) を数えない。片付けは報告のツールの処理の中で行い、そのとき段階の会話は作業中だからである。スレッドなど、ほかの会話は数える。数える会話は、判定の関数に渡す前に `flow` が選ぶ
-- 消すときは、同書「消す」の手順で worktree とブランチを消す。そのあと `worktree_removed` (`{ "worktreeId": "...", "path": "..." }`) を足す
+- 消せる worktree は、同書「消す」の確認を行う。ランナーは画面のサーバーから、同じ worktree の管理ターミナルが終了したと確認してから、フォルダと Git の worktree 登録を消す。確認を得られないときは片付けを保留し、接続が戻ったときに改めて確認する
+- 初期化済みのサブモジュールや状態を確かめられないサブモジュールがあれば、worktree を保持する。
+- Git の登録を指す名前を変えずに、作業ディレクトリの実物を非公開の一時パスへ移す。Git 登録と実物の双方を、作成時の記録に照合してから削除する。確認できなければ残す
+- ブランチは、別の Git 操作がそのブランチを開く場合に備えて保持する。worktree を消したあとに `worktree_removed` (`{ "worktreeId": "...", "path": "..." }`) を足す
 - 消さないときは、`worktree_kept` (`{ "worktreeId": "...", "path": "...", "uncommittedFiles": <数>, "unpushedCommits": <数> }`) を足し、ランナーの `issue` の知らせを出す (UC-010 E2)。画面のサーバーはそれを受けて `inbox` に `changed` を出す (`features/runtime.md`「配信」)
 - 残したことは、プロジェクトの画面の完了か取り下げの issue の行 (`features/inbox.md`) と、issue の画面の末尾 (`features/issue.md`) に「worktree を残しました: <パス>」と出す
 - 残したことは通知にしない。開発者の対応が要る変化ではなく、issue の画面とプロジェクトの画面で分かるためである
@@ -298,6 +302,7 @@ AI が `report_implementation_done` を呼ぶと、`flow` は merge を確かめ
 | そのほか | 問わない | 何もしない。親が実装待ちになったときに確かめ直す |
 
 - 親を完了にしたら、その親の親も同じに確かめる
+- 子の再開を保存できない間は、祖先に依存する実装も始めない。処理を保留した親は排他の解除後に確かめ直す
 - 親を閉じたことで、その親に依存していた issue の実装が始まることがある。閉じた後に評価を行う
 
 ### ランナーの再起動のあと
@@ -306,7 +311,7 @@ AI が `report_implementation_done` を呼ぶと、`flow` は merge を確かめ
 
 - CI の待ちは AI の会話の中のコマンドで行っているので、再起動で止まる。続きの指示を受けた AI が、「merge の手順」の 1 からやり直す
 - 実装中で、実装の会話に指示がまだ届いていない issue (始めるときの手順の途中で止まった) は、手順の 3 からやり直す。worktree があれば使い直す
-- 完了の issue で、片付けていない実装の worktree があり、`worktree_kept` も無ければ、片付けをやり直す
+- 片付け途中で止まった処理は、会話の作業場所を読む前に復旧する。保存した同一性と削除の記録を使い、確かめられる worktree だけを戻すか片付ける。完了の issue に未片付けの worktree があり、`worktree_kept` が無ければ、改めて片付ける
 
 ## API
 
