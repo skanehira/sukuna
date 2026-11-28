@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
+import { ok } from "neverthrow";
 import {
   createTempHome,
   openMigratedDatabase,
@@ -64,6 +65,15 @@ describe("会話のファイル API", () => {
     const app = createApp({
       build: "test",
       workspace: createWorkspaceDependencies(() => database.db, clock),
+    });
+    return app.request(path, undefined, incomingWith("127.0.0.1", 50000));
+  }
+
+  function requestListing(path: string, files: string[]) {
+    const workspace = createWorkspaceDependencies(() => database.db);
+    const app = createApp({
+      build: "test",
+      workspace: { ...workspace, search: { ...workspace.search, files: async () => ok(files) } },
     });
     return app.request(path, undefined, incomingWith("127.0.0.1", 50000));
   }
@@ -936,36 +946,26 @@ describe("会話のファイル API", () => {
   });
 
   it("ツリーは 20000 件までをパス順に返し、名前の検索はその後のパスも探せる", async () => {
-    mkdirSync(join(cwd, "bulk"));
-    for (let i = 0; i < 19_995; i += 1)
-      writeFileSync(join(cwd, `bulk/${String(i).padStart(5, "0")}.txt`), "");
-    const boundary = await request("/api/conversations/c/files");
+    const paths = (count: number) =>
+      Array.from({ length: count }, (_, i) => `bulk/${String(i).padStart(5, "0")}.txt`);
+
+    const boundary = await requestListing("/api/conversations/c/files", paths(20_000));
     expect(await boundary.json()).toEqual({
-      files: [
-        ".gitignore",
-        ".hidden",
-        ...Array.from({ length: 19_995 }, (_, i) => `bulk/${String(i).padStart(5, "0")}.txt`),
-        "inside-link",
-        "outside-link",
-        "src/a.ts",
-      ],
+      files: paths(20_000),
       truncated: false,
       changed: [],
     });
-    for (let i = 19_995; i < 20_001; i += 1)
-      writeFileSync(join(cwd, `bulk/${String(i).padStart(5, "0")}.txt`), "");
-    const response = await request("/api/conversations/c/files");
+    const response = await requestListing("/api/conversations/c/files", paths(20_001));
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
-      files: [
-        ".gitignore",
-        ".hidden",
-        ...Array.from({ length: 19_998 }, (_, i) => `bulk/${String(i).padStart(5, "0")}.txt`),
-      ],
+      files: paths(20_000),
       truncated: true,
       changed: [],
     });
-    const name = await request("/api/conversations/c/search?mode=name&q=20000");
+    const name = await requestListing(
+      "/api/conversations/c/search?mode=name&q=20000",
+      paths(20_001),
+    );
     expect(await name.json()).toEqual({
       mode: "name",
       query: "20000",
