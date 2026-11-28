@@ -12,7 +12,8 @@ import { recoverAfterRestart } from "../usecase/recover-after-restart";
 import { createStageWorktreeRetry } from "../usecase/retry-stage-worktree";
 import { implementationOrigin } from "../domain/impl-history";
 import { hasFlowHistory } from "../domain/evaluate";
-import type { IssueNoticePort } from "../domain/ports";
+import type { IssueNotice, IssueNoticePort } from "../domain/ports";
+import { clearDependencyWithin } from "../usecase/dependency-withdrawn";
 import type { createDesignFlow } from "./design-dependencies";
 import { createIssueUnitOfWork } from "./issue-repository";
 import type { StageRepository } from "../domain/stage-ports";
@@ -51,7 +52,7 @@ export function createStageFlow(
     notices,
     clock: repo,
   });
-  const deferredParents = new Map<string, () => void>();
+  const deferredEvaluations = new Map<string, () => void>();
   const projects = new Map<string, { pending: boolean; job: Promise<void> }>();
   let closing = false;
   let recovery: Promise<void> | undefined;
@@ -74,6 +75,8 @@ export function createStageFlow(
     logFailure,
     terminals,
     schedule,
+    defer,
+    design.cleanupFailed,
   );
   const evaluate = createEvaluateProject({
     repo,
@@ -84,6 +87,16 @@ export function createStageFlow(
     move,
     implementation,
   });
+  function defer(projectId: string) {
+    if (closing || deferredEvaluations.has(projectId)) return;
+    deferredEvaluations.set(
+      projectId,
+      runtime.options.clock.setTimeout(() => {
+        deferredEvaluations.delete(projectId);
+        schedule(projectId);
+      }, 250),
+    );
+  }
   function schedule(projectId: string) {
     if (closing) return;
     const current = projects.get(projectId);
@@ -96,21 +109,24 @@ export function createStageFlow(
       .then(async () => {
         while (!closing && entry.pending) {
           entry.pending = false;
-          const { selected, retry } = implementation.claim(
-            projectId,
-            implementation.checkParentsWithin,
-          );
-          deferredParents.get(projectId)?.();
-          deferredParents.delete(projectId);
-          if (retry) {
-            deferredParents.set(
-              projectId,
-              runtime.options.clock.setTimeout(() => {
-                deferredParents.delete(projectId);
-                schedule(projectId);
-              }, 250),
-            );
-          }
+          const { selected, retry } = implementation.claim(projectId, (id, flow, data) => {
+            const cleared: IssueNotice[] = [];
+            const blocked = new Set<string>();
+            for (const row of data.all(id)) {
+              if (row.stopReason !== "dependency_withdrawn") continue;
+              const result = clearDependencyWithin(flow, row.id, repo.now());
+              if (result?.kind === "moved") cleared.push(result.notice);
+              else if (result?.kind === "unchanged") blocked.add(row.id);
+            }
+            const parents = implementation.checkParentsWithin(id, flow, data);
+            return {
+              notices: [...cleared, ...parents.notices],
+              uncertain: new Set([...blocked, ...parents.uncertain]),
+            };
+          });
+          deferredEvaluations.get(projectId)?.();
+          deferredEvaluations.delete(projectId);
+          if (retry) defer(projectId);
           const order = new Set([...selected, ...repo.issues(projectId).map(({ id }) => id)]);
           for (const id of order) {
             if (closing) return;
@@ -206,10 +222,7 @@ export function createStageFlow(
       else for (const project of repo.projects()) schedule(project.id);
     },
     reports: createStageReports(repo, notices, design, implementation.reports),
-    async finishWithdrawal(id: string) {
-      const record = repo.read(id);
-      if (record?.issue.state === "withdrawn") await implementation.cleanup(record);
-    },
+    finishWithdrawal: implementation.finishWithdrawal,
     recover: () => {
       recovery = recoverAfterRestart(
         repo,
@@ -223,8 +236,8 @@ export function createStageFlow(
     },
     stop: async () => {
       closing = true;
-      for (const cancel of deferredParents.values()) cancel();
-      deferredParents.clear();
+      for (const cancel of deferredEvaluations.values()) cancel();
+      deferredEvaluations.clear();
       unsubscribe();
       await Promise.all([recovery, ...[...projects.values()].map(({ job }) => job)]);
     },

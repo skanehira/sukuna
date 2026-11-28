@@ -5,11 +5,13 @@ import { createWorktreeGit } from "../../../../server/modules/workspace/adapter/
 import type { ConversationRuntime } from "../../conversation/usecase/runtime";
 import {
   createGitCli,
+  createImplementationGit,
   createRunnerDesignGit,
   type GitRunner,
 } from "../../workspace/adapter/git-cli";
 import { createDesignGithub } from "./gh-cli";
 import { createDesignRepository } from "./design-repository";
+import { createImplementationTrees } from "./impl-repository";
 import type { DesignFlowDependencies } from "../domain/design-ports";
 import { createDesignWorkspace } from "../usecase/design-workspace";
 import { createReflectDesign } from "../usecase/reflect-design";
@@ -28,10 +30,16 @@ export function createDesignFlow(
 ) {
   const activity = createWorktreeActivity(database.sqlite.name);
   const workspaceGit = createWorktreeGit(gitRunner, gh);
+  const ownedTrees = createImplementationTrees(database);
+  const ownedGit = createImplementationGit(gitRunner, gh);
   const deps: DesignFlowDependencies = {
     ...options,
     activity,
     workspace: workspaceGit,
+    async createOwnedTree(cwd, tree, start) {
+      const created = await ownedGit.createOwned(cwd, tree.path, tree.branch, start);
+      return created.map((identity) => ownedTrees.bindIdentity(tree.id, identity));
+    },
     git: createRunnerDesignGit(gitRunner, workspaceGit),
     gh: createDesignGithub(gh),
     repo: createDesignRepository(database.db),
@@ -46,6 +54,10 @@ export function createDesignFlow(
   const { workspace, attachWorkspace, cleanup } = createDesignWorkspace(deps, runtime);
   const reflect = createReflectDesign(deps, runtime, cleanup);
   const withdrawnCleanup = new Set<Promise<void>>();
+  function cleanupFailed(id: string, error: unknown) {
+    deps.log(error);
+    deps.alert(id, "取り下げは保存しましたが、設計の作業場所を確認できませんでした。");
+  }
   return {
     workspace,
     attachWorkspace,
@@ -61,11 +73,26 @@ export function createDesignFlow(
       const record = deps.repo.read(id);
       return Boolean(record && deps.repo.findTree(id, record.project.id, record.issue.number));
     },
-    finishWithdrawal(id: string, stop: () => Promise<void>) {
+    cleanupFailed,
+    finishWithdrawal(
+      id: string,
+      stop: () => Promise<void>,
+      cleanupOwned: (withdrawalSeq: number) => "owned" | "awaiting_terminal" | "legacy",
+    ) {
       const record = deps.repo.read(id);
+      const withdrawal = record?.events.findLast((event) => event.type === "state_changed");
       const job = Promise.resolve()
         .then(stop)
-        .then(() => (record?.issue.state === "withdrawn" ? cleanup(record) : undefined))
+        .then(async () => {
+          if (record?.issue.state !== "withdrawn" || !withdrawal) return;
+          try {
+            const outcome = cleanupOwned(withdrawal.seq);
+            if (outcome !== "owned")
+              await cleanup(record, undefined, outcome === "awaiting_terminal");
+          } catch (error) {
+            cleanupFailed(id, error);
+          }
+        })
         .catch((error: unknown) => {
           deps.log(error);
           deps.alert(

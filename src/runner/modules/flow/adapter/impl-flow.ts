@@ -27,6 +27,8 @@ export function createImplementationFlow(
   logFailure: (error: unknown, id: string) => void,
   terminals: ImplementationTerminalCleanup,
   schedule: (projectId: string) => void,
+  defer: (projectId: string) => void,
+  designCleanupFailed: (id: string, error: unknown) => void,
 ) {
   const git = createImplementationGit(gitRunner, ghRunner);
   const gh = createImplementationGithub(ghRunner);
@@ -43,6 +45,8 @@ export function createImplementationFlow(
     logFailure,
     terminals,
     schedule,
+    defer,
+    designCleanupFailed,
   });
   return {
     ...start,

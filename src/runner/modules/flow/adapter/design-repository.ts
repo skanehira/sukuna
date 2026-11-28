@@ -1,10 +1,11 @@
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { readDesignRecord } from "../../../../shared/db/design-reader";
 import type { OpenedDatabase } from "../../../../shared/db/open";
-import { conversations, drafts, worktrees } from "../../../../shared/db/schema";
+import { conversations, drafts, settings, worktrees } from "../../../../shared/db/schema";
 import type { WorktreeActivityReservation } from "../../../../shared/workspace/worktree-activity";
 import { createIssueDataRepository } from "../../../../server/modules/issue/adapter/issue-repository";
 import { createIssueRepository } from "./issue-repository";
+import { provenanceKey } from "./impl-repository";
 import type { DesignRepository } from "../domain/design-ports";
 import { moveStateWithin } from "../usecase/move-state";
 
@@ -69,6 +70,9 @@ export function createDesignRepository(
     },
     abandonTree(id, now) {
       db.update(worktrees).set({ removedAt: now }).where(activeTree(id)).run();
+      db.delete(settings)
+        .where(eq(settings.key, provenanceKey(id)))
+        .run();
     },
     attachTree(record, id, tree) {
       return (
@@ -104,6 +108,9 @@ export function createDesignRepository(
         .run().changes;
       if (!removed) return;
 
+      db.delete(settings)
+        .where(eq(settings.key, provenanceKey(tree.id)))
+        .run();
       db.update(conversations)
         .set({ cwd: record.project.path, worktreeId: null })
         .where(
