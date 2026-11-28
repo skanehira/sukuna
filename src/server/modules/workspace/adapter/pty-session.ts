@@ -15,6 +15,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { spawn, type IPty } from "node-pty";
 import { ulid } from "ulid";
 import type { TerminalOutputFrame } from "../../../../shared/api/terminal";
+import { checkRunningTerminals } from "../domain/terminal-limit";
 import type { TerminalError, TerminalSessionsPort } from "../domain/terminal-ports";
 import { stopTerminalJobs, terminalDirectoryKey } from "./terminal-jobs";
 import supervisorCode from "./terminal-jobs.ts?raw";
@@ -25,7 +26,6 @@ const { SerializeAddon } =
   require("@xterm/addon-serialize") as typeof import("@xterm/addon-serialize");
 
 const TERM = "xterm-256color";
-const MAX_RUNNING = 20;
 const SCROLLBACK = 10_000;
 const PAUSE_OUTPUT_AT = 1024 * 1024;
 const RESUME_OUTPUT_AT = 128 * 1024;
@@ -199,6 +199,7 @@ export function createPtySessions(
   options: {
     env?: NodeJS.ProcessEnv;
     spawn?: typeof spawn;
+    maxRunning?: number;
   } = {},
 ): PtySessions {
   const paths = new Map<string, Session>();
@@ -222,11 +223,11 @@ export function createPtySessions(
       let session = directories.get(key);
       const reused = session?.running ?? false;
       if (!session || !session.running) {
-        if ([...ids.values()].filter((old) => old.running).length >= MAX_RUNNING)
-          return err({
-            code: "conflict",
-            message: "ターミナルが 20 個動いています。使わないシェルを exit で終えてください",
-          });
+        const limited = checkRunningTerminals(
+          [...ids.values()].filter((old) => old.running).length,
+          options.maxRunning,
+        );
+        if (limited.isErr()) return err(limited.error);
 
         const env = options.env ?? process.env;
         const shellEnv = Object.fromEntries(

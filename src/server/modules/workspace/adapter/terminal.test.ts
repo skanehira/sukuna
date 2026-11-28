@@ -17,7 +17,7 @@ import { writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawn } from "node-pty";
+import { spawn, type IPty } from "node-pty";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { WebSocket } from "ws";
 import {
@@ -70,6 +70,7 @@ function nextMatching<T>(
 }
 
 describe("ターミナル API と WebSocket", () => {
+  const runningLimit = 3;
   let root: string;
   let project: string;
   let worktree: string;
@@ -79,6 +80,7 @@ describe("ターミナル API と WebSocket", () => {
   let baseUrl: string;
   let sessions: ReturnType<typeof createPtySessions>;
   let terminalPid: number;
+  let spawnPty: typeof spawn = spawn;
   let clients: WebSocket[];
   let rawOutput: string[];
   let rawListeners: Set<(data: string) => void>;
@@ -180,10 +182,12 @@ describe("ターミナル API と WebSocket", () => {
     clients = [];
     rawOutput = [];
     rawListeners = new Set();
+    spawnPty = spawn;
     sessions = createPtySessions({
       env: { HOME: root, PATH: "/usr/bin:/bin", SHELL: "/bin/sh", SUKUNA_TEST: "private-fixture" },
+      maxRunning: runningLimit,
       spawn: (...args) => {
-        const pty = spawn(...args);
+        const pty = spawnPty(...args);
         terminalPid = pty.pid;
         pty.onData((data) => {
           rawOutput.push(data);
@@ -465,51 +469,74 @@ describe("ターミナル API と WebSocket", () => {
     });
   });
 
-  it("既存の 20 個は使い続けられ、21 個目は競合を返す", async () => {
-    const first = await openId();
-    for (let n = 1; n <= 20; n++) {
-      const directory = join(root, `repo-${n}`);
-      mkdirSync(directory);
-      database.sqlite
-        .prepare(
-          "INSERT INTO projects (id, name, path, default_branch) VALUES (?, 'sample', ?, 'main')",
-        )
-        .run(`p${n}`, directory);
-      const response = await open({ projectId: `p${n}`, worktreeId: null });
-      if (n < 20) {
-        expect({ status: response.status, body: await response.json() }).toEqual({
-          status: 201,
-          body: {
-            id: expect.any(String),
-            cwd: directory,
-            label: "プロジェクトのディレクトリ",
-            conversationId: null,
-            reused: false,
-          },
-        });
-      } else {
-        expect({ status: response.status, body: await response.json() }).toEqual({
-          status: 409,
-          body: {
-            error: {
-              code: "conflict",
-              message: "ターミナルが 20 個動いています。使わないシェルを exit で終えてください",
+  it("上限の数までは使い続けられ、上限を超える 1 個は競合を返す", async () => {
+    const exits: (() => void)[] = [];
+    spawnPty = () => {
+      let exited: Parameters<IPty["onExit"]>[0] = () => {};
+      exits.push(() => exited({ exitCode: 0 }));
+      const ignore = { dispose() {} };
+      return {
+        pid: 0,
+        onData: () => ignore,
+        onExit: (listener: typeof exited) => {
+          exited = listener;
+          return ignore;
+        },
+        pause() {},
+        resume() {},
+        write() {},
+        resize() {},
+        kill() {},
+      } as unknown as IPty;
+    };
+    try {
+      const first = await openId();
+      for (let n = 1; n <= runningLimit; n++) {
+        const directory = join(root, `repo-${n}`);
+        mkdirSync(directory);
+        database.sqlite
+          .prepare(
+            "INSERT INTO projects (id, name, path, default_branch) VALUES (?, 'sample', ?, 'main')",
+          )
+          .run(`p${n}`, directory);
+        const response = await open({ projectId: `p${n}`, worktreeId: null });
+        if (n < runningLimit) {
+          expect({ status: response.status, body: await response.json() }).toEqual({
+            status: 201,
+            body: {
+              id: expect.any(String),
+              cwd: directory,
+              label: "プロジェクトのディレクトリ",
+              conversationId: null,
+              reused: false,
             },
-          },
-        });
+          });
+        } else {
+          expect({ status: response.status, body: await response.json() }).toEqual({
+            status: 409,
+            body: {
+              error: {
+                code: "conflict",
+                message: "ターミナルが 3 個動いています。使わないシェルを exit で終えてください",
+              },
+            },
+          });
+        }
       }
+      const reused = await open();
+      expect({ status: reused.status, body: await reused.json() }).toEqual({
+        status: 200,
+        body: {
+          id: first,
+          cwd: worktree,
+          label: "worktree: try-2",
+          conversationId: null,
+          reused: true,
+        },
+      });
+    } finally {
+      for (const exit of exits) exit();
     }
-    const reused = await open();
-    expect({ status: reused.status, body: await reused.json() }).toEqual({
-      status: 200,
-      body: {
-        id: first,
-        cwd: worktree,
-        label: "worktree: try-2",
-        conversationId: null,
-        reused: true,
-      },
-    });
   });
 
   it("存在しないターミナルの接続は 404 を返す", async () => {
