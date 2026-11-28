@@ -5,7 +5,7 @@ import { capture } from "./evidence";
 
 test.use({ viewport: { width: Number(process.env.UI_VIEWPORT_WIDTH ?? 1440), height: 900 } });
 
-test("設定から Git リポジトリをキーボードで登録し、その節とツリーに表示する", async ({
+test("設定から Git リポジトリのパスを Tab で補って登録し、その節とツリーに表示する", async ({
   page,
 }, testInfo) => {
   const path = testInfo.outputPath("tools-ui");
@@ -37,8 +37,11 @@ test("設定から Git リポジトリをキーボードで登録し、その節
   await page.keyboard.press("Enter");
   const input = page.getByRole("textbox", { name: "プロジェクトのパス" });
   await expect(input).toBeFocused();
-  await page.keyboard.insertText(path);
-  await capture(page, "登録するリポジトリのパスを入力");
+  await page.keyboard.insertText(path.slice(0, -"ui".length));
+  await capture(page, "登録するリポジトリのパスを途中まで入力");
+  await page.keyboard.press("Tab");
+  await expect(input).toHaveText(`${path}/`);
+  await capture(page, "Tab でリポジトリのパスを補った");
   await page.keyboard.press("Escape");
   await page.keyboard.press("Enter");
 

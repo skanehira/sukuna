@@ -5,6 +5,7 @@ import { projectPatchSchema, type ProjectSettings } from "../../../shared/api/pr
 import type { ProjectsResponse } from "../../../shared/inbox/schema";
 import type { Settings } from "../../../shared/settings/settings-schema";
 import type { ServerMessage } from "../../../shared/ws";
+import { EditorView } from "@codemirror/view";
 import { Layout } from "../../buffer/Layout";
 import { BufferController } from "../../buffer/controller";
 import { InboxStore } from "../../lib/inbox-store";
@@ -61,6 +62,21 @@ async function setup(seed = [first], url = "/settings", responseError?: string) 
     const method = init?.method ?? "GET";
     if (path === "/api/issues/closed-issue" && method === "GET") {
       return Response.json({ issue: { projectId: second.id } });
+    }
+    if (path.startsWith("/api/path-candidates?") && method === "GET") {
+      const text = new URLSearchParams(path.split("?")[1]).get("text");
+      const shop = (name: string, repository = false) => ({
+        name,
+        text: `~/src/${name}/`,
+        repository,
+      });
+      const candidates =
+        text === "~/src/sh"
+          ? [shop("shop-api", true), shop("shop-notes"), shop("shop-web")]
+          : text === "~/src/shop-a"
+            ? [shop("shop-api", true)]
+            : [];
+      return Response.json({ candidates, truncated: false, note: null });
     }
     if (path === "/api/projects" && method === "POST") {
       return Response.json({ error: { message: "すでに登録されています" } }, { status: 409 });
@@ -321,6 +337,58 @@ it("登録がなければ空の案内と登録の操作を出す", async () => {
   expect(app.notify).toHaveBeenLastCalledWith("すでに登録されています", "error");
   expect(input).toHaveTextContent("/tmp/already-registered");
   expect(app.navigate).not.toHaveBeenCalled();
+});
+
+it("登録するパスを書きかけて Tab を押すと、続くディレクトリの名前が補われ、候補が複数あれば入力欄の上に並ぶ", async () => {
+  const app = await setup([]);
+  await app.select("プロジェクトを登録する");
+  await app.press("Enter");
+  const input = await screen.findByRole("textbox", { name: "プロジェクトのパス" });
+  const tab = () =>
+    act(async () => {
+      fireEvent.keyDown(input, { key: "Tab" });
+    });
+  const view = EditorView.findFromDOM(input)!;
+  await act(async () => view.dispatch({ changes: { from: 0, insert: "~/src/sh" } }));
+  await tab();
+  const candidates = await screen.findByLabelText("候補");
+  expect({
+    text: input.textContent,
+    shown: candidates.textContent,
+    strong: [...candidates.querySelectorAll(".text-ink")].map((node) => node.textContent),
+  }).toEqual({
+    text: "~/src/shop-",
+    shown: "shop-api/shop-notes/shop-web/濃い字は Git のリポジトリ",
+    strong: ["shop-api/"],
+  });
+  await act(async () => view.dispatch({ changes: { from: view.state.doc.length, insert: "a" } }));
+  await tab();
+  await waitFor(() => expect(input.textContent).toBe("~/src/shop-api/"));
+  expect(
+    app.fetcher.mock.calls.flatMap(([path]) =>
+      typeof path === "string" && path.startsWith("/api/path-candidates") ? [path] : [],
+    ),
+  ).toEqual([
+    `/api/path-candidates?text=${encodeURIComponent("~/src/sh")}`,
+    `/api/path-candidates?text=${encodeURIComponent("~/src/shop-a")}`,
+  ]);
+});
+
+it("登録の入力欄の下の段に、Insert でも Normal でも「Tab パスを補う」を出す", async () => {
+  const app = await setup([]);
+  await app.select("プロジェクトを登録する");
+  await app.press("Enter");
+  const input = await screen.findByRole("textbox", { name: "プロジェクトのパス" });
+  const hint = () =>
+    screen.getAllByLabelText("プロジェクトのパス")[0].lastElementChild?.textContent;
+  const insert = hint();
+  await act(async () => {
+    fireEvent.keyDown(input, { key: "Escape" });
+  });
+  expect([insert, hint()]).toEqual([
+    "Esc Normal へ (登録するのは Normal から)　Tab パスを補う",
+    "Enter 登録する　Esc 閉じる (書きかけは残る)　Tab パスを補う",
+  ]);
 });
 
 it("全体の一時停止と再開をコマンドで保存し、設定を読み直して表示する", async () => {

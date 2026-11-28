@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  pathCandidatesSchema,
   projectRegistrationResponseSchema,
   projectRemovalResponseSchema,
   projectSettingsSchema,
@@ -57,6 +58,12 @@ export function createProjectSettingsApi(fetcher: typeof fetch) {
         projectRegistrationResponseSchema,
         "プロジェクトを登録できませんでした",
         json("POST", { path }),
+      ),
+    pathCandidates: (text: string) =>
+      request(
+        `/api/path-candidates?text=${encodeURIComponent(text)}`,
+        pathCandidatesSchema,
+        "パスの候補を読み込めませんでした",
       ),
     update: (id: string, patch: ProjectPatch) =>
       request(

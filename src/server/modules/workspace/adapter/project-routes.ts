@@ -4,6 +4,7 @@ import type { ZodError } from "zod";
 import { projectPatchSchema, projectRegistrationSchema } from "../../../../shared/api/project";
 import type { ProjectDependencies, ProjectError } from "../domain/project-settings";
 import { getProject } from "../usecase/get-project";
+import { listPathCandidates } from "../usecase/list-path-candidates";
 import { registerProject } from "../usecase/register-project";
 import { unregisterProject } from "../usecase/unregister-project";
 import { updateProject } from "../usecase/update-project";
@@ -77,6 +78,9 @@ export function createProjectRoutes(deps: ProjectDependencies) {
       : err(invalidInput(parsed.error));
     return respond(c, result, result.isOk() && !result.value.restored ? 201 : 200);
   });
+  app.get("/path-candidates", async (c) =>
+    respond(c, await listPathCandidates(c.req.query("text") ?? "", deps)),
+  );
   app.get("/projects/:id", (c) => respond(c, getProject(c.req.param("id"), deps)));
   app.patch("/projects/:id", async (c) => {
     const parsed = projectPatchSchema.safeParse(await c.req.json().catch(() => undefined));
