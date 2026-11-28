@@ -7,6 +7,7 @@ import {
   issueHistoryPoint,
   implementationOrigin,
   implementationState,
+  pendingImplementationFix,
 } from "../domain/impl-history";
 import {
   InputRefused,
@@ -358,7 +359,7 @@ export function createImplementationStart(deps: {
     }
     const revision = record.events.at(-1)?.seq;
     const origin = implementationOrigin(record.events);
-    if (!origin) return;
+    if (!origin || pendingImplementationFix(record.events)) return;
     const input = messages.findLast(
       (event) => event.type === "user_message" && event.createdAt >= origin.createdAt,
     );

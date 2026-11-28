@@ -287,6 +287,10 @@ export class ConversationRuntime {
   deliverQueue = deliverQueue.bind(this);
   start = start.bind(this);
   send = send.bind(this);
+  activeTurnSeq(id: string): number | undefined {
+    const execution = this.executions.get(id);
+    return execution?.turnActive ? execution.startSeq : undefined;
+  }
   private execution(c: Conversation, worktreeId: string | null): Execution {
     const opened = this.executions.get(c.id);
     if (opened) return opened;
@@ -349,6 +353,46 @@ export class ConversationRuntime {
       if (!releaseAfterDelivery) reservation.release();
     }
   }
+  readDeliveryInput(
+    id: string,
+    input: SendInput,
+    options: Pick<
+      DeliveryOptions,
+      "afterAcceptance" | "includeQueued" | "omitMissingImages" | "prefix"
+    > = {},
+  ) {
+    const includeQueued = !options.afterAcceptance && (options.includeQueued ?? true);
+    const queued = includeQueued ? this.store.queue(id) : [];
+    const inputs = [...queued, input];
+    const text = inputs
+      .map((entry) => entry.text)
+      .filter((part) => part.length > 0)
+      .join("\n\n");
+    const imageIds = inputs.flatMap((entry) => entry.images);
+    if (!text.length && !imageIds.length)
+      return err<never, OperationError>({
+        code: "invalid_input",
+        message: "入力を確認してください。",
+      });
+    const images: LoadedImage[] = [];
+    let missingImages = 0;
+    for (const imageId of imageIds) {
+      const image = this.options.images.read(id, imageId);
+      if (image.isErr()) {
+        if (!options.omitMissingImages || image.error.code !== "invalid_input")
+          return err<never, OperationError>(image.error);
+        missingImages += 1;
+      } else images.push(image.value);
+    }
+    if (!text.length && !images.length)
+      return err<never, OperationError>({
+        code: "invalid_input",
+        message:
+          "画像が見つからないため、指示を届けられませんでした。画像を添付し直して、もう一度送ってください。",
+      });
+    const message = [options.prefix, text].filter(Boolean).join("\n\n");
+    return ok({ includeQueued, queued, inputs, text: message, images, missingImages });
+  }
   private async deliverWithProjectRun(
     id: string,
     input: SendInput,
@@ -356,39 +400,7 @@ export class ConversationRuntime {
     options: DeliveryOptions,
   ): Promise<Result<SendResult, OperationError>> {
     const { newConversation } = options;
-    const prepare = () => {
-      const includeQueued = !options.afterAcceptance && (options.includeQueued ?? true);
-      const queued = includeQueued ? this.store.queue(id) : [];
-      const inputs = [...queued, input];
-      const text = inputs
-        .map((entry) => entry.text)
-        .filter((part) => part.length > 0)
-        .join("\n\n");
-      const imageIds = inputs.flatMap((entry) => entry.images);
-      if (!text.length && !imageIds.length)
-        return err<never, OperationError>({
-          code: "invalid_input",
-          message: "入力を確認してください。",
-        });
-      const images: LoadedImage[] = [];
-      let missingImages = 0;
-      for (const imageId of imageIds) {
-        const image = this.options.images.read(id, imageId);
-        if (image.isErr()) {
-          if (!options.omitMissingImages || image.error.code !== "invalid_input")
-            return err<never, OperationError>(image.error);
-          missingImages += 1;
-        } else images.push(image.value);
-      }
-      if (!text.length && !images.length)
-        return err<never, OperationError>({
-          code: "invalid_input",
-          message:
-            "画像が見つからないため、指示を届けられませんでした。画像を添付し直して、もう一度送ってください。",
-        });
-      const message = [options.prefix, text].filter(Boolean).join("\n\n");
-      return ok({ includeQueued, queued, inputs, text: message, images, missingImages });
-    };
+    const prepare = () => this.readDeliveryInput(id, input, options);
     const check = () => {
       const refused = acceptance?.check?.();
       if (refused) return refused;

@@ -11,6 +11,7 @@ import type { createImplementationCompletion } from "./complete-implementation";
 import {
   implementationApproval,
   implementationReady,
+  implementationRevision,
   issueHistoryPoint,
   readyDetails,
 } from "../domain/impl-history";
@@ -30,7 +31,7 @@ export function createImplementationReports(
   complete: ReturnType<typeof createImplementationCompletion>["complete"],
   github: ImplementationGithub,
 ): IssueReportsPort {
-  function read(context: ToolContext) {
+  function read(context: ToolContext, turnSeq: number | undefined) {
     const record = context.issueId && repo.read(context.issueId);
     const c = repo.data.conversation(context.conversationId);
     if (
@@ -45,12 +46,21 @@ export function createImplementationReports(
       record.project.id !== context.projectId
     )
       return;
+    const revision = implementationRevision(record.events, c.id);
+    if (
+      revision &&
+      ((turnSeq ?? 0) <= revision.afterTurnSeq ||
+        (revision.queuedIds.length > 0 &&
+          runtime.store.queue(c.id).some(({ id }) => revision.queuedIds.includes(id))))
+    )
+      return;
     return record;
   }
 
   return {
     async report(name, input, context) {
-      const record = read(context);
+      const turnSeq = runtime.activeTurnSeq(context.conversationId);
+      const record = read(context, turnSeq);
       if (!record) return err(issueConflict);
       const { issue, project, events } = record;
       const tree = start.activeTree(project.id, context.conversationId);
@@ -126,7 +136,7 @@ export function createImplementationReports(
       try {
         const result = runtime.store.withWorktreeReservation((reservation) =>
           repo.transaction((flow, data) => {
-            const current = read(context);
+            const current = read(context, turnSeq);
             if (
               !current ||
               issueHistoryPoint(current.events) !== issueHistoryPoint(events) ||
