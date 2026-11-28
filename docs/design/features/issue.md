@@ -268,7 +268,11 @@ issue の形 (`IssueView`) は次のとおりとする。一覧では `body`・`
 
 ### GET `/api/issues/:id`
 
+issue の画面に表示する担当の会話や停止中の案内を組み立てるため、詳細の取得には状態に応じた情報を含める。
+
 - 応答: 200 `{ "issue": IssueView }`
+- 停止中は、記録があれば停止前の状態を `stoppedFrom` に、現在の停止の原因を `stopCause` に入れる
+- 閉じた issue に残した worktree があれば、最後に残したもののパスを `keptWorktreePath` に入れる。削除した worktree は除く
 - 404 `not_found`
 
 ### PATCH `/api/issues/:id`
