@@ -3,17 +3,18 @@ import { once } from "node:events";
 import { readFileSync, watch } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createServer } from "vite";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 
 if (process.argv[2] === "--run") {
   if (!process.connected) process.exit(0);
   process.once("disconnect", () => process.kill(process.pid, "SIGTERM"));
+  const { createServer } = await import("vite");
   const server = await createServer({
     configFile: false,
     root,
     envDir: false,
+    cacheDir: join(root, "node_modules", ".vite-runner"),
     appType: "custom",
     server: { middlewareMode: true, ws: false, watch: null },
     optimizeDeps: { entries: [] },
@@ -26,6 +27,7 @@ if (process.argv[2] === "--run") {
     throw error;
   }
 } else {
+  if (typeof process.send === "function" && !process.connected) process.exit(0);
   let stopping = false;
   let changes = Promise.resolve();
   const snapshots = new Map();
@@ -73,10 +75,15 @@ if (process.argv[2] === "--run") {
     if (stopping) return;
     stopping = true;
     for (const watcher of watchers) watcher.close();
-    await changes;
-    await stopRunner(signal);
+    try {
+      await changes;
+      await stopRunner(signal);
+    } finally {
+      if (process.connected) process.disconnect();
+    }
   }
 
+  process.once("disconnect", () => void shutdown("SIGTERM"));
   process.once("SIGTERM", () => void shutdown("SIGTERM"));
   process.once("SIGINT", () => void shutdown("SIGINT"));
 }

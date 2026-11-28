@@ -44,6 +44,9 @@ export class RunnerLink {
       },
     };
   }
+  get socketPath(): string {
+    return this.options.socket;
+  }
   async call(
     method: string,
     path: string,

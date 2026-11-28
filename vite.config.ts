@@ -4,6 +4,7 @@ import devServer from "@hono/vite-dev-server";
 import { execSync } from "node:child_process";
 import { defineConfig } from "vite-plus";
 import type { Plugin } from "vite";
+import { launchDevRunner } from "./scripts/dev-runner";
 import {
   allowsRequestAuthority,
   restrictNetworkAccess,
@@ -12,12 +13,12 @@ import {
 
 type RuntimeModule = Pick<
   typeof import("./src/server/runtime"),
-  "initializeRuntime" | "createRuntimeUpgradeHandler" | "getPtySessions"
+  "initializeRuntime" | "createRuntimeUpgradeHandler" | "getPtySessions" | "getRunnerLink"
 >;
 
 function webSocketUpgrade(): Plugin {
   let hostnames: ReadonlySet<string> = new Set();
-  let closeTerminals: (() => Promise<void>) | undefined;
+  let closeDevServices: (() => Promise<void>) | undefined;
   return {
     name: "sukuna:ws-upgrade",
     async config(_config, { command }) {
@@ -39,6 +40,18 @@ function webSocketUpgrade(): Plugin {
       const handleUpgrade = runtime.createRuntimeUpgradeHandler({ hostnames });
       httpServer.on("upgrade", handleUpgrade);
       const terminals = runtime.getPtySessions();
+      const runnerLink = runtime.getRunnerLink();
+      const runnerStartup = new AbortController();
+      let runnerLaunch: ReturnType<typeof launchDevRunner> | undefined;
+      const startRunner = () => {
+        runnerLaunch = launchDevRunner(
+          server.config.root,
+          runnerLink.socketPath,
+          runnerStartup.signal,
+          (message) => server.config.logger.error(message),
+        );
+      };
+      httpServer.once("listening", startRunner);
       const interrupt = () => {
         void server.close().then(
           () => process.exit(130),
@@ -49,17 +62,20 @@ function webSocketUpgrade(): Plugin {
         );
       };
       process.on("SIGINT", interrupt);
-      closeTerminals = async () => {
+      closeDevServices = async () => {
         httpServer.off("upgrade", handleUpgrade);
+        httpServer.off("listening", startRunner);
+        runnerStartup.abort();
+        runnerLink.stop();
         try {
-          await terminals.close();
+          await Promise.all([terminals.close(), runnerLaunch?.then((stop) => stop?.())]);
         } finally {
           process.off("SIGINT", interrupt);
         }
       };
     },
     closeServer() {
-      return closeTerminals?.();
+      return closeDevServices?.();
     },
   };
 }

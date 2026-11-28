@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vite-plus/test";
 import { reserveRunnerSocket } from "./ipc-socket";
@@ -19,6 +20,18 @@ it("残ったソケットへ同時に起動しても待ち受けを取れるラ�
     ]);
   } finally {
     await Promise.all(results.flatMap((r) => (r.status === "fulfilled" ? [r.value.close()] : [])));
+    removeTempHome(home);
+  }
+});
+
+it("ランナーのソケットと同じパスの通常ファイルは削除しない", async () => {
+  const home = createTempHome();
+  const path = join(home, "runner.sock");
+  try {
+    writeFileSync(path, "残すファイル");
+    await expect(reserveRunnerSocket(path)).rejects.toThrow();
+    expect(readFileSync(path, "utf8")).toBe("残すファイル");
+  } finally {
     removeTempHome(home);
   }
 });
