@@ -248,7 +248,7 @@ type ActionDef = {
 };
 type KeymapEntry = {
   keys: string; // Vim の記法 (例: "<Space>q", "<C-w>h", "dd")
-  context: "normal" | "visual" | "prompt" | "terminal";
+  context: "normal" | "visual" | "prompt" | "prompt-images" | "terminal"; // prompt-images は入力欄の画像の段
   to: { action: string } | { keys: string } | null; // 動作、Vim のキー列、割り当てを外す
 };
 // 設定の keymap の値は { version: 1, entries: KeymapEntry[] }
@@ -296,7 +296,11 @@ type KeymapEntry = {
 | `Ctrl+l` | `view.next` | issue の主のウィンドウで次の表示へ | Normal | `issue` |
 | `Ctrl+o` | `jump.back` | ジャンプの履歴を 1 つ戻る (「ジャンプの履歴」) | Normal | `buffer-ui` |
 | `Ctrl+w h` / `Ctrl+w l` (`Ctrl+w Ctrl+h` / `Ctrl+w Ctrl+l`、`Space w h` / `Space w l`) | `win.left` / `win.right` | 左 / 右のウィンドウへ | Normal、入力欄 (Normal) | `buffer-ui` |
-| `Ctrl+w j` / `Ctrl+w k` (`Space w j` / `Space w k`) | `win.down` / `win.up` | 入力欄へ / 主のウィンドウへ | Normal、入力欄 (Normal) | `buffer-ui` |
+| `Ctrl+w j` / `Ctrl+w k` (`Space w j` / `Space w k`) | `win.down` / `win.up` | 入力欄へ / 主のウィンドウへ。入力欄の本文では `win.down` で画像の段へ、画像の段では `win.up` で本文へ | Normal、入力欄 (Normal)、入力欄の画像の段 | `buffer-ui` |
+| `h` / `l` | `prompt.image.prev` / `prompt.image.next` | 左 / 右の画像を選ぶ | 入力欄の画像の段 | `conversation` |
+| `d` | `prompt.image.delete` | 選んだ画像を外す | 入力欄の画像の段 | `conversation` |
+| Enter | `prompt.image.open` | 選んだ画像を元の大きさで新しいタブに開く | 入力欄の画像の段 | `conversation` |
+| Esc、Ctrl+[ / `i` | `prompt.image.leave` / `prompt.image.insert` | 本文の Normal へ / 本文の Insert へ戻る | 入力欄の画像の段 | `buffer-ui` |
 | `Space p` | `tree.focus` | ツリーへ移る | Normal | `buffer-ui` |
 | `i` / `a` | `prompt.open` | 入力欄を開く。値の行では値を書く | Normal | `buffer-ui` (開く)、各機能 (送り先) |
 | `dd` | `item.delete` | 行の対象を取り消す・消す | Normal | 各機能 |
@@ -460,10 +464,13 @@ Space を押すと、ステータス行の上に、続けて押せるキーの�
 | Insert、Normal | Ctrl+Enter、Alt+Enter | すぐ送る。開いた機能がすぐ送る処理を渡していれば、それを呼ぶ (例: 会話では AI が作業中なら AI を止めてすぐ送る)。渡していなければ Normal の Enter と同じに送る |
 | Insert、Normal (カーソルが先頭の行) | ↑ | 開いた機能が前の項目を渡せば、それを入力欄に出す。渡さなければ Vim と同じにカーソルを上へ動かす。前の項目に移っても、モードは変えず、カーソルは本文の末尾に置く |
 | Insert、Normal (カーソルが末尾の行) | ↓ | 開いた機能が次の項目を渡せば、それを入力欄に出す。渡さなければ Vim と同じにカーソルを下へ動かす |
-| Normal (ビジュアルモードでない) | Esc、Ctrl+[ | 閉じる。書きかけの文を、開いた機能に渡す |
-| Normal | `Ctrl+w k` | 入力欄を開いたまま、主のウィンドウへ移る |
+| 本文の Normal (ビジュアルモードでない) | Esc、Ctrl+[ | 閉じる。書きかけの文を、開いた機能に渡す |
+| 本文の Normal | `Ctrl+w k` | 入力欄を開いたまま、主のウィンドウへ移る |
+| 本文の Normal | `Ctrl+w j` | 開いた機能が画像を渡していれば、画像の段へ移る |
+| 画像の段 | 割り当ての `context` が `prompt-images` の行のキー | 画像を選ぶ・外す・開く・本文へ戻る。動きは `features/conversation.md`「入力欄で確かめて外す」に従う |
 | 本文が `/` で始まる 1 語 | Tab | 先頭の候補を入れて空白を足す。続けて Tab を押すと、次の候補に入れ替える |
-| どれでも | 画像の貼り付け | 開いた機能の貼り付けの処理に画像を渡す |
+| Insert | Ctrl+v | macOS では、アプリがクリップボードを読み、画像は開いた機能の貼り付けの処理に渡し、文字はカーソルの位置に入れる。ほかの端末ではブラウザに渡す。端末とページごとの扱いは `features/conversation.md`「貼り付けた画像」に従う |
+| どれでも | ブラウザの貼り付け | 画像は開いた機能の貼り付けの処理に渡し、文字はカーソルの位置に入れる |
 
 - 送ろうとした本文が空白だけのときは、エラーのお知らせ「内容が空です。書いてから送ってください」を出し、入力欄を開いたままにする。空で送れる欄 (例: 差し戻し) は、開く機能が指定する
 - 送るのに失敗したときは、入力欄を閉じず、本文を残す
@@ -472,14 +479,17 @@ Space を押すと、ステータス行の上に、続けて押せるキーの�
 - 入力欄の上の段に、欄の名前 (12px 太字) と送り先 (12px の muted) を出す。引用があれば、引用の行を行番号つきで 5 行まで出し、残りは「…ほか <n> 行」とする
 - 本文は 10rem の高さまで伸ばし、それを超えたら欄の中でスクロールする
 - 入力欄の下の段に、モードに合わせたヒントを出す。動詞は開く機能が渡す
-  - Insert: 「Esc Normal へ」、「Ctrl+Enter <すぐ送る動詞>」
+  - Insert: 「Esc Normal へ」、「Ctrl+Enter <すぐ送る動詞>」。画像を受け付ける欄では、続けて貼り付けのキーを出す。macOS で安全なオリジンでないページなら「Cmd+V 貼り付け」、それ以外は「Ctrl+v 貼り付け」とする
   - Normal: 「Enter <動詞>」、「Ctrl+Enter <すぐ送る動詞>」(開いた機能がすぐ送る処理を渡したときだけ)、「Esc <Esc の説明>」(既定は「閉じる (書きかけは残る)」)
   - どちらのモードでも、開いた機能が前の項目の説明を渡したときは「↑ <説明>」を足す (例: 会話の「↑ 届く前の指示を直す」)
   - <すぐ送る動詞> は、開いた機能がすぐ送る処理と一緒に渡す (例: 会話で AI が作業中なら「AI を止めてすぐ送る」)。渡さなければ <動詞> とする
   - 前 / 次の項目は、本文と一緒に、欄の名前、動詞、すぐ送る処理と動詞、Esc の説明を持つ。項目を移ると、入力欄はそれらに差し替える
-  - 入力欄を操作しているあいだのステータス行のヒントは「Ctrl+w k 主のウィンドウへ移る (入力欄は開いたまま)」だけにする。送る・閉じるキーの案内は入力欄の下の段だけに出す
+  - 入力欄を操作しているあいだのステータス行のヒントは「Ctrl+w k 主のウィンドウへ移る (入力欄は開いたまま)」だけにする。送る・閉じるキーの案内は入力欄の下の段だけに出す。画像の段にいるあいだは、ステータス行にも下の段と同じ「h l 選ぶ」「d 外す」「Enter 開く」「Ctrl+w k 本文へ」を出す
 - スキルの候補は、入力欄の上に等幅 13px で横に並べ、先頭を accent、ほかを muted にし、最後に「Tab で選ぶ」を出す
-- 貼り付けた画像があれば、下の段に「画像 <n> 件 (送信時に一緒に送る)」を accent で出す
+- 貼り付けた画像があれば、本文と下の段のあいだに縮小を貼った順に横に並べ、入りきらなければ折り返す。縮小は高さ 80px、幅は縦横比を保って最大 160px とし、1px の line の枠と角 4px を付ける。左上に、地を raised にした 11px の等幅で 1 から始まる番号を重ねる
+- 縮小を読み込めない画像は、同じ大きさの枠に 12px の muted で「見つかりません」と出す
+- 貼り付けた画像があれば、下の段に「画像 <n> 件 (送信時に一緒に送る)」を accent で出す。本文の Normal では、続けて muted で「Ctrl+w j 画像を選ぶ」を出す
+- 画像の段にいるあいだ、下の段のヒントは「h l 選ぶ」「d 外す」「Enter 開く」「Ctrl+w k 本文へ」とする。画像の段のキーと動きは `features/conversation.md`「入力欄で確かめて外す」に従う
 - 入力欄が開いて主のウィンドウが縮んでも、主のウィンドウのカーソルの行が見えるようにスクロールする
 - IME の変換中のキーでは、送る・閉じるなどのアプリの動きをしない
 
@@ -498,7 +508,7 @@ Space を押すと、ステータス行の上に、続けて押せるキーの�
 
 | 位置 | 中身 | 見た目 |
 | --- | --- | --- |
-| 1 | モードの札: NORMAL、INSERT、REPLACE、VISUAL、VISUAL LINE、VISUAL BLOCK、COMMAND、TERMINAL | 等幅 12px 太字、角 4px、字は ground。地は NORMAL が muted、INSERT と REPLACE が done、VISUAL が accent、COMMAND が ink、TERMINAL が doing |
+| 1 | モードの札: NORMAL、INSERT、REPLACE、VISUAL、VISUAL LINE、VISUAL BLOCK、COMMAND、TERMINAL、IMAGE (入力欄の画像の段) | 等幅 12px 太字、角 4px、字は ground。地は NORMAL が muted、INSERT と REPLACE が done、VISUAL と IMAGE が accent、COMMAND が ink、TERMINAL が doing |
 | 2 | つながらないことの表示 (DESIGN.md「アプリシェル」) | wait の太字 |
 | 3 | 操作中のウィンドウの名前 | ink の中くらいの太さ、20rem で切る |
 | 4 | ヒント | キーは等幅の ink、説明は muted。組の間を 16px 空ける |

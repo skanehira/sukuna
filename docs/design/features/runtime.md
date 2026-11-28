@@ -105,6 +105,7 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 | `pending_answers` の保存 | 画面のサーバー | 開発者の操作 |
 | `pending_answers` の削除、`questions` の `answered` | ランナー | 回答を送ったときに書く。待ちの消えた選択式の質問は、回答以外の指示 (`origin` が `answer_text` 以外) を届けて AI が次の応答を始めたときに書く (BR-090、`features/conversation.md`) |
 | `drafts` の通常の保存と貼り付けた画像のファイル | 画面のサーバー | 画面から受け取る (`features/conversation.md`「書きかけの入力と未送信」) |
+| ツールの結果の画像のファイル | ランナー | ツールの結果を記録するのはランナーだけである (「Agent SDK のメッセージからの写し方」) |
 | 差し戻しを受理したときの `drafts` の初期化 | ランナー | 受理と同時に、送った版だけを空にする (`features/design-review.md`「差し戻し」) |
 | 取り消した指示を復帰させたときの `drafts` の更新 | ランナー | 指示の受付と同じ取引で書く (`features/conversation.md`「書きかけの入力と未送信」) |
 | `stock_items` の行の追加、`text`、`state` (`stocked` と `cancelled` の行き来、届く前の指示の取り消しで `sent` から `stocked`)、`github_comment_url` | 画面のサーバー | 開発者の操作 (`features/stock-thread.md`、`features/pr-review.md`) |
@@ -142,9 +143,10 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 - `settings` の `runner-workspace-switch:` で始まるキー。ランナーは確定結果を、画面のサーバーは未確定の要求の取消しを書く。どちらも SQLite の書き込みロック内で同じ要求の行が無いことを確かめてから追加する。この名前で始まる期限切れの行だけを掃除する
 - `worktrees` の `removed_at`。どちらのプロセスも、`removed_at` が空のときだけ書く (`features/worktree-terminal.md`「書くプロセス」)
 
-貼り付けた画像は、画面のサーバーが `<データのディレクトリ>/images/<conversation_id>/<ID>.<拡張子>` に書き、記録にはデータのディレクトリからの相対のパスで残す。ランナーは、指示を送るときにこのファイルを読む。
+会話の画像は `<データのディレクトリ>/images/<conversation_id>/<ID>.<拡張子>` に置く (`features/operations.md`「データの置き場所」)。貼り付けた画像は画面のサーバーが書き、ツールの結果の画像はランナーが書く。ランナーは、指示を送るときに貼り付けた画像を読む。画面のサーバーは、画面に表示するために両方を読む (`features/conversation.md`「GET /api/conversations/:id/images/:imageId」)。
 
-- `<ID>` は画像の識別子 (ULID) で、`drafts.images` と `queued_instructions.images` に入る値である
+- `<ID>` は画像の識別子 (ULID) で、`drafts.images`、`queued_instructions.images`、`tool_result` の記録の `images` に入る値である。`user_message` の記録には、データのディレクトリからの相対のパスで残す
+- 同じ ID のファイルは、書いたあとに書き換えない
 - 拡張子は、保存するときの形式 (`image/png` なら `png`、`image/jpeg` なら `jpg`、`image/gif` なら `gif`、`image/webp` なら `webp`) から決める
 - 識別子からファイルを引くときは、`images/<conversation_id>/` の中で `<ID>.` で始まるファイルを探す。無ければ、画像が見つからないとして扱う (`features/conversation.md`)
 
@@ -268,7 +270,7 @@ Git のロックは、公開先にリンクする前に物理識別子を記録�
 | `user_message` | ランナーが AI に指示を送る直前 | `text`、`images`、`origin`、`client_ids?`、`queued_ids?`、`client_receipts?` |
 | `assistant_text` | AI の発言が 1 つ終わったとき | `text`、`parent_tool_use_id` |
 | `tool_use` | AI がツールを呼んだとき | `tool_use_id`、`name`、`input`、`parent_tool_use_id` |
-| `tool_result` | ツールの結果が届いたとき | `tool_use_id`、`is_error`、`content`、`truncated`、`bytes` |
+| `tool_result` | ツールの結果が届いたとき | `tool_use_id`、`is_error`、`content`、`truncated`、`bytes`、`images?`、`omitted_images?` |
 | `diff` | ファイルの編集の結果が届いたとき (`tool_result` の直後) | `tool_use_id`、`path`、`change` (`edit` / `create` / `update`)、`hunks`、`content?`、`truncated` |
 | `question` | AI が選択式の質問を出したとき | `request_id`、`questions` |
 | `answer` | 開発者の回答を AI に渡したとき | `request_id`、`answers`、`as_message` |
@@ -286,6 +288,15 @@ type UserMessage = {
   client_receipts?: ({ client_id: string; received_at: number } & ({ result: "queued"; queued_id: string } | { result: "delivered" }))[];
   client_ids?: string[]; // 1 通にまとめた指示の client_id (届く前の指示の分を含む)
   queued_ids?: string[]; // まとめて届けた届く前の指示の id
+};
+type ToolResult = {
+  tool_use_id: string;
+  is_error: boolean;
+  content: string; // 結果の文字。画像を含む結果では、文字のブロックだけを改行でつなぐ
+  truncated: boolean;
+  bytes: number;
+  images?: { id: string; media_type: string }[]; // 保存したツールの結果の画像。結果の中の順
+  omitted_images?: number; // 保存できなかった画像の数。0 なら省く
 };
 type Diff = {
   tool_use_id: string;
@@ -353,9 +364,17 @@ SDK のメッセージは、まず Port の出力 (「Agent SDK を包む Port�
 - `sdk_uuid` は SDK の `uuid` に、ブロックの種類と 0 始まりの番号を付けて作る (例: `<uuid>:text:0`)。1 件の SDK メッセージに複数のブロックが入るためである。同じ識別子の 2 件目は書かない。差分は、ツールの結果の識別子に `:diff` を付ける
 - `parent_tool_use_id` がある発言とツールは、サブエージェントのものである。同じ種類で保存し、`parent_tool_use_id` で親のツールの実行に結びつける
 - `tool_result` の `content` は、文字に直して 64 KiB までを保存する。超えた分は切り、`truncated: true` と元の `bytes` を入れる
+- `tool_result` の `content` が配列で、`type` が `image` のブロックを含むときは、画像を記録の文字に入れない。文字のブロック (`type` が `text`) の `text` だけを改行でつないで `content` にする。画像のブロックを含まない配列は、配列を JSON の文字にしたまま `content` にする
+- 画像のブロックのうち、`source.type` が `base64` で、`media_type` が `image/png` / `image/jpeg` / `image/gif` / `image/webp` のものを `AgentOutput` の `images` に入れる。ほかの画像のブロック (`source.type` が `url` など) は `omittedImages` に数える
+- ランナーは、`tool_result` を記録する前に、`images` を 1 件ずつ画像のファイルに書き (「書くプロセスの分担」)、書けた画像の ID を記録の `images` に入れる。デコードした大きさが 5 MB を超える画像、21 枚目以降の画像、書き込みに失敗した画像は書かず、`omitted_images` に足す。書き込みの失敗はログに残し、番は止めない
+- 同じ `sdk_uuid` の `tool_result` をすでに記録していれば、画像を書かない。記録されない画像のファイルを残さないためである
 - `diff` の `hunks` は合わせて 5,000 行までを保存する。`create` の `content` も 5,000 行までとする。超えた分は切り、`truncated: true` を入れる
 - `tool_use` の `input` は、文字の値ごとに 16 KiB までとし、超えた分は切る
 - `turn_end` の `usage` と `cost_usd` は、SDK の値をそのまま写す。1 回の番の値か累計かの扱いは `features/project-settings.md`「利用量」が決める
+
+決定: 画像のブロックを含まない配列の結果は、配列を JSON の文字にしたまま残す
+理由: ツールの行から開く先 (例: `issue_create` が作った issue) は、結果の文字を読んで決めている。文字の形を変えると開く先の決め方にも手が入り、画像の表示と関係のない変更が広がる
+採らなかった案: 文字だけの配列も、文字のブロックをつないだ文にそろえる (要約の行は読みやすくなるが、開く先の決め方を作り直すことになる)
 
 番の終わりの理由は、次の順に判定して `stopped` を書く。利用枠の判定は FEASIBILITY.md「PoC 結果 > usage-limit-detect」の推奨アプローチに従う。
 
@@ -526,7 +545,7 @@ type AgentOutput =
   | { kind: "text_delta"; text: string; parentToolUseId: string | null }
   | { kind: "assistant_text"; uuid: string; text: string; parentToolUseId: string | null }
   | { kind: "tool_use"; uuid: string; toolUseId: string; name: string; input: unknown; parentToolUseId: string | null }
-  | { kind: "tool_result"; uuid: string; toolUseId: string; isError: boolean; content: string; diff: DiffOutput | null; parentToolUseId: string | null }
+  | { kind: "tool_result"; uuid: string; toolUseId: string; isError: boolean; content: string; images: { mediaType: string; data: Buffer }[]; omittedImages: number; diff: DiffOutput | null; parentToolUseId: string | null }
   | { kind: "assistant_error"; error: string }
   | { kind: "rate_limit"; status: "allowed" | "allowed_warning" | "rejected"; resetsAt: number | null; overageStatus: string | null; errorCode: string | null; raw: unknown }
   | { kind: "background_task"; taskId: string; running: boolean }
@@ -604,7 +623,7 @@ type AppTool = {
 | 段 | 動き |
 | --- | --- |
 | `text` | `text_delta` を 1 件と `assistant_text` を流す |
-| `tool` | `tool_use` と `tool_result` を流す。`diff` があれば結果に付ける。名前が `mcp__sukuna__` で始まるツールは、`AppToolRegistry` に登録した処理を実際に呼び、その戻り値を結果にする。台本の `result` は使わない |
+| `tool` | `tool_use` と `tool_result` を流す。`diff` があれば結果に付ける。`images` (`{ "media_type", "data" }` の配列。`data` は base64) があれば、結果に画像として付ける。名前が `mcp__sukuna__` で始まるツールは、`AppToolRegistry` に登録した処理を実際に呼び、その戻り値を結果にする。台本の `result` は使わない |
 | `shell` | 会話の `cwd` でコマンドを実際に実行し、`Bash` の `tool_use` と、標準出力と標準エラーをつないだ `tool_result` を流す。終了コードが 0 でなければ `is_error` を真にする |
 | `ask` | `onQuestion` を呼び、回答が返るまで次へ進まない |
 | `permission` | `onPermission` を呼び、答えが返るまで次へ進まない |
@@ -736,8 +755,8 @@ interface GhRunner {
 | ソケットの待ち受けと操作の振り分け | インフラ (ランナー) | `src/runner/modules/conversation/adapter/ipc-routes.ts` |
 | 知らせの流れ | インフラ (ランナー) | `src/runner/modules/conversation/adapter/change-feed.ts` |
 | AI の Port と出力の型 | ドメイン | `src/runner/modules/conversation/domain/agent-port.ts` |
-| 画像を読む Port と画像の型 | ドメイン | `src/runner/modules/conversation/domain/image-port.ts` |
-| 会話専用ディレクトリからの画像の読み取り | インフラ | `src/runner/modules/conversation/adapter/image-files.ts` |
+| 画像を読み書きする Port と画像の型 | ドメイン | `src/runner/modules/conversation/domain/image-port.ts` |
+| 会話専用ディレクトリの画像の読み取りと、ツールの結果の画像の書き込み | インフラ | `src/runner/modules/conversation/adapter/image-files.ts` |
 | 出力から記録への写し、状態の移り変わり、止まった理由の判定 | ドメイン | `src/runner/modules/conversation/domain/event-mapping.ts`、`src/runner/modules/conversation/domain/run-state.ts`、`src/runner/modules/conversation/domain/stop-reason.ts` |
 | 開始・送信・停止・再開・分岐・回答・許可・手放す → `conversations`、`conversation_events`、`queued_instructions`、`pending_answers`、`questions` | ユースケース | `src/runner/modules/conversation/usecase/*.ts` |
 | 再起動のときの直し → `conversations`、`conversation_events` | ユースケース | `src/runner/modules/conversation/usecase/recover.ts` |
@@ -759,7 +778,7 @@ interface GhRunner {
 ## エッジケースの決定
 
 1. **空・最小データ**: 最初の指示なしで会話を始めると、行だけを作り、記録は 0 件で `run_state` は `idle` にする。記録の無い会話の購読は、再送を 0 件にする。偽物の台本に合う規則も `fallback` も無いときは、`turn_end` (`success`) だけを流す
-2. **上限・境界値**: ツールの結果は 64 KiB、差分は 5,000 行、ツールの入力は値ごとに 16 KiB までを保存する。再送は 1 回の購読で 1,000 件まで、送り待ちは接続ごとに 8 MiB までとする。ソケットのパスは 103 バイトまでとする
+2. **上限・境界値**: ツールの結果は 64 KiB、差分は 5,000 行、ツールの入力は値ごとに 16 KiB までを保存する。ツールの結果の画像は 1 枚 5 MB、1 件の結果に 20 枚までをファイルに書く。再送は 1 回の購読で 1,000 件まで、送り待ちは接続ごとに 8 MiB までとする。ソケットのパスは 103 バイトまでとする
 3. **エラー時に利用者へ見えるもの**: ランナーにつながらないときは、操作の応答規則に従って画面にお知らせを出す。状態の合わない操作は 409 になる。AI の開始に失敗したとき (ログインの切れなど) は、`stopped` (`error`) にエラーの文を入れ、会話の末尾に止まった理由として出る
 4. **並行操作・二重実行**: ランナーは会話ごとに操作を 1 列に並べて処理する。同じ会話で 10 分以内に届いた同じ `client_id` の送信は、1 回だけ届けるか預ける。2 つ目のランナーは起動を失敗させる。マイグレーションは `db.lock` の排他のロックの中で当て、2 つ目のプロセスは当て済みの記録を見て何もしない
 5. **再表示時の整合**: 画面はつなぎ直すと、`after` で続きの記録を受け取り、記録以外は API で読み直す。画面のサーバーが再起動したときも同じで、ランナーの AI は動き続ける。ランナーとのつながりが戻ったら、購読中の対象を SQLite から読み直して配信する

@@ -127,7 +127,7 @@ plist の中身:
 | パス | 中身 | 書くプロセス |
 | --- | --- | --- |
 | `sukuna.db` (と `-wal`・`-shm`) | SQLite のデータベース | 両方 |
-| `images/<conversation_id>/` | 貼り付けた画像。名前と記録の形は `features/runtime.md`「書くプロセスの分担」 | 画面のサーバー |
+| `images/<conversation_id>/` | 貼り付けた画像とツールの結果の画像。名前と記録の形は `features/runtime.md`「書くプロセスの分担」 | 画面のサーバー (貼り付けた画像)、ランナー (ツールの結果の画像) |
 | `vapid.json` | Web Push の VAPID の鍵 (権限 0600) | 導入のコマンド |
 | `backups/` | バックアップ (下の「バックアップ」) | ランナー、復元の処理 |
 | `restore-db.tmp` (と `-journal`・`-wal`・`-shm`) | 復元で置き換える前のデータベースの写し (復元のあいだだけある) | 復元の処理 |
@@ -192,7 +192,7 @@ node dist/server/install.js update
 - 新しい写しをとるとき、同じ日付のファイルがすでにあれば上書きする
 - バックアップの id は、ファイル名から先頭の `sukuna-` と末尾の `.db` を外したものとする。`sukuna-2026-11-26.db` は `2026-11-26`、`before-restore-20261125-101500.db` は `before-restore-20261125-101500` になる
 - 結果は `settings` の `backup_status` (`{ "lastAt": <時刻>, "lastError": <文か null> }`) に書く。失敗しても、次の 03:00 まで取り直さない
-- 貼り付けた画像 (`images/`) は含めない。復元したあとに無い画像は、会話の表示で見つからないと出す (`features/conversation.md`)
+- 会話の画像 (`images/`) は含めない。復元したあとに無い画像は、会話の表示で見つからないと出す (`features/conversation.md`)
 
 ### 復元
 

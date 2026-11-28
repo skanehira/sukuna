@@ -169,7 +169,7 @@ SQLite のファイルを 1 つ使う。識別子は ULID の文字列、時刻�
 - 会話の記録は、Agent SDK が持つ記録とは別に、`conversation_events` に保存する。画面の表示、未読の位置、引用の位置は `seq` で指す。Agent SDK の記録は、AI の文脈を続けるためだけに使う
 - `conversations.stop_reason` は `user` / `restarted` / `api_error` / `error` / `credits_required` / `usage_limit` とする。`run_state` との対応は `features/conversation.md` が正本である
 - `conversations.last_position` は、前回読んでいた行のイベントの `seq` とする。`recap_seq` は、目次などの更新に反映した最後の `seq` である
-- 貼り付けた画像はデータのディレクトリ (`features/operations.md`「データの置き場所」) の下のファイルで持ち、`drafts.images` と `queued_instructions.images` は画像の識別子の配列とする
+- 会話の画像 (貼り付けた画像とツールの結果の画像) はデータのディレクトリ (`features/operations.md`「データの置き場所」) の下のファイルで持つ。`drafts.images`、`queued_instructions.images`、`tool_result` の記録の `images` は画像の識別子で指す
 - どの列をどちらのプロセスが書くかは `features/runtime.md`「書くプロセスの分担」が正本である。同じ列を 2 つのプロセスが書くのは、分担の表に挙げた列だけとし、その更新は元の値を条件にして、前の変化を上書きしないようにする
 - `conversations.run_state` は `idle` / `working` / `waiting_answer` / `waiting_permission` / `stopped` / `failed` / `usage_limited` とする。一覧のセクション (判断待ち・指示待ち・作業中) は、この値と `questions`、issue の状態から求める (決まりは `features/inbox.md`)
 - 決まったことの一覧は、データベースではなくリポジトリのファイルで持つ (BR-015。置き場所は `features/recap.md`)
@@ -213,6 +213,7 @@ SQLite のファイルを 1 つ使う。識別子は ULID の文字列、時刻�
 | POST | `/api/conversations/:id/resume` | 止まった作業を再開する | `features/conversation.md` |
 | PUT | `/api/conversations/:id/draft` | 書きかけの入力を保存する | `features/conversation.md` |
 | POST | `/api/conversations/:id/images` | 貼り付けた画像を保存する | `features/conversation.md` |
+| GET | `/api/conversations/:id/images/:imageId` | 会話の画像 (貼り付けた画像とツールの結果の画像) を返す | `features/conversation.md` |
 | PATCH | `/api/conversations/:id/queue/:itemId` | 届く前の指示を直す | `features/conversation.md` |
 | DELETE | `/api/conversations/:id/queue/:itemId` | 届く前の指示を取り消す | `features/conversation.md` |
 | PUT | `/api/conversations/:id/answers` | 送る前の回答を保存する | `features/conversation.md` |
@@ -388,10 +389,10 @@ issue の状態の移り変わりは `features/issue-flow.md` の表が正本で
 
 - 動かす場所: Mac Studio。launchd で、画面のサーバーとランナーを別々のサービスとして常駐させる。Mac の再起動のあとも自動で起動する (UC-015 C)
 - 画面のサーバーは 0.0.0.0 の指定したポートで待ち受け、`http://macstudio:<port>` (Tailscale の MagicDNS の名前) で開く
-- ファイルは XDG Base Directory の決まりに従って置く。データのディレクトリ (既定は `~/.local/share/sukuna`) に SQLite のファイル、貼り付けた画像、VAPID の鍵、バックアップを置く。状態のディレクトリ (既定は `~/.local/state/sukuna`) にログ、ロック、子プロセスの記録を置き、ランナーのソケットは実行時のディレクトリに置く。ディレクトリの決め方とファイルの名前は `features/operations.md`「データの置き場所」が正本である
+- ファイルは XDG Base Directory の決まりに従って置く。データのディレクトリ (既定は `~/.local/share/sukuna`) に SQLite のファイル、会話の画像 (貼り付けた画像とツールの結果の画像)、VAPID の鍵、バックアップを置く。状態のディレクトリ (既定は `~/.local/state/sukuna`) にログ、ロック、子プロセスの記録を置き、ランナーのソケットは実行時のディレクトリに置く。ディレクトリの決め方とファイルの名前は `features/operations.md`「データの置き場所」が正本である
 - 配置先には `node_modules` が要る。SQLite のドライバと擬似端末の部品は、ビルドの成果物に同梱しない
 - 更新: リポジトリを更新して `vp install` と `vp build` を行い、画面のサーバーだけを入れ替える。ランナーを入れ替えるのは、ランナーのコードが変わったときだけにする
-- バックアップ: SQLite のデータベースを、SQLite のバックアップの機能で写す。貼り付けた画像は含めない。復元は、2 つのプロセスを止めてから行う。手順は `features/operations.md` に書く
+- バックアップ: SQLite のデータベースを、SQLite のバックアップの機能で写す。会話の画像は含めない。復元は、2 つのプロセスを止めてから行う。手順は `features/operations.md` に書く
 - CI では `vp check`、`CI=1 vp test --run`、`vp build`、`vp run test:built-server` を順に実行する。結合テストはビルド成果物を起動し、同じポートで画面、API、WebSocket に接続できることを確かめる。変異テストは CI で流さない。PR で変えたファイルを対象にすると、1 つの PR に数時間かかることがあるためである
 - シークレット: アプリは API キーを持たない。AI の実行は、この Mac の Claude Code のログインを使う (「未解決の論点」)
 
@@ -416,7 +417,7 @@ issue の状態の移り変わりは `features/issue-flow.md` の表が正本で
 - rg の JSON 出力では `--max-columns` が効かない。中身の検索の本文は、サーバーで先頭の 500 文字に切る。列番号は元の行の最初の一致を指す
 - CodeMirror の文字の位置は UTF-16 コード単位で数え、サロゲートペアは 2 単位になる。中身の検索の列も同じ単位で返す ([公式ガイド](https://codemirror.net/docs/guide/#data-structures))
 - Vite+ のテストのファイルキャッシュに、`import.meta.glob` が集めたマイグレーションの一覧が残ることがある。SQL ファイルを追加したあとに一覧が更新されなければ、`vp test --clearCache` を実行してからテストを流す
-- `http://macstudio:<port>` は安全なオリジンではない。Service Worker、通知の許可、Web Push の購読は使えない。使えるかは実行時に判定し、使えないときは通知の購読を試みない (PoC `web-push-tailscale`)
+- `http://macstudio:<port>` は安全なオリジンではない。Service Worker、通知の許可、Web Push の購読、クリップボードの読み取り (Clipboard API の `read`) は使えない。使えるかは実行時に判定し、使えないときは通知の購読を試みない (PoC `web-push-tailscale`)。クリップボードの扱いは `features/conversation.md`「貼り付けた画像」に従う
 - 通知の取り下げは Web Push の仕組みに無い。取り下げ用の push を送り、Service Worker が同じ `tag` の通知を探して閉じる。push を受けて通知を 1 件も出さないと、Chrome が代わりの通知を出すことがある
 - Agent SDK の停止は、入力を流れとして渡した実行でだけ使える。バックグラウンドへ移ったコマンドは停止では止まらず、終わると AI の番が自動で始まる。停止の操作では、動いているバックグラウンドのタスクも止める (PoC `agent-sdk-interrupt`)
 - 作業中に優先度を付けずに送った指示は、実行中のツールが終わった時点で同じ番に入る。届く前の指示は、ランナーが保持し、番の終わりを受けてから 1 通につないで送る
