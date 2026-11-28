@@ -41,7 +41,7 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 
 ### プロセスと起動
 
-画面のサーバーとランナーは、同じリポジトリの別の入口から起動する。どちらも `SUKUNA_HOME` の同じ SQLite のファイルを開く。
+画面のサーバーとランナーは、同じリポジトリの別の入口から起動する。どちらもデータのディレクトリ (`features/operations.md`「データの置き場所」) の同じ SQLite のファイルを開く。
 
 | 項目 | 画面のサーバー | ランナー |
 | --- | --- | --- |
@@ -141,7 +141,7 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 - `settings` の `runner-workspace-switch:` で始まるキー。ランナーは確定結果を、画面のサーバーは未確定の要求の取消しを書く。どちらも SQLite の書き込みロック内で同じ要求の行が無いことを確かめてから追加する。この名前で始まる期限切れの行だけを掃除する
 - `worktrees` の `removed_at`。どちらのプロセスも、`removed_at` が空のときだけ書く (`features/worktree-terminal.md`「書くプロセス」)
 
-貼り付けた画像は、画面のサーバーが `$SUKUNA_HOME/images/<conversation_id>/<ID>.<拡張子>` に書き、記録には `SUKUNA_HOME` からの相対のパスで残す。ランナーは、指示を送るときにこのファイルを読む。
+貼り付けた画像は、画面のサーバーが `<データのディレクトリ>/images/<conversation_id>/<ID>.<拡張子>` に書き、記録にはデータのディレクトリからの相対のパスで残す。ランナーは、指示を送るときにこのファイルを読む。
 
 - `<ID>` は画像の識別子 (ULID) で、`drafts.images` と `queued_instructions.images` に入る値である
 - 拡張子は、保存するときの形式 (`image/png` なら `png`、`image/jpeg` なら `jpg`、`image/gif` なら `gif`、`image/webp` なら `webp`) から決める
@@ -280,7 +280,7 @@ Git のロックは、公開先にリンクする前に物理識別子を記録�
 ```ts
 type UserMessage = {
   text: string;
-  images: { path: string; media_type: string }[]; // path は SUKUNA_HOME からの相対
+  images: { path: string; media_type: string }[]; // path はデータのディレクトリからの相対
   origin: "developer" | "queued" | "interrupt" | "stock" | "resume" | "flow" | "answer_text" | "finish_proposal";
   client_receipts?: ({ client_id: string; received_at: number } & ({ result: "queued"; queued_id: string } | { result: "delivered" }))[];
   client_ids?: string[]; // 1 通にまとめた指示の client_id (届く前の指示の分を含む)
@@ -647,7 +647,7 @@ interface GhRunner {
 
 規則は DESIGN.md「横断規約 > ランナーの再起動」参照。ランナーは起動時に次を行う。
 
-**残った子プロセスを止める**: ランナーは、Claude Code の子プロセスを SDK の `spawnClaudeCodeProcess` で起動し、PID を `$SUKUNA_HOME/runner/children` に 1 行ずつ書く。起動時はこのファイルの PID のうち、生きていてコマンドが Claude Code のものに SIGTERM を送る。5 秒たっても残るものには SIGKILL を送り、ファイルを空にする。`spawnClaudeCodeProcess` で PID を取れないときは、`ps` の一覧から、引数に保存済みの `session_id` を含む Claude Code のプロセスを探して止める。
+**残った子プロセスを止める**: ランナーは、Claude Code の子プロセスを SDK の `spawnClaudeCodeProcess` で起動し、PID を状態のディレクトリの `runner/children` に 1 行ずつ書く。起動時はこのファイルの PID のうち、生きていてコマンドが Claude Code のものに SIGTERM を送る。5 秒たっても残るものには SIGKILL を送り、ファイルを空にする。`spawnClaudeCodeProcess` で PID を取れないときは、`ps` の一覧から、引数に保存済みの `session_id` を含む Claude Code のプロセスを探して止める。
 
 子プロセスの PID は `spawnClaudeCodeProcess` の戻り値から取得する。この方法で止めた会話も、保存した識別子で再開する (PoC `runner-child-cleanup`)。
 
@@ -686,7 +686,7 @@ interface GhRunner {
 
 - Drizzle Kit で SQL を生成し、`src/shared/db/migrations/` に置く。テーブルの定義は `src/shared/db/schema.ts` に置く
 - 両方のプロセスは、起動時にデータベースを開き、`PRAGMA journal_mode = WAL`、`PRAGMA busy_timeout = 5000`、`PRAGMA foreign_keys = ON` を設定する
-- 当てるあいだだけ、`$SUKUNA_HOME/db.lock` の排他のロックを取る。当て終えたらすぐに外し、動いているあいだはロックを持たない (DESIGN.md「データスキーマ」)
+- 当てるあいだだけ、状態のディレクトリの `db.lock` の排他のロックを取る。当て終えたらすぐに外し、動いているあいだはロックを持たない (DESIGN.md「データスキーマ」)
 - ロックの取り方と、取れないときに起動を失敗させるまでの時間は `features/operations.md`「データベースのロック」が持つ
 - 未適用の分は、ロックの中の `BEGIN IMMEDIATE` のトランザクションで当てる。当て済みの記録を見て、当てる分が無ければ何もしない
 - 当てるのに失敗したら、ロールバックしてロックを外し、プロセスの起動を失敗させる。理由はログに出す
