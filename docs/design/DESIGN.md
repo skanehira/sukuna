@@ -125,7 +125,7 @@ flowchart LR
 - worktree のセットアップ: チェックアウトの直後に `vp install` を実行する。`.env` 系のファイルは使わず、設定は環境変数で渡す
 - Playwright のセットアップ: 初回だけ `vp exec playwright install chromium` を実行してブラウザを入れる。`vp run e2e` は `e2e/start-server.sh` で `vp dev` を起動し、既に動いているサーバーには相乗りしない (`reuseExistingServer: false`)。`XDG_DATA_HOME`・`XDG_STATE_HOME`・`XDG_RUNTIME_DIR` には実行ごとの一時ディレクトリの下を渡し、終了時に消す。並列で流すときは `PORT=5190 vp run e2e` のようにポートをずらす
 - ポートは `--port` (開発) と環境変数 `PORT` (本番と E2E) で外から指定する。指定したポートで起動できなければ失敗させる (`--strictPort`)。並列の検証で使う基準のポートは 5180 とし、worktree ごとに 10 ずつずらして使う (5180、5190、5200)
-- データの置き場所は XDG Base Directory の決まりに従い、環境変数 `XDG_DATA_HOME`・`XDG_STATE_HOME`・`XDG_RUNTIME_DIR` で決まる (`features/operations.md`「データの置き場所」)。テストと E2E は、実行ごとに作った一時ディレクトリの下を 3 つに指定する
+- データの置き場所は XDG Base Directory の決まりに従い、環境変数 `XDG_DATA_HOME`・`XDG_STATE_HOME`・`XDG_RUNTIME_DIR` で決まる (`features/operations.md`「データの置き場所」)。テストと E2E は、実行ごとに作った一時ディレクトリの下を 3 つに指定する。ソケットのパスが 103 バイトを超えないよう、テストと E2E は `SUKUNA_RUNNER_SOCKET` も短いパスで指定する
 - テストと E2E は、本物の Claude も GitHub も呼ばない。Agent SDK と `gh` は Port の偽物に差し替える。Agent SDK の偽物は、台本どおりにイベントを流し、アプリのツールの呼び出しでは登録した処理を実際に呼ぶ。E2E は、偽物を使う設定で画面のサーバーとランナーを起動する
 - 環境変数は次のとおりとする。値の形、既定の値、読むプロセスは `features/operations.md`「環境変数」が正本である
 
