@@ -161,6 +161,7 @@ export function designFixture() {
         defaultBranch: "main",
         usesGithub: false,
         name: "設計",
+        autoStages: ["triage", "design"],
       })
       .run();
     serverDb.db

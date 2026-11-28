@@ -128,6 +128,7 @@ const f = issueFixture(
   },
   {
     autoFlow: true,
+    autoStages: ["triage", "design"],
     ghRepository: "sukuna-test/fixture",
     ghScript: {
       responses: [

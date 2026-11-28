@@ -2,7 +2,7 @@ import type { ConversationRuntime, RuntimeSignal } from "../../conversation/usec
 import { flowStage, hasFlowHistory } from "../domain/evaluate";
 import type { StageRepository } from "../domain/stage-ports";
 import type { IssueNoticePort } from "../domain/ports";
-import { moveStateWithin, type MoveStateCommand } from "./move-state";
+import { appendImplementationStage, moveStateWithin, type MoveStateCommand } from "./move-state";
 import { firstLine } from "./on-report";
 
 export function onConversationSignal(
@@ -21,15 +21,16 @@ export function onConversationSignal(
     return;
   const c = runtime.store.get(signal.conversationId);
   if (!c?.issueId) return;
-  const stage = flowStage(c.kind);
-  if (!stage) {
-    if (c.kind === "impl") schedule(c.projectId);
-    return;
-  }
+  const stage = c.kind === "impl" ? "implementing" : flowStage(c.kind);
+  if (!stage) return;
 
   const id = c.issueId;
   const record = repo.read(id);
-  if (!record || record.project.removedAt !== null || !hasFlowHistory(record.events)) return;
+  if (!record || record.project.removedAt !== null) return;
+  if (!hasFlowHistory(record.events)) {
+    if (c.kind === "impl") schedule(c.projectId);
+    return;
+  }
   const events = () => runtime.store.events(c.id);
   let command: MoveStateCommand | undefined;
   if (
@@ -65,7 +66,16 @@ export function onConversationSignal(
   if (command) {
     const input = command;
     const moved = runtime.store.withWorktreeReservation((reservation) =>
-      repo.transaction((flow) => moveStateWithin(flow, input, repo.now()), reservation),
+      repo.transaction((flow, data) => {
+        const result = moveStateWithin(flow, input, repo.now());
+        if (
+          result.kind === "moved" &&
+          c.kind === "impl" &&
+          flow.getIssue(id)?.state === "implementing"
+        )
+          return appendImplementationStage(result, data, repo.now());
+        return result;
+      }, reservation),
     );
     if (moved.kind === "moved") {
       notices.publish(moved.notice);

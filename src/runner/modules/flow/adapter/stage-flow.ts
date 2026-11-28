@@ -10,12 +10,16 @@ import { onConversationSignal } from "../usecase/on-conversation-signal";
 import { createStageReports } from "../usecase/on-report";
 import { recoverAfterRestart } from "../usecase/recover-after-restart";
 import { createStageWorktreeRetry } from "../usecase/retry-stage-worktree";
+import { implementationOrigin } from "../domain/impl-history";
 import { hasFlowHistory } from "../domain/evaluate";
 import type { IssueNoticePort } from "../domain/ports";
 import type { createDesignFlow } from "./design-dependencies";
 import { createIssueUnitOfWork } from "./issue-repository";
 import type { StageRepository } from "../domain/stage-ports";
-import { unavailableIssueReports } from "../../issue/adapter/app-tools";
+import { createImplementationFlow } from "./impl-flow";
+import type { GhRunner } from "../../../../shared/gh/gh-runner";
+import type { ImplementationTerminalCleanup } from "../domain/impl-ports";
+import type { GitRunner } from "../../workspace/adapter/git-cli";
 
 const stages = { triage: "精査", design: "設計", impl: "実装" };
 const stateNames = {
@@ -38,13 +42,16 @@ export function createStageFlow(
   allows: ReturnType<typeof createFlowGate>,
   notices: IssueNoticePort,
   log: Logger,
+  gh: GhRunner,
+  terminals: ImplementationTerminalCleanup,
+  git?: GitRunner,
 ) {
   const move = createMoveState({
     unitOfWork: createIssueUnitOfWork(database),
     notices,
     clock: repo,
   });
-  const evaluate = createEvaluateProject({ repo, runtime, design, notices, allows, move });
+  const deferredParents = new Map<string, () => void>();
   const projects = new Map<string, { pending: boolean; job: Promise<void> }>();
   let closing = false;
   let recovery: Promise<void> | undefined;
@@ -56,6 +63,27 @@ export function createStageFlow(
       ...(id ? { issue_id: id } : {}),
       error,
     });
+  const implementation = createImplementationFlow(
+    database,
+    repo,
+    runtime,
+    notices,
+    allows,
+    gh,
+    git,
+    logFailure,
+    terminals,
+    schedule,
+  );
+  const evaluate = createEvaluateProject({
+    repo,
+    runtime,
+    design,
+    notices,
+    allows,
+    move,
+    implementation,
+  });
   function schedule(projectId: string) {
     if (closing) return;
     const current = projects.get(projectId);
@@ -68,9 +96,25 @@ export function createStageFlow(
       .then(async () => {
         while (!closing && entry.pending) {
           entry.pending = false;
-          for (const issue of repo.issues(projectId)) {
+          const { selected, retry } = implementation.claim(
+            projectId,
+            implementation.checkParentsWithin,
+          );
+          deferredParents.get(projectId)?.();
+          deferredParents.delete(projectId);
+          if (retry) {
+            deferredParents.set(
+              projectId,
+              runtime.options.clock.setTimeout(() => {
+                deferredParents.delete(projectId);
+                schedule(projectId);
+              }, 250),
+            );
+          }
+          const order = new Set([...selected, ...repo.issues(projectId).map(({ id }) => id)]);
+          for (const id of order) {
             if (closing) return;
-            await evaluate(issue.id).catch((error: unknown) => logFailure(error, issue.id));
+            await evaluate(id).catch((error: unknown) => logFailure(error, id));
           }
         }
       })
@@ -96,7 +140,19 @@ export function createStageFlow(
           : state === "ready" || state === "implementing" || state === "done"
             ? "impl"
             : null;
-    if (owner === c.kind) return ok(undefined);
+    if (owner === c.kind) {
+      if (
+        c.kind === "impl" &&
+        c.worktreeId &&
+        implementationOrigin(record.events) &&
+        !implementation.activeTree(c.projectId, c.id)
+      )
+        return err({
+          code: "conflict" as const,
+          message: "記録した実装の worktree が変わりました。",
+        });
+      return ok(undefined);
+    }
     const hasOwner =
       owner &&
       runtime.store
@@ -131,28 +187,44 @@ export function createStageFlow(
       : null;
   });
   runtime.runOptions.registerDeliveryPreparer(
-    createStageWorktreeRetry(repo, runtime, design, notices),
+    createStageWorktreeRetry(repo, runtime, design, notices, implementation),
   );
   const unsubscribe = runtime.subscribe((signal) =>
     onConversationSignal(runtime, repo, notices, schedule, signal),
   );
   return {
     schedule,
+    recoverBeforeConversations: implementation.recoverBeforeConversations,
     notify(this: void, input: { project_id?: string; issue_id?: string }) {
       if (input.issue_id !== undefined) {
         const issue = repo.data.get(input.issue_id);
-        if (issue) schedule(issue.projectId);
+        if (issue) {
+          implementation.noteExternalMerge(issue.id);
+          schedule(issue.projectId);
+        }
       } else if (input.project_id !== undefined) schedule(input.project_id);
       else for (const project of repo.projects()) schedule(project.id);
     },
-    reports: createStageReports(repo, notices, design, unavailableIssueReports),
+    reports: createStageReports(repo, notices, design, implementation.reports),
+    async finishWithdrawal(id: string) {
+      const record = repo.read(id);
+      if (record?.issue.state === "withdrawn") await implementation.cleanup(record);
+    },
     recover: () => {
-      recovery = recoverAfterRestart(repo, runtime, design, move, schedule, logFailure).catch(
+      recovery = recoverAfterRestart(
+        repo,
+        runtime,
+        design,
+        move,
+        schedule,
         logFailure,
-      );
+        implementation,
+      ).catch(logFailure);
     },
     stop: async () => {
       closing = true;
+      for (const cancel of deferredParents.values()) cancel();
+      deferredParents.clear();
       unsubscribe();
       await Promise.all([recovery, ...[...projects.values()].map(({ job }) => job)]);
     },

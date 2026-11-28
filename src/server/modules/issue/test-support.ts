@@ -1,3 +1,4 @@
+import type { TerminalCleanupRequest } from "../../../shared/ipc";
 import { afterEach, beforeEach } from "vite-plus/test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -29,6 +30,8 @@ export function issueFixture(
   script: AgentScript = { rules: [], fallback: [{ hold: true }] },
   options: Pick<Parameters<typeof startRunnerApp>[0], "issueReports"> & {
     autoFlow?: boolean;
+    autoStages?: (typeof projects.$inferInsert)["autoStages"];
+    terminalCleanup?: (request: TerminalCleanupRequest) => (() => Promise<void>) | undefined;
     ghScript?: GhScript;
     ghRepository?: string;
   } = {},
@@ -47,6 +50,7 @@ export function issueFixture(
   const logs: string[] = [];
   const noticeListeners = new Set<() => void>();
   const git = createGitCli();
+  let beforeGit: ((args: string[]) => void | Promise<void>) | undefined;
   let afterGit: ((args: string[]) => void | Promise<void>) | undefined;
   const start = async () => {
     runnerDatabase = openMigratedDatabase(home);
@@ -63,6 +67,7 @@ export function issueFixture(
       agent,
       designGit: {
         run: async (args, options) => {
+          await beforeGit?.(args);
           const result = await git.run(args, options);
           await afterGit?.(args);
           return result;
@@ -98,6 +103,7 @@ export function issueFixture(
     if (options.ghScript) writeFileSync(join(home, "gh.json"), JSON.stringify(options.ghScript));
     time = 1000000;
     timers.clear();
+    beforeGit = undefined;
     afterGit = undefined;
     notices.length = 0;
     logs.length = 0;
@@ -111,6 +117,7 @@ export function issueFixture(
         path: home,
         defaultBranch: "main",
         flowPaused: !options.autoFlow,
+        autoStages: options.autoStages,
       })
       .run();
     await start();
@@ -118,6 +125,7 @@ export function issueFixture(
       link = new RunnerLink({
         socket: `${home}/runner.sock`,
         log: () => {},
+        terminalCleanup: options.terminalCleanup,
         notice: (notice) => {
           notices.push(notice);
           hub.notice(notice);
@@ -178,6 +186,9 @@ export function issueFixture(
     },
     get opened() {
       return opened;
+    },
+    interceptGitBefore(callback: typeof beforeGit) {
+      beforeGit = callback;
     },
     interceptGit(callback: typeof afterGit) {
       afterGit = callback;

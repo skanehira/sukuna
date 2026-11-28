@@ -1,8 +1,9 @@
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { err, ok, ResultAsync } from "neverthrow";
 import { z } from "zod";
 import type { WorktreeError, WorktreeRemovalStoragePort } from "../domain/worktree-ports";
+import { worktreeRegistration } from "../../../../shared/workspace/git-registration";
 import type { GitRunner } from "./git-cli";
 
 const planSchema = z.object({
@@ -74,12 +75,8 @@ export function createWorktreeRemovalStorage(git: GitRunner): WorktreeRemovalSto
             throw error;
           });
           for (const name of names) {
-            const gitDir = join(registrations, name);
-            const target = (await readFile(join(gitDir, "gitdir"), "utf8")).trim();
-            if (dirname(resolve(gitDir, target)) !== path) continue;
-            const info = await stat(gitDir, { bigint: true });
-            const pointer = await stat(join(gitDir, "gitdir"), { bigint: true });
-            return `${gitDir}\0${info.dev}\0${info.ino}\0${info.birthtimeNs}\0${pointer.ino}\0${pointer.birthtimeNs}`;
+            const registration = worktreeRegistration(join(registrations, name), path);
+            if (registration) return `${registration.id}\0${registration.pointer}`;
           }
           return null;
         })(),

@@ -3,6 +3,7 @@ import type { GitRunner } from "./modules/workspace/adapter/git-cli";
 import { createDesignFlow } from "./modules/flow/adapter/design-dependencies";
 import { createStageRepository } from "./modules/flow/adapter/stage-repository";
 import { createFlowNotifyHandler } from "./modules/flow/adapter/notify-handler";
+import { createImplementationTerminalCleanup } from "./modules/flow/adapter/terminal-cleanup";
 import { createStageFlow } from "./modules/flow/adapter/stage-flow";
 import { createFlowGate } from "./modules/flow/usecase/flow-gate";
 import type { IssueNotice } from "./modules/flow/domain/ports";
@@ -62,6 +63,7 @@ export async function startRunnerApp(options: {
   try {
     const clock = options.clock ?? systemClock;
     const changes = new ChangeFeed(clock);
+    const terminalCleanup = createImplementationTerminalCleanup(changes, systemClock, randomUUID);
     const children = options.children ?? new ChildProcesses(env.home);
     const stoppedChildren = await children.cleanup();
     if (stoppedChildren.length)
@@ -222,7 +224,18 @@ export async function startRunnerApp(options: {
       },
       options.designGit,
     );
-    const flow = createStageFlow(database, flowRepo, runtime, design, allows, notices, log);
+    const flow = createStageFlow(
+      database,
+      flowRepo,
+      runtime,
+      design,
+      allows,
+      notices,
+      log,
+      gh,
+      terminalCleanup,
+      options.designGit,
+    );
     scheduleFlow = flow.schedule;
     const checkStop = async (stop: ReturnType<typeof runtime.prepareStop>) => {
       const result = await stop();
@@ -248,6 +261,7 @@ export async function startRunnerApp(options: {
       reports: options.issueReports ?? flow.reports,
     });
     runtime.tools.register(recapRead(recapRepository, files));
+    await flow.recoverBeforeConversations();
     recover(runtime);
     const routes = createIpcRoutes(
       runtime,
@@ -266,21 +280,29 @@ export async function startRunnerApp(options: {
         ...options.ipc,
         flow: createIssueOpsHandler(
           issueOps,
-          (id, stop) => design.finishWithdrawal(id, stop),
+          (id, stop) =>
+            design.finishWithdrawal(id, async () => {
+              await stop();
+              await flow.finishWithdrawal(id);
+            }),
           () => clock.now(),
         )
           .route(
             "/",
             createDesignIpc(design, () => clock.now()),
           )
-          .route("/", createFlowNotifyHandler(flow.notify)),
+          .route("/", createFlowNotifyHandler(flow.notify))
+          .route("/", terminalCleanup.app),
         rebuildRecap: (id) => recap.rebuild(id),
         allowMerge: createRunnerAllowMerge(database.db, runtime, {
           publish: (notice) => changes.publish(notice),
         }),
       },
     );
-    socket.activate(routes, changes);
+    socket.activate(routes, changes, () => {
+      terminalCleanup.reconnected();
+      flow.notify({});
+    });
     recap.recover();
     flow.recover();
     return {
@@ -290,6 +312,7 @@ export async function startRunnerApp(options: {
       design,
       shutdown: async () => {
         socket.stopAccepting();
+        terminalCleanup.stop();
         await flow.stop();
         await design.drain();
         await Promise.all([runtime.shutdown(), recap.stop()]);

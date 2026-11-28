@@ -44,6 +44,11 @@ export type TerminalConnection = {
 export type PtySessions = TerminalSessionsPort & {
   find(id: string): TerminalConnection | undefined;
   close(): Promise<void>;
+  prepareCleanup(
+    worktreeId: string,
+    path: string,
+    directoryKey: string,
+  ): (() => Promise<void>) | undefined;
 };
 
 function openSession(pty: IPty, cols: number, rows: number, directoryFd: number) {
@@ -156,6 +161,7 @@ function openSession(pty: IPty, cols: number, rows: number, directoryFd: number)
 
 type Session = ReturnType<typeof openSession> & {
   id: string;
+  worktreeId: string | null;
   paths: Set<string>;
   destinations: Map<string, string>;
 };
@@ -259,6 +265,7 @@ export function createPtySessions(
           directoryFd = undefined;
           const next = Object.assign(opened, {
             id,
+            worktreeId: location.worktreeId,
             paths: new Set([cwd]),
             destinations: session?.destinations ?? new Map<string, string>(),
           });
@@ -299,6 +306,16 @@ export function createPtySessions(
     runningId(path) {
       const session = byPath(path);
       return session?.running ? session.id : null;
+    },
+    prepareCleanup(worktreeId, path, directoryKey) {
+      const current = directoryAt(path);
+      if (current.isErr() || current.value.cwd !== path || current.value.key !== directoryKey)
+        return;
+      const session = directories.get(directoryKey);
+      if (session?.running && session.worktreeId !== worktreeId) return;
+      return async () => {
+        if (session?.running) await session.end();
+      };
     },
     async endAt(path) {
       await byPath(path, true)?.end();

@@ -1,3 +1,4 @@
+import type { LockObserver } from "../../../../shared/workspace/recorded-lock";
 import type { WorktreeActivity } from "../../../../shared/workspace/worktree-activity";
 import type { Result } from "neverthrow";
 import type { WorktreeItem } from "../../../../shared/api/worktree";
@@ -83,7 +84,10 @@ export interface WorktreeGitPort {
   protect(
     project: WorktreeProject,
     current: { path: string; head: string; branch: string | null } | null,
-  ): Promise<Result<{ release(): Promise<void> }, WorktreeError>>;
+    observer?: LockObserver,
+  ): Promise<
+    Result<{ release(): Promise<void>; files?: { path: string; key: string }[] }, WorktreeError>
+  >;
   mergedPrHeads(cwd: string, urls: string[]): Promise<string[]>;
 }
 export interface WorktreeUnitOfWorkPort {

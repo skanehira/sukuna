@@ -310,7 +310,7 @@ export class WsHub {
       this.publish({ topic, seq: notice.seq, type: "changed", payload: {} });
       this.inbox([], [notice.issue_id], [notice.project_id]);
     } else if (notice.kind === "project") this.inbox([], [], [notice.project_id]);
-    else {
+    else if (notice.kind === "notice") {
       const { kind: _, ...payload } = notice;
       this.publish({ topic: "app", seq: ++this.seq, type: "notice", payload });
     }

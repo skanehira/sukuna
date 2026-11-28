@@ -1,11 +1,32 @@
+import { acquireRecordedGitLock } from "../../../../shared/workspace/recorded-lock";
+import { createOwnedImplementationCleanup } from "./owned-cleanup";
+import {
+  physicalDirectory,
+  worktreeGitDirectory,
+  worktreeRegistration,
+} from "../../../../shared/workspace/git-registration";
 import { createHash, randomUUID } from "node:crypto";
 import { startRefUpdate, updateLocalDesign } from "./local-design-update";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  lstat,
+  mkdir,
+  mkdtemp,
+  open,
+  realpath,
+  rm,
+  rmdir,
+  writeFile,
+} from "node:fs/promises";
+import { constants } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { err, ok } from "neverthrow";
 import { designStale, type DesignReflectionPlan } from "../../../../shared/api/design";
 import type { DesignProject } from "../../../../shared/design/records";
+import { createWorktreeGit } from "../../../../server/modules/workspace/adapter/git-cli";
+import type { GhRunner } from "../../../../shared/gh/gh-runner";
+import type { ImplementationGit } from "../../flow/domain/impl-ports";
 import type { DesignGit, DesignWorkspaceGit, DesignWorktree } from "../../flow/domain/design-ports";
 import { runCommand, type CommandOptions, type CommandResult } from "../../../../shared/command";
 export interface GitRunner {
@@ -15,6 +36,74 @@ export function createGitCli(
   runner: GitRunner = { run: (args, opts) => runCommand("git", args, opts) },
 ): GitRunner {
   return runner;
+}
+
+async function isolatedMergeTree(
+  git: GitRunner,
+  cwd: string,
+  oldHead: string,
+  base: string,
+  approved: string,
+  store: "repository" | "temporary",
+) {
+  const checked = async (cwd: string, args: string[]) => {
+    const result = await git.run(args, { cwd });
+    return result.exitCode === 0 ? ok(result.stdout.trim()) : err({ message: gitMessage(result) });
+  };
+  const objectFormat = await checked(cwd, ["rev-parse", "--show-object-format"]);
+  if (objectFormat.isErr()) return err(objectFormat.error);
+  const objects = await checked(cwd, [
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-path",
+    "objects",
+  ]);
+  if (objects.isErr()) return err(objects.error);
+  const temporary = await mkdtemp(join(tmpdir(), "sukuna-design-merge-"));
+  let merge: CommandResult;
+  try {
+    const env = {
+      GIT_DIR: temporary,
+      GIT_COMMON_DIR: undefined,
+      GIT_WORK_TREE: undefined,
+      GIT_INDEX_FILE: undefined,
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_COUNT: "0",
+      GIT_CONFIG_PARAMETERS: undefined,
+      GIT_ATTR_NOSYSTEM: "1",
+      GIT_OBJECT_DIRECTORY: undefined,
+      GIT_ALTERNATE_OBJECT_DIRECTORIES: undefined,
+    };
+    const initialized = await git.run(
+      ["init", "--bare", "--quiet", "--template=", `--object-format=${objectFormat.value}`],
+      { cwd: temporary, env },
+    );
+    if (initialized.exitCode !== 0) return err({ message: gitMessage(initialized) });
+    await mkdir(join(temporary, "info"), { recursive: true });
+    await writeFile(join(temporary, "info", "attributes"), "* merge=text\n");
+    merge = await git.run(
+      [
+        "merge-tree",
+        "--write-tree",
+        "--name-only",
+        "-z",
+        `--merge-base=${base}`,
+        oldHead,
+        approved,
+      ],
+      {
+        cwd: temporary,
+        env:
+          store === "repository"
+            ? { ...env, GIT_OBJECT_DIRECTORY: objects.value }
+            : { ...env, GIT_ALTERNATE_OBJECT_DIRECTORIES: JSON.stringify(objects.value) },
+      },
+    );
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+  return ok(merge);
 }
 
 export function createRunnerDesignGit(
@@ -77,52 +166,9 @@ export function createRunnerDesignGit(
 
   async function prepareTree(cwd: string, oldHead: string, base: string, approved: string) {
     if (oldHead === base) return ok(approved);
-    const objectFormat = await checked(cwd, ["rev-parse", "--show-object-format"]);
-    if (objectFormat.isErr()) return err(objectFormat.error);
-    const objects = await checked(cwd, [
-      "rev-parse",
-      "--path-format=absolute",
-      "--git-path",
-      "objects",
-    ]);
-    if (objects.isErr()) return err(objects.error);
-    const temporary = await mkdtemp(join(tmpdir(), "sukuna-design-merge-"));
-    let merge: CommandResult;
-    try {
-      const env = {
-        GIT_DIR: temporary,
-        GIT_COMMON_DIR: undefined,
-        GIT_WORK_TREE: undefined,
-        GIT_INDEX_FILE: undefined,
-        GIT_CONFIG_NOSYSTEM: "1",
-        GIT_CONFIG_GLOBAL: "/dev/null",
-        GIT_CONFIG_COUNT: "0",
-        GIT_CONFIG_PARAMETERS: undefined,
-        GIT_ATTR_NOSYSTEM: "1",
-        GIT_OBJECT_DIRECTORY: undefined,
-      };
-      const initialized = await git.run(
-        ["init", "--bare", "--quiet", "--template=", `--object-format=${objectFormat.value}`],
-        { cwd: temporary, env },
-      );
-      if (initialized.exitCode !== 0) return err({ message: gitMessage(initialized) });
-      await mkdir(join(temporary, "info"), { recursive: true });
-      await writeFile(join(temporary, "info", "attributes"), "* merge=text\n");
-      merge = await git.run(
-        [
-          "merge-tree",
-          "--write-tree",
-          "--name-only",
-          "-z",
-          `--merge-base=${base}`,
-          oldHead,
-          approved,
-        ],
-        { cwd: temporary, env: { ...env, GIT_OBJECT_DIRECTORY: objects.value } },
-      );
-    } finally {
-      await rm(temporary, { recursive: true, force: true });
-    }
+    const result = await isolatedMergeTree(git, cwd, oldHead, base, approved, "repository");
+    if (result.isErr()) return err(result.error);
+    const merge = result.value;
     const [tree, conflict] = merge.stdout.split("\0");
     if (merge.exitCode === 1)
       return err({
@@ -330,6 +376,183 @@ export function createRunnerDesignGit(
         `${commit}:${branchRef(tree.branch)}`,
       ]);
       return pushed.map(() => undefined);
+    },
+  };
+}
+
+export function createImplementationGit(git: GitRunner, gh: GhRunner): ImplementationGit {
+  const run = (cwd: string, args: string[]) => git.run(args, { cwd });
+  const failure = (result: CommandResult) => ({
+    code: "worktree_failed" as const,
+    message: gitMessage(result),
+  });
+  const workspace = createWorktreeGit(git, gh);
+  const changed = { message: "記録した worktree の同一性を確認できませんでした" };
+  const owns: ImplementationGit["owns"] = (path, identity) => {
+    if (!identity || physicalDirectory(path) !== identity.directory) return false;
+    const gitDir = worktreeGitDirectory(path);
+    return gitDir !== null && worktreeRegistration(gitDir, path)?.id === identity.registration;
+  };
+  const headAt: ImplementationGit["headAt"] = async (cwd, ref) => {
+    const result = await run(cwd, ["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`]);
+    return result.exitCode === 0 ? ok(result.stdout.trim()) : err(failure(result));
+  };
+
+  return {
+    ...workspace,
+    owns,
+    registrationExists(identity) {
+      const [gitDir, ...stat] = identity.registration.split("\0");
+      return !!gitDir && physicalDirectory(gitDir) === stat.join("\0");
+    },
+    headAt,
+    async comparisonBase(cwd, head, baseTip) {
+      if (!baseTip || !/^[0-9a-f]{40}$/.test(baseTip)) return null;
+      const result = await run(cwd, ["merge-base", "--all", head, baseTip]);
+      const bases = result.stdout.trim().split("\n");
+      return result.exitCode === 0 && bases.length === 1 && /^[0-9a-f]{40}$/.test(bases[0]!)
+        ? bases[0]!
+        : null;
+    },
+    async sameChange(cwd, previous, current) {
+      const forward = await run(cwd, ["merge-base", "--is-ancestor", previous.base, current.base]);
+      if (forward.exitCode !== 0) return false;
+      const candidate = await run(cwd, ["rev-parse", "--verify", `${current.head}^{tree}`]);
+      if (candidate.exitCode !== 0) return false;
+      const applied = await isolatedMergeTree(
+        git,
+        cwd,
+        current.base,
+        previous.base,
+        previous.head,
+        "temporary",
+      );
+      if (applied.isErr() || applied.value.exitCode !== 0) return false;
+      const [expected] = applied.value.stdout.split("\0");
+      return expected === candidate.stdout.trim();
+    },
+    async protectTip(cwd, branch, expected, observer) {
+      const ref = `refs/heads/${branch}`;
+      const format = await run(cwd, ["rev-parse", "--show-ref-format"]);
+      if (format.exitCode !== 0 || format.stdout.trim() !== "files") return err(changed);
+      const symbolic = await run(cwd, ["symbolic-ref", "--quiet", ref]);
+      if (symbolic.exitCode !== 1) return err(changed);
+      const location = await run(cwd, ["rev-parse", "--path-format=absolute", "--git-path", ref]);
+      if (location.exitCode !== 0) return err(changed);
+      let hold: ReturnType<typeof acquireRecordedGitLock>;
+      try {
+        hold = acquireRecordedGitLock(`${location.stdout.trim()}.lock`, observer);
+      } catch {
+        return err(changed);
+      }
+      const current = await headAt(cwd, ref);
+      if (current.isErr() || current.value !== expected) {
+        hold.release();
+        return err(changed);
+      }
+      return ok({
+        release: async () => {
+          hold.release();
+        },
+      });
+    },
+    async createOwned(cwd, path, branch, start) {
+      const common = await run(cwd, ["rev-parse", "--git-common-dir"]);
+      if (common.exitCode !== 0) return err(failure(common));
+      const registrations = join(await realpath(resolve(cwd, common.stdout.trim())), "worktrees");
+      await mkdir(dirname(path), { recursive: true });
+      const reserved = await mkdir(path).then(
+        () => true,
+        () => false,
+      );
+      if (!reserved) return err(changed);
+      const directory = physicalDirectory(path);
+      if (!directory) return err(changed);
+      const pinned = await open(path, "r").catch(() => null);
+      if (!pinned) return err(changed);
+      try {
+        const row = await pinned.stat({ bigint: true });
+        const key = [row.dev, row.ino, row.birthtimeNs].join("\0");
+        if (directory !== key || physicalDirectory(path) !== directory) return err(changed);
+        const added = await workspace.add(cwd, path, branch, start);
+        if (added.isErr()) {
+          if (physicalDirectory(path) === directory) await rmdir(path).catch(() => {});
+          return err(added.error);
+        }
+        const gitDir = worktreeGitDirectory(path);
+        if (!gitDir || dirname(gitDir) !== registrations) return err(changed);
+        const registration = worktreeRegistration(gitDir, path)?.id;
+        const identity = registration ? { registration, directory } : null;
+        if (!identity || !owns(path, identity)) return err(changed);
+        return ok(identity);
+      } finally {
+        await pinned.close();
+      }
+    },
+    ...createOwnedImplementationCleanup(git, owns),
+    async directoryKey(path) {
+      const entry = await lstat(path, { bigint: true }).catch(() => null);
+      return entry?.isDirectory() ? `${entry.dev}:${entry.ino}` : null;
+    },
+    canonical: (path) => realpath(path).catch(() => path),
+    async origin(cwd) {
+      const result = await run(cwd, ["remote", "get-url", "origin"]);
+      return result.exitCode === 0 ? ok(result.stdout.trim()) : err(failure(result));
+    },
+    async contains(cwd, tip, commits) {
+      for (const commit of commits) {
+        const result = await run(cwd, ["merge-base", "--is-ancestor", commit, tip]);
+        if (result.exitCode === 1) return ok(false);
+        if (result.exitCode !== 0) return err(failure(result));
+      }
+      return ok(true);
+    },
+    async include(cwd, target, identity) {
+      if (!owns(target, identity)) return err(changed);
+      const patterns = await lstat(join(cwd, ".worktreeinclude")).catch(() => null);
+      if (!patterns?.isFile()) return ok(undefined);
+      const paths = await run(cwd, [
+        "ls-files",
+        "--others",
+        "--ignored",
+        "--exclude-from=.worktreeinclude",
+        "-z",
+      ]);
+      if (paths.exitCode !== 0) return err(failure(paths));
+      const sourceRoot = await realpath(cwd);
+      const targetRoot = await realpath(target);
+      for (const path of paths.stdout.split("\0").filter(Boolean)) {
+        if (path.startsWith(".claude/worktrees/")) continue;
+        const ignored = await run(cwd, ["check-ignore", "--quiet", "--", path]);
+        if (ignored.exitCode === 1) continue;
+        if (ignored.exitCode !== 0) return err(failure(ignored));
+        const source = join(sourceRoot, path);
+        const destination = join(targetRoot, path);
+        if (
+          (await realpath(source).catch(() => null)) !== source ||
+          !(await lstat(source)).isFile()
+        )
+          continue;
+        try {
+          let parent = targetRoot;
+          for (const part of dirname(path).split("/")) {
+            parent = join(parent, part);
+            if ((await realpath(parent).catch(() => null)) === parent) continue;
+            if (!owns(target, identity)) return err(changed);
+            await mkdir(parent);
+            if ((await realpath(parent)) !== parent) throw new Error("リンクされたフォルダです");
+          }
+          if (!owns(target, identity)) return err(changed);
+          await copyFile(source, destination, constants.COPYFILE_EXCL);
+        } catch (error) {
+          if (error instanceof Error && "code" in error && error.code === "EEXIST") continue;
+          return err({
+            code: "worktree_failed",
+            message: "指定されたファイルを worktree に複製できませんでした",
+          });
+        }
+      }
+      return owns(target, identity) ? ok(undefined) : err(changed);
     },
   };
 }

@@ -1,3 +1,4 @@
+import { TERMINAL_CLEANUP_HEADER } from "../../../../shared/ipc";
 import { createServer, type RequestListener, type ServerResponse } from "node:http";
 import { connect, type Socket } from "node:net";
 import { chmodSync, existsSync, unlinkSync } from "node:fs";
@@ -70,7 +71,7 @@ async function bindRunnerSocket(path: string) {
   });
   chmodSync(path, 0o600);
   return {
-    activate(app: Hono, feed: ChangeFeed) {
+    activate(app: Hono, feed: ChangeFeed, onTerminalCleanupConnected?: () => void) {
       const listener = getRequestListener(app.fetch);
       handler = (req, res) => {
         if (req.method === "GET" && req.url === "/changes") {
@@ -80,13 +81,15 @@ async function bindRunnerSocket(path: string) {
           });
           res.flushHeaders();
           streams.add(res);
+          const terminalCleanup = req.headers[TERMINAL_CLEANUP_HEADER] === "1";
           const off = feed.subscribe((notice) => {
             if (!res.write(`${JSON.stringify(notice)}\n`)) res.destroy();
-          });
+          }, terminalCleanup);
           res.once("close", () => {
             off();
             streams.delete(res);
           });
+          if (terminalCleanup) onTerminalCleanupConnected?.();
           return;
         }
         void listener(req, res);
