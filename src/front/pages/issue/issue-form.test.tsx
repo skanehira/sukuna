@@ -1,5 +1,5 @@
 import { EditorView } from "@codemirror/view";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { expect, it, vi } from "vite-plus/test";
 import { SWRConfig } from "swr";
 import type { IssueView } from "../../../shared/issue/schema";
@@ -85,9 +85,9 @@ it("確定済みの題名と本文は案内を添え、入力を開かない", a
 
 it("閉じた issue は全項目の代わりに再開を案内し、優先度の入力を開かない", async () => {
   const { controller } = mount(issueView({ state: "done", closedAt: 50 }));
-  expect(
-    await screen.findByText("閉じた issue は直せません。再開してから直します。"),
-  ).toBeVisible();
+  await waitFor(() => {
+    expect(screen.getByText("閉じた issue は直せません。再開してから直します。")).toBeVisible();
+  });
   act(() => controller.place("main", 5, 0));
   await act(() => controller.run("prompt.open"));
   expect(controller.snapshot().prompt).toBeNull();
