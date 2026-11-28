@@ -301,8 +301,8 @@ export function getConversationDependencies(): ConversationDependencies {
     sqlite: getDatabase().sqlite,
     home: dirname(getDatabase().sqlite.name),
     runner: {
-      call: async (method, path, input) => {
-        const response = await getRunnerLink().forward(method, path, input);
+      call: async (...args: Parameters<RunnerLink["call"]>) => {
+        const response = await getRunnerLink().forward(...args);
         return ok({ status: response.status, body: (await response.json()) as unknown });
       },
     },

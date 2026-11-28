@@ -59,8 +59,7 @@ export function createConversationApi(fetcher: typeof fetch): ConversationApi {
     saveDraft: (id, body) => request(`${path(id)}/draft`, "PUT", body),
     saveAnswers: (id, questionSeq, answers) =>
       request(`${path(id)}/answers`, "PUT", { questionSeq, answers }),
-    sendAnswers: (id, confirmUnanswered, questionSeq) =>
-      request(`${path(id)}/answers/send`, "POST", { questionSeq, confirmUnanswered }),
+    sendAnswers: (id, body) => request(`${path(id)}/answers/send`, "POST", body),
     permission: (id, requestId, decision) =>
       request(`${path(id)}/permissions/${encodeURIComponent(requestId)}`, "POST", { decision }),
     stop: (id) => request(`${path(id)}/stop`, "POST"),

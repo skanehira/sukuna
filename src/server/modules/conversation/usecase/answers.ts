@@ -1,4 +1,5 @@
 import { err, ok } from "neverthrow";
+import { answersChanged, sameAnswers } from "../../../../shared/conversation/answers";
 import type { PendingAnswers, SendConversationAnswers } from "../../../../shared/conversation/api";
 import type { ConversationDependencies, ConversationError } from "../domain/ports";
 import { missingConversation } from "../domain/ports";
@@ -29,7 +30,7 @@ export function saveAnswers(id: string, pending: PendingAnswers, deps: Conversat
 }
 export async function sendAnswers(
   id: string,
-  { questionSeq, confirmUnanswered }: SendConversationAnswers,
+  { questionSeq, confirmUnanswered, confirmedAnswers }: SendConversationAnswers,
   deps: ConversationDependencies,
 ) {
   const pending = deps.repository.pendingAnswers(id);
@@ -40,10 +41,17 @@ export async function sendAnswers(
     question.seq !== pending.questionSeq ||
     (questionSeq === undefined
       ? deps.repository.hasQuestionBefore(id, question.seq)
-      : questionSeq !== question.seq) ||
-    !Object.values(pending.answers).some((a) => a.choices.length || a.text)
+      : questionSeq !== question.seq)
   )
     return err(conflict);
+  if (
+    confirmUnanswered &&
+    (questionSeq === undefined ||
+      !confirmedAnswers ||
+      !sameAnswers(pending.answers, confirmedAnswers))
+  )
+    return err(answersChanged);
+  if (!Object.values(pending.answers).some((a) => a.choices.length || a.text)) return err(conflict);
   if (
     !confirmUnanswered &&
     question.payload.questions.some((_, index) => {
@@ -55,11 +63,17 @@ export async function sendAnswers(
       code: "unanswered_questions",
       message: "答えていない質問があります。確認してから送ってください。",
     });
-  const result = await deps.runner.call(
-    "POST",
-    `/conversations/${encodeURIComponent(id)}/answers`,
-    { request_id: question.payload.request_id, answers: pending.answers },
-  );
+  const path = `/conversations/${encodeURIComponent(id)}/answers`;
+  const input = {
+    request_id: question.payload.request_id,
+    question_seq: question.seq,
+    answers: pending.answers,
+  };
+  const result = confirmUnanswered
+    ? await deps.runner.call("POST", `${path}/checked`, input, {
+        missingRouteMessage: "ランナーを更新してから、回答を見直してもう一度送ってください。",
+      })
+    : await deps.runner.call("POST", path, input);
   if (result.isErr()) return err(result.error);
   if (result.value.status >= 400) return ok(result.value);
   const body = result.value.body as { result: string };

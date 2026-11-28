@@ -1281,7 +1281,11 @@ describe("会話の画面", () => {
     );
     key(main(), "y");
     await flush();
-    expect(api.sendAnswers).toHaveBeenCalledWith("c1", true, 1);
+    expect(api.sendAnswers).toHaveBeenCalledWith("c1", {
+      questionSeq: 1,
+      confirmUnanswered: true,
+      confirmedAnswers: { "0": { choices: ["B"], text: null } },
+    });
     expect(controller.snapshot().notice).toEqual({
       message: "回答 1 件を 1 通にまとめて送りました",
       kind: "info",

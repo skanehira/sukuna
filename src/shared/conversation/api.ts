@@ -73,6 +73,7 @@ export const saveConversationAnswersSchema = z.object({
 export const sendConversationAnswersSchema = z.object({
   questionSeq: z.number().int().positive().optional(),
   confirmUnanswered: z.boolean(),
+  confirmedAnswers: answersSchema.optional(),
 });
 export type SendConversationAnswers = z.infer<typeof sendConversationAnswersSchema>;
 export const permissionDecisionSchema = z.object({ decision: z.enum(["allow", "deny"]) });

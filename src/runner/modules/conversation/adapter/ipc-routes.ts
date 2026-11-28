@@ -1,3 +1,4 @@
+import { answersChanged } from "../../../../shared/conversation/answers";
 import { withConversationAdmission } from "../usecase/start";
 import { Hono } from "hono";
 import type { Result } from "neverthrow";
@@ -5,6 +6,7 @@ import { z } from "zod";
 import {
   allowMergeIpcSchema,
   answerSchema,
+  checkedAnswerSchema,
   completeReleaseSchema,
   forkConversationSchema,
   permissionSchema,
@@ -98,7 +100,7 @@ export function createIpcRoutes(
       input: z.infer<S>,
       params: Record<string, string>,
       callerCancelled: () => boolean,
-    ) => Promise<Result<unknown, DeliveryError>>,
+    ) => Promise<Result<unknown, DeliveryError | typeof answersChanged>>,
   ) => {
     app.post(path, async (c) => {
       const body = await c.req.json().catch(() => undefined);
@@ -117,7 +119,7 @@ export function createIpcRoutes(
       return result.isErr()
         ? c.json(
             { error: result.error },
-            result.error.code === "conflict"
+            result.error.code === "conflict" || result.error.code === answersChanged.code
               ? 409
               : result.error.code === "not_found"
                 ? 404
@@ -196,7 +198,10 @@ export function createIpcRoutes(
     runtime.fork(id, p, callerCancelled),
   );
   route("/conversations/:id/answers", answerSchema, (id, p, _params, cancelled) =>
-    runtime.answer(id, p.request_id, p.answers, cancelled),
+    runtime.answer(id, p.request_id, p.answers, cancelled, p.question_seq),
+  );
+  route("/conversations/:id/answers/checked", checkedAnswerSchema, (id, p, _params, cancelled) =>
+    runtime.answer(id, p.request_id, p.answers, cancelled, p.question_seq),
   );
   route("/conversations/:id/permissions/:requestId", permissionSchema, (id, p, params, cancelled) =>
     runtime.permission(

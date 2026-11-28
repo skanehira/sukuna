@@ -4,6 +4,7 @@ import type { WorktreeActivityReservation } from "../../../../shared/workspace/w
 import type { Result } from "neverthrow";
 import type { WorkspaceSwitchAttempt } from "../../../../shared/ipc";
 import type {
+  Answers,
   ConversationEvent,
   RunState,
   StopReason,
@@ -92,6 +93,7 @@ export interface ConversationStore {
   dequeue(id: string, deliveredSeq?: number): void;
   duplicate(id: string, clientId: string, since: number): SendResult | null;
   isUnanswered(id: string, questionSeq: number): boolean;
+  pendingAnswers(id: string, questionSeq: number): Answers | null;
   finishAnswers(id: string, questionSeq: number): void;
   clearQuestionsBefore(id: string, startSeq: number): boolean;
   saveRateLimit(value: unknown): void;
