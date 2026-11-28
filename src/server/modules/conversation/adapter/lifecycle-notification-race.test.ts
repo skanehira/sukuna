@@ -7,7 +7,6 @@ import {
   openMigratedDatabase,
   removeTempHome,
 } from "../../../../shared/db/test-helpers";
-import { readEnvironment } from "../../../../shared/env";
 import { ScriptedGh } from "../../../../shared/gh/scripted-gh";
 import { createApp } from "../../../app";
 import { incomingWith } from "../../identity/test-support";
@@ -18,6 +17,7 @@ import type {
 } from "../../inbox/domain/push-port";
 import { createProjectDependencies } from "../../workspace/adapter/project-dependencies";
 import { createWorkspaceAgent } from "../../workspace/adapter/worktree-conversation-test-support";
+import { directoriesIn, testEnvironment } from "../../../../test/directories";
 
 const tag = "conversation:chat";
 function device() {
@@ -53,12 +53,7 @@ async function fixture(notificationPush: NotificationPush) {
   mkdirSync(cwd);
   const runnerDb = openMigratedDatabase(home);
   const sdk = createWorkspaceAgent("scripted");
-  const environment = readEnvironment(
-    "runner",
-    { SUKUNA_HOME: home },
-    home,
-    () => true,
-  )._unsafeUnwrap();
+  const environment = testEnvironment(home);
   const runner = await startRunnerApp({
     database: runnerDb,
     environment,
@@ -66,7 +61,7 @@ async function fixture(notificationPush: NotificationPush) {
     log: () => {},
   });
   const started = await runtime.initializeRuntime(
-    { homeDir: home },
+    { directories: directoriesIn(home) },
     {
       socket: environment.socket,
       log: () => {},

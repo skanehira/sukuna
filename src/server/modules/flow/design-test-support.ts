@@ -24,10 +24,10 @@ import {
   removeTempHome,
 } from "../../../shared/db/test-helpers";
 import { conversations, issueEvents, issues, projects, worktrees } from "../../../shared/db/schema";
-import { readEnvironment } from "../../../shared/env";
 import type { GhScript } from "../../../shared/gh-script";
 import { RUNNER_IPC_TIMEOUT_MS, type RunnerNotice } from "../../../shared/ipc";
 import { systemClock } from "../../../runner/modules/conversation/adapter/system-clock";
+import { testEnvironment } from "../../../test/directories";
 
 export const git = (cwd: string, ...args: string[]) =>
   execFileSync(
@@ -192,12 +192,7 @@ export function designFixture() {
     runnerDb = openMigratedDatabase(home);
     runner = await startRunnerApp({
       database: runnerDb,
-      environment: readEnvironment(
-        "runner",
-        { SUKUNA_HOME: home, SUKUNA_GH: scriptPath },
-        home,
-        () => true,
-      )._unsafeUnwrap(),
+      environment: testEnvironment(home, { SUKUNA_GH: scriptPath }),
       designGit: {
         run: async (args, options) => {
           await beforeGit?.(args);

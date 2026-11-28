@@ -8,7 +8,6 @@ import {
   openMigratedDatabase,
   removeTempHome,
 } from "../../../../shared/db/test-helpers";
-import { readEnvironment } from "../../../../shared/env";
 import { startRunnerApp } from "../../../../runner/app";
 import { ScriptedAgent } from "../../../../runner/modules/conversation/adapter/scripted-agent";
 import { createApp } from "../../../app";
@@ -27,6 +26,7 @@ import { createProgressRepository } from "./progress-repository";
 import { createTimelineFilePort } from "./timeline-file";
 import { createTimelineWatch } from "./timeline-watch";
 import type { ConversationDraft } from "../../../../shared/conversation/api";
+import { testEnvironment } from "../../../../test/directories";
 
 function deferred() {
   let resolve = () => {};
@@ -71,7 +71,7 @@ async function fixture() {
   const runner = await startRunnerApp({
     database,
     agent,
-    environment: readEnvironment("runner", { SUKUNA_HOME: home }, home, () => true)._unsafeUnwrap(),
+    environment: testEnvironment(home),
     log: () => {},
   });
   cleanups.push(() => runner.shutdown());

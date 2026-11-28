@@ -47,7 +47,7 @@ afterEach(async () => {
 function fixture(script: AgentScript, allowResume = true) {
   const home = createTempHome();
   const database = openMigratedDatabase(home);
-  const store = new SqliteConversationStore(database.sqlite);
+  const store = new SqliteConversationStore(database.sqlite, database.directories.state);
   const agent = new ScriptedAgent(script);
   const clock = new TestClock();
   const signals: RuntimeSignal[] = [];
@@ -335,7 +335,9 @@ describe("タイムライン相談の配達", () => {
       const first = await request("consult");
       if (mode !== "direct") {
         expect(first).toEqual({ status: 200, body: { result: "queued", queued_id: "id-2" } });
-        expect(new SqliteConversationStore(f.database.sqlite).queue(id)).toEqual([
+        expect(
+          new SqliteConversationStore(f.database.sqlite, f.database.directories.state).queue(id),
+        ).toEqual([
           {
             id: "id-2",
             conversationId: id,
@@ -724,7 +726,7 @@ it.each(["sync", "async"] as const)(
     expect((await f.runtime.send(id, send("retry")))._unsafeUnwrap().result).toBe("delivered");
     await f.until(id, () => f.store.get(id)?.runState === "idle");
     await f.runtime.release(id);
-    const restored = new SqliteConversationStore(f.database.sqlite);
+    const restored = new SqliteConversationStore(f.database.sqlite, f.database.directories.state);
     f.runtime.options.agent = f.agent;
     f.agent.open = original;
     const recreated = new ConversationRuntime({ ...f.runtime.options, store: restored });

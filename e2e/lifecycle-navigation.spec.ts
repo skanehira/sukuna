@@ -1,7 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import Database from "better-sqlite3";
-import { join } from "node:path";
 import { capture } from "./evidence";
+import { databasePath } from "./database-path";
 
 const id = "lifecycle-e2e-chat";
 const title = "締めくくりを試す在庫の相談";
@@ -10,7 +10,7 @@ const reply = "在庫の相談を再開してください";
 function withDatabase(work: (db: Database.Database) => void) {
   const home = process.env.SUKUNA_E2E_HOME;
   if (!home) throw new Error("E2E のデータの置き場所がありません");
-  const db = new Database(join(home, "sukuna.db"), { fileMustExist: true });
+  const db = new Database(databasePath(home), { fileMustExist: true });
   try {
     db.pragma("foreign_keys = ON");
     db.transaction(() => work(db)).immediate();

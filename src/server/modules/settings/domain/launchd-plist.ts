@@ -3,12 +3,15 @@ import { serviceLabel, type ServiceName } from "./launchd-port";
 export type LaunchdPlistConfig = {
   repository: string;
   node: string;
-  home: string;
+  stateDirectory: string;
   userHome: string;
   port: number;
   path: string;
   claudeConfigDir?: string;
+  terminal: Readonly<Record<string, string | undefined>>;
 };
+
+const directoryVariables = ["XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR"] as const;
 
 const escaped: Record<string, string> = {
   "&": "&amp;",
@@ -30,12 +33,17 @@ export function launchdPlist(service: ServiceName, config: LaunchdPlistConfig): 
   const env = {
     NODE_ENV: "production",
     PORT: String(config.port),
-    SUKUNA_HOME: config.home,
     HOME: config.userHome,
     PATH: config.path,
     ...(config.claudeConfigDir === undefined ? {} : { CLAUDE_CONFIG_DIR: config.claudeConfigDir }),
+    ...Object.fromEntries(
+      directoryVariables.flatMap((name) => {
+        const value = config.terminal[name];
+        return value === undefined ? [] : [[name, value]];
+      }),
+    ),
   };
-  const log = `${config.home}/logs/${service}.log`;
+  const log = `${config.stateDirectory}/logs/${service}.log`;
   const behavior = persistent ? "<true/>" : "<false/>";
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',

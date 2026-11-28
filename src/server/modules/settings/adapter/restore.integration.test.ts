@@ -16,6 +16,7 @@ import { createSettingsRoutes } from "./routes";
 import { runRestore } from "../usecase/run-restore";
 import type { RemovedService } from "../domain/launchd-port";
 import { rotateLog } from "../../../../shared/log/rotate";
+import { separateDirectoriesIn } from "../../../../test/directories";
 
 const at = new Date(2026, 10, 28, 10, 15).getTime();
 const backupPath = (home: string) => join(home, "backups", "sukuna-2026-11-25.db");
@@ -40,9 +41,11 @@ function values(db: ReturnType<typeof openMigratedDatabase>["sqlite"]) {
 it.each([false, true])(
   "復元がSQLiteを検査した結果だけを採用する (壊れた写し=%s)",
   async (corrupt) => {
-    const home = createTempHome();
+    const root = createTempHome();
+    const directories = separateDirectoriesIn(root);
+    const home = directories.data;
     const database = openMigratedDatabase(home);
-    const files = createRestoreFiles(home);
+    const files = createRestoreFiles(directories);
     const trace: string[] = [];
     const services = {
       stop: async (service: string, removed?: (receipt: RemovedService) => void) => {
@@ -100,32 +103,42 @@ it.each([false, true])(
         expect(values(opened.sqlite).restore_generation).toEqual(
           corrupt ? undefined : { id: expect.any(String) },
         );
-        expect(existsSync(join(home, "restore.json"))).toBe(false);
+        expect(existsSync(join(directories.state, "restore.json"))).toBe(false);
         expect(readdirSync(join(home, "backups")).sort()).toEqual([
           "before-restore-20261128-101500.db",
           "sukuna-2026-11-25.db",
         ]);
+        expect({
+          data: readdirSync(home).sort(),
+          state: readdirSync(directories.state).sort(),
+        }).toEqual({
+          data: ["backups", "sukuna.db", "sukuna.db-shm", "sukuna.db-wal"],
+          state: ["db.lock.guard", "restore-worker.lock.guard"],
+        });
       } finally {
         opened.close();
       }
     } finally {
       if (database.sqlite.open) database.close();
-      removeTempHome(home);
+      removeTempHome(root);
     }
   },
 );
 
 it("途中で止まった復元を起動時に記録して依頼を取り除く", async () => {
-  const home = createTempHome();
+  const root = createTempHome();
+  const directories = separateDirectoriesIn(root);
+  const home = directories.data;
   const database = openMigratedDatabase(home);
   database.close();
   try {
     writeFileSync(
-      join(home, "restore.json"),
+      join(directories.state, "restore.json"),
       JSON.stringify({ backupId: "2026-11-25", requestedAt: at }),
     );
+    writeFileSync(join(home, "restore-db.tmp"), "staged");
     const result = (
-      await startDatabase({ homeDir: home, lock: { now: () => at + 1 } })
+      await startDatabase({ directories, lock: { now: () => at + 1 } })
     )._unsafeUnwrap();
     try {
       expect(values(result.sqlite).last_restore).toEqual({
@@ -134,17 +147,20 @@ it("途中で止まった復元を起動時に記録して依頼を取り除く"
         status: "failed",
         message: "復元の途中で止まりました",
       });
-      expect(existsSync(join(home, "restore.json"))).toBe(false);
+      expect(existsSync(join(directories.state, "restore.json"))).toBe(false);
+      expect(existsSync(join(home, "restore-db.tmp"))).toBe(false);
     } finally {
       result.close();
     }
   } finally {
-    removeTempHome(home);
+    removeTempHome(root);
   }
 });
 
 it("復元の公開APIが登録なし・対象なし・二重依頼を区別する", async () => {
-  const home = createTempHome();
+  const root = createTempHome();
+  const directories = separateDirectoriesIn(root);
+  const home = directories.data;
   const database = openMigratedDatabase(home);
   const kickstart = vi.fn(async () => {});
   let registered = false;
@@ -152,7 +168,7 @@ it("復元の公開APIが登録なし・対象なし・二重依頼を区別す�
     mkdirSync(join(home, "backups"));
     const deps = createSettingsDependencies(
       () => database.db,
-      home,
+      directories,
       () => {},
       {
         launchd: { registered: async () => registered, kickstart },
@@ -173,7 +189,7 @@ it("復元の公開APIが登録なし・対象なし・二重依頼を区別す�
     expect(await missing.json()).toEqual({
       error: { code: "conflict", message: expect.stringContaining("導入のコマンド") },
     });
-    expect(existsSync(join(home, "restore.json"))).toBe(false);
+    expect(existsSync(join(directories.state, "restore.json"))).toBe(false);
     registered = true;
     const [response, duplicate] = await Promise.all([post("2026-11-25"), post("2026-11-25")]);
     expect([response.status, duplicate.status]).toEqual([202, 409]);
@@ -185,14 +201,16 @@ it("復元の公開APIが登録なし・対象なし・二重依頼を区別す�
     expect(kickstart).toHaveBeenCalledExactlyOnceWith("restore");
   } finally {
     database.close();
-    removeTempHome(home);
+    removeTempHome(root);
   }
 });
 
 it("外部処理が停止を待つ間に起動し直しても一つの復元を追跡する", async () => {
-  const home = createTempHome();
+  const root = createTempHome();
+  const directories = separateDirectoriesIn(root);
+  const home = directories.data;
   const first = openMigratedDatabase(home);
-  const files = createRestoreFiles(home);
+  const files = createRestoreFiles(directories);
   const wait = () => {
     let resolve = () => {};
     const promise = new Promise<void>((done) => {
@@ -211,7 +229,7 @@ it("外部処理が停止を待つ間に起動し直しても一つの復元を�
     setValue(database.sqlite, "current");
     const deps = createSettingsDependencies(
       () => database.db,
-      home,
+      directories,
       () => {},
       {
         launchd: { registered: async () => true, kickstart },
@@ -246,7 +264,7 @@ it("外部処理が停止を待つ間に起動し直しても一つの復元を�
     let duplicate: number;
     try {
       database.close();
-      database = (await startDatabase({ homeDir: home }))._unsafeUnwrap();
+      database = (await startDatabase({ directories }))._unsafeUnwrap();
       duplicate = (await post()).status;
     } finally {
       resume.resolve();
@@ -262,20 +280,22 @@ it("外部処理が停止を待つ間に起動し直しても一つの復元を�
     expect(values(database.sqlite).sample).toBe("restored");
   } finally {
     if (database.sqlite.open) database.close();
-    removeTempHome(home);
+    removeTempHome(root);
   }
 });
 
 it("ログ整理に失敗してもSQLiteを復元し、依頼したIDに結果を返す", async () => {
-  const home = createTempHome();
+  const root = createTempHome();
+  const directories = separateDirectoriesIn(root);
+  const home = directories.data;
   const database = openMigratedDatabase(home);
-  const files = createRestoreFiles(home);
+  const files = createRestoreFiles(directories);
   const requestId = "11111111-1111-4111-8111-111111111111";
   const warning = vi.fn();
   try {
     mkdirSync(join(home, "backups"));
-    mkdirSync(join(home, "logs"));
-    const log = join(home, "logs", "restore.log");
+    mkdirSync(join(directories.state, "logs"));
+    const log = join(directories.state, "logs", "restore.log");
     writeFileSync(log, "");
     truncateSync(log, 100_000_001);
     mkdirSync(log + ".1");
@@ -304,21 +324,23 @@ it("ログ整理に失敗してもSQLiteを復元し、依頼したIDに結果�
     }
   } finally {
     if (database.sqlite.open) database.close();
-    removeTempHome(home);
+    removeTempHome(root);
   }
 });
 
 it("停止に失敗しても接続中のHTTPから同じ依頼の結果を読める", async () => {
-  const home = createTempHome();
+  const root = createTempHome();
+  const directories = separateDirectoriesIn(root);
+  const home = directories.data;
   const database = openMigratedDatabase(home);
-  const files = createRestoreFiles(home);
+  const files = createRestoreFiles(directories);
   try {
     mkdirSync(join(home, "backups"));
     await database.sqlite.backup(backupPath(home));
     const app = createSettingsRoutes(
       createSettingsDependencies(
         () => database.db,
-        home,
+        directories,
         () => {},
         {
           launchd: { registered: async () => true, kickstart: async () => {} },
@@ -366,22 +388,24 @@ it("停止に失敗しても接続中のHTTPから同じ依頼の結果を読め
     );
   } finally {
     database.close();
-    removeTempHome(home);
+    removeTempHome(root);
   }
 });
 
 it("補助の結果ファイルを置き換えられなくても停止失敗を照会し次の依頼を受けられる", async () => {
-  const home = createTempHome();
+  const root = createTempHome();
+  const directories = separateDirectoriesIn(root);
+  const home = directories.data;
   const db = openMigratedDatabase(home);
-  const files = createRestoreFiles(home);
+  const files = createRestoreFiles(directories);
   try {
     mkdirSync(join(home, "backups"));
     await db.sqlite.backup(backupPath(home));
-    mkdirSync(join(home, "restore-result.json"));
+    mkdirSync(join(directories.state, "restore-result.json"));
     const app = createSettingsRoutes(
       createSettingsDependencies(
         () => db.db,
-        home,
+        directories,
         () => {},
         {
           launchd: { registered: async () => true, kickstart: async () => {} },
@@ -423,12 +447,14 @@ it("補助の結果ファイルを置き換えられなくても停止失敗を�
     });
   } finally {
     db.close();
-    removeTempHome(home);
+    removeTempHome(root);
   }
 });
 
 it("中断からの起動は、補助結果を読めなくても同じ受付の失敗を維持して後始末する", async () => {
-  const home = createTempHome();
+  const root = createTempHome();
+  const directories = separateDirectoriesIn(root);
+  const home = directories.data;
   const db = openMigratedDatabase(home);
   const requestId = "11111111-1111-4111-8111-111111111111";
   const outcome = {
@@ -443,32 +469,38 @@ it("中断からの起動は、補助結果を読めなくても同じ受付の�
       .prepare("INSERT INTO settings (key,value) VALUES ('last_restore',?)")
       .run(JSON.stringify(outcome));
     db.close();
-    mkdirSync(join(home, "restore-result.json"));
-    createRestoreFiles(home).createRequest({ requestId, backupId: "2026-11-25", requestedAt: at });
-    const reopened = (await startDatabase({ homeDir: home }))._unsafeUnwrap();
+    mkdirSync(join(directories.state, "restore-result.json"));
+    createRestoreFiles(directories).createRequest({
+      requestId,
+      backupId: "2026-11-25",
+      requestedAt: at,
+    });
+    const reopened = (await startDatabase({ directories }))._unsafeUnwrap();
     try {
       expect(values(reopened.sqlite).last_restore).toEqual(outcome);
-      expect(existsSync(join(home, "restore.json"))).toBe(false);
+      expect(existsSync(join(directories.state, "restore.json"))).toBe(false);
     } finally {
       reopened.close();
     }
   } finally {
     if (db.sqlite.open) db.close();
-    removeTempHome(home);
+    removeTempHome(root);
   }
 });
 
 it.each([null, "server", "runner"] as const)(
   "サービスの起動確認後だけ完了となる (起動失敗=%s)",
   async (missing) => {
-    const home = createTempHome();
+    const root = createTempHome();
+    const directories = separateDirectoriesIn(root);
+    const home = directories.data;
     const db = openMigratedDatabase(home);
-    const files = createRestoreFiles(home);
+    const files = createRestoreFiles(directories);
     const requestId = "11111111-1111-4111-8111-111111111111";
     const started: string[] = [];
     const tcp = createServer((client) => client.end());
     const unix = createServer((client) => client.end());
-    const socket = join(home, "runner.sock");
+    const socket = join(directories.runtime, "runner.sock");
     const occupied = missing === "server" ? createServer() : tcp;
     occupied.listen(0, "127.0.0.1");
     await once(occupied, "listening");
@@ -556,7 +588,7 @@ it.each([null, "server", "runner"] as const)(
           (listener) => new Promise<void>((resolve) => listener.close(() => resolve())),
         ),
       );
-      removeTempHome(home);
+      removeTempHome(root);
     }
   },
 );

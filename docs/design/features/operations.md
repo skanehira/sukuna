@@ -414,8 +414,8 @@ BR-072 は、次の作りで満たす。
 | --- | --- | --- |
 | 導入・更新・登録の解除のコマンド、plist の生成 | インフラ | `src/server/install.ts`, `src/server/modules/settings/domain/launchd-plist.ts` |
 | データ・状態・実行時のディレクトリの求め方 (XDG の環境変数) | 共有 | `src/shared/env.ts`、`src/shared/db/startup.ts` |
-| 求めたディレクトリを受け取るように変える処理 (いまはデータベースのパスや 1 つの置き場所から導いている) | 共有、インフラ | `src/shared/workspace/sqlite-worktree-activity.ts`、`src/shared/project/sqlite-project-run-activity.ts`、`src/shared/db/restore-state.ts`、`src/server/modules/settings/adapter/restore-files.ts`、`src/server/modules/settings/adapter/install-files.ts`、`src/server/runtime.ts`、`src/server/dev.ts`、`src/runner/modules/conversation/adapter/ipc-socket.ts` |
-| E2E の起動で 3 つのディレクトリを一時ディレクトリの下に渡す | E2E | `e2e/start-server.sh` |
+| 求めたディレクトリを受け取って使う処理。開いたデータベースは 3 つのディレクトリを持ち、排他のファイルを使う処理へ状態のディレクトリを渡す | 共有、インフラ | `src/shared/db/open.ts`、`src/shared/workspace/sqlite-worktree-activity.ts`、`src/shared/project/sqlite-project-run-activity.ts`、`src/shared/db/restore-state.ts`、`src/server/modules/settings/adapter/restore-files.ts`、`src/server/modules/settings/adapter/install-files.ts`、`src/server/modules/settings/adapter/launchd-environment.ts`、`src/server/runtime.ts`、`src/server/dev.ts`、`src/runner/modules/conversation/adapter/sqlite-conversation-store.ts` |
+| E2E の起動で 3 つのディレクトリを一時ディレクトリの下に渡す。E2E の前提データは、データのディレクトリのデータベースに書く | E2E | `e2e/start-server.sh`、`e2e/database-path.ts` |
 | 復元の処理 (`install.js restore`。2 つのプロセスを止める、置き換える、登録し直す) → settings | ユースケース | `src/server/modules/settings/usecase/run-restore.ts` |
 | launchd の操作の Port と実物 (`launchctl`) | アダプター | `src/server/modules/settings/domain/launchd-port.ts`, `src/server/modules/settings/adapter/launchctl.ts` |
 | 接続範囲と `/api/me` | TCP の入り口と API ハンドラ | `src/server/network-access.ts`、`src/server/modules/settings/adapter/server-state.ts` |

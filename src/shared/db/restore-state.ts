@@ -2,6 +2,7 @@ import type Database from "better-sqlite3";
 import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import type { Directories } from "../env";
 import {
   restoreGenerationSchema,
   restoreReceiptSchema,
@@ -12,7 +13,8 @@ import {
   type RestoreStatus,
 } from "../settings/restore-schema";
 
-export const restoreWorkerLockPath = (home: string) => join(home, "restore-worker.lock");
+export const restoreWorkerLockPath = (stateDirectory: string) =>
+  join(stateDirectory, "restore-worker.lock");
 
 function readJson(path: string): unknown {
   try {
@@ -33,22 +35,26 @@ export function replaceRestoreValue(path: string, value: unknown): void {
   }
 }
 
-export function readRestoreRequest(home: string): RestoreRequest | undefined {
-  const raw = readJson(join(home, "restore.json"));
+export function readRestoreRequest(stateDirectory: string): RestoreRequest | undefined {
+  const raw = readJson(join(stateDirectory, "restore.json"));
   return raw === undefined ? undefined : restoreRequestSchema.parse(raw);
 }
 
-export function readRestoreReceipt(home: string, warning: (error: unknown) => void = () => {}) {
+export function readRestoreReceipt(
+  stateDirectory: string,
+  warning: (error: unknown) => void = () => {},
+) {
   try {
-    return restoreReceiptSchema.safeParse(readJson(join(home, "restore-result.json"))).data;
+    return restoreReceiptSchema.safeParse(readJson(join(stateDirectory, "restore-result.json")))
+      .data;
   } catch (error) {
     warning(error);
     return undefined;
   }
 }
 
-export function writeRestoreReceipt(home: string, result: RestoreStatus): void {
-  if (result.requestId) replaceRestoreValue(join(home, "restore-result.json"), result);
+export function writeRestoreReceipt(stateDirectory: string, result: RestoreStatus): void {
+  if (result.requestId) replaceRestoreValue(join(stateDirectory, "restore-result.json"), result);
 }
 
 export function putRestoreStatus(sqlite: Database.Database, value: RestoreStatus): void {
@@ -73,14 +79,14 @@ export function readRestoreGeneration(sqlite: Database.Database): RestoreGenerat
 
 export function recoverRestore(
   sqlite: Database.Database,
-  home: string,
+  directories: Directories,
   now: () => number,
   alive: (pid: number) => boolean,
   receiptWarning: (error: unknown) => void = () => {},
 ): void {
-  const request = readRestoreRequest(home);
+  const request = readRestoreRequest(directories.state);
   if (!request || (request.workerPid !== undefined && alive(request.workerPid))) return;
-  const receipt = readRestoreReceipt(home, receiptWarning);
+  const receipt = readRestoreReceipt(directories.state, receiptWarning);
   const row = sqlite
     .prepare("SELECT value FROM settings WHERE key='last_restore' AND json_valid(value)")
     .get() as { value: string } | undefined;
@@ -102,15 +108,15 @@ export function recoverRestore(
           };
   putRestoreStatus(sqlite, result);
   try {
-    writeRestoreReceipt(home, result);
+    writeRestoreReceipt(directories.state, result);
   } catch (error) {
     receiptWarning(error);
   }
-  removeRestoreStaging(home);
-  rmSync(join(home, "restore.json"), { force: true });
+  removeRestoreStaging(directories.data);
+  rmSync(join(directories.state, "restore.json"), { force: true });
 }
 
-export function removeRestoreStaging(home: string): void {
+export function removeRestoreStaging(dataDirectory: string): void {
   for (const suffix of ["", "-journal", "-wal", "-shm"])
-    rmSync(join(home, "restore-db.tmp" + suffix), { force: true });
+    rmSync(join(dataDirectory, "restore-db.tmp" + suffix), { force: true });
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { readEnvironment } from "./env";
+import { readEnvironment, resolveDirectories } from "./env";
 
 describe("起動の環境変数", () => {
   it.each([
@@ -71,7 +71,11 @@ describe("起動の環境変数", () => {
         () => true,
       )._unsafeUnwrap(),
     ).toEqual({
-      home: "/home/test/.sukuna",
+      directories: {
+        data: "/home/test/.local/share/sukuna",
+        state: "/home/test/.local/state/sukuna",
+        runtime: "/home/test/.local/state/sukuna",
+      },
       socket: "a".repeat(103),
       port: 4580,
       agent: "fake",
@@ -87,13 +91,70 @@ describe("起動の環境変数", () => {
         () => false,
       )._unsafeUnwrap(),
     ).toEqual({
-      home: "/home/test/.sukuna",
-      socket: "/home/test/.sukuna/runner.sock",
+      directories: {
+        data: "/home/test/.local/share/sukuna",
+        state: "/home/test/.local/state/sukuna",
+        runtime: "/home/test/.local/state/sukuna",
+      },
+      socket: "/home/test/.local/state/sukuna/runner.sock",
       port: 5180,
       agent: "real",
       agentScript: null,
       ghScript: null,
       logLevel: "info",
     });
+  });
+});
+
+describe("データの置き場所", () => {
+  const defaults = {
+    data: "/home/test/.local/share/sukuna",
+    state: "/home/test/.local/state/sukuna",
+    runtime: "/home/test/.local/state/sukuna",
+  };
+
+  it.each([
+    ["無い", undefined, defaults],
+    ["空", "", defaults],
+    ["相対パス", "relative/dir", defaults],
+    [
+      "絶対パス",
+      "/xdg",
+      { data: "/xdg/data/sukuna", state: "/xdg/state/sukuna", runtime: "/xdg/runtime/sukuna" },
+    ],
+  ] as const)("XDG の環境変数が%sとき、3 つのディレクトリを決める", (_, base, expected) => {
+    const env =
+      base === undefined
+        ? {}
+        : {
+            XDG_DATA_HOME: base && `${base}/data`,
+            XDG_STATE_HOME: base && `${base}/state`,
+            XDG_RUNTIME_DIR: base && `${base}/runtime`,
+          };
+    expect(resolveDirectories(env, "/home/test")).toEqual(expected);
+  });
+
+  it("XDG_RUNTIME_DIR が無ければ、実行時のディレクトリに状態のディレクトリを使う", () => {
+    expect(
+      resolveDirectories(
+        { XDG_DATA_HOME: "/xdg/data", XDG_STATE_HOME: "/xdg/state" },
+        "/home/test",
+      ),
+    ).toEqual({
+      data: "/xdg/data/sukuna",
+      state: "/xdg/state/sukuna",
+      runtime: "/xdg/state/sukuna",
+    });
+  });
+
+  it("ランナーのソケットは、指定が無ければ実行時のディレクトリに置く", () => {
+    expect(
+      readEnvironment(
+        "server",
+        { XDG_RUNTIME_DIR: "/run/user" },
+        "/home/test",
+        () => false,
+      )._unsafeUnwrap().socket,
+    ).toBe("/run/user/sukuna/runner.sock");
   });
 });

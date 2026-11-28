@@ -21,6 +21,7 @@ import { incomingWith } from "../../identity/test-support";
 import { createProgressRepository } from "../../conversation/adapter/progress-repository";
 import { createTimelineFilePort } from "../../conversation/adapter/timeline-file";
 import { designFixture } from "../design-test-support";
+import { directoriesIn } from "../../../../test/directories";
 
 function deferred() {
   let resolve!: () => void;
@@ -160,12 +161,11 @@ describe("差し戻しの番と受理した指摘", () => {
     const { entered, release } = useControlledAgent();
     await reportDesign();
     const pending = reject();
-    const databasePath = join(f.home, "sukuna.db");
     try {
       await entered.promise;
       expect((await pending).status).toBe(202);
 
-      const removal = reserveProjectActivity(databasePath, "project", "remove");
+      const removal = reserveProjectActivity(directoriesIn(f.home).state, "project", "remove");
       if (removal.isOk()) removal.value.release();
       expect(removal.isErr() && removal.error.code).toBe("conflict");
 
@@ -177,7 +177,9 @@ describe("差し戻しの番と受理した指摘", () => {
       expect(origins).toEqual(["flow", "developer"]);
       expect(runState()).toBe("working");
 
-      reserveProjectActivity(databasePath, "project", "remove")._unsafeUnwrap().release();
+      reserveProjectActivity(directoriesIn(f.home).state, "project", "remove")
+        ._unsafeUnwrap()
+        .release();
     } finally {
       release.resolve();
       await pending;
@@ -640,7 +642,7 @@ describe("差し戻しの番と受理した指摘", () => {
       await f.backupDatabase(copy);
       const db = new Database(copy);
       try {
-        const recovered = new SqliteConversationStore(db);
+        const recovered = new SqliteConversationStore(db, directoriesIn(f.home).state);
         expect(recovered.queue("design")).toEqual([]);
         expect(recovered.recoverAccepted()).toBe(true);
         expect(recovered.recoverAccepted()).toBe(false);

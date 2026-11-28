@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { capture } from "./evidence";
+import { databasePath } from "./database-path";
 
 const title = "予約の監査ログを追加する";
 const test = base.extend<{ project: string }>({
@@ -12,7 +13,7 @@ const test = base.extend<{ project: string }>({
     if (!home) throw new Error("E2E のデータディレクトリがありません。");
     const cwd = mkdtempSync(join(home, `issue-navigation-${browserName}-`));
     const id = basename(cwd);
-    const db = new Database(join(home, "sukuna.db"), { fileMustExist: true });
+    const db = new Database(databasePath(home), { fileMustExist: true });
     db.pragma("foreign_keys = ON");
     try {
       execFileSync("git", ["init", "-q", "-b", "main", cwd]);
@@ -116,7 +117,7 @@ test("担当会話を切り替えると同じ issue のタスク詳細が新し�
   ];
   const timelineDir = join(home, "claude-config", "timeline", "sessions");
   mkdirSync(timelineDir, { recursive: true });
-  const database = new Database(join(home, "sukuna.db"), { fileMustExist: true });
+  const database = new Database(databasePath(home), { fileMustExist: true });
   try {
     const now = Date.now();
     database

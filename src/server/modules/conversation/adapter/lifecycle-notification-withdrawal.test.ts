@@ -7,7 +7,6 @@ import {
   openMigratedDatabase,
   removeTempHome,
 } from "../../../../shared/db/test-helpers";
-import { readEnvironment } from "../../../../shared/env";
 import { createApp } from "../../../app";
 import {
   getDatabase,
@@ -19,6 +18,7 @@ import {
 import { incomingWith } from "../../identity/test-support";
 import type { DismissNotification } from "../../inbox/domain/push-port";
 import { createWorkspaceAgent } from "../../workspace/adapter/worktree-conversation-test-support";
+import { directoriesIn, testEnvironment } from "../../../../test/directories";
 
 it("会話の閉鎖と削除は、対象の未取り下げ通知だけを端末から取り下げる", async () => {
   const home = createTempHome();
@@ -26,12 +26,7 @@ it("会話の閉鎖と削除は、対象の未取り下げ通知だけを端末�
   mkdirSync(cwd);
   const runnerDb = openMigratedDatabase(home);
   const sdk = createWorkspaceAgent("scripted");
-  const environment = readEnvironment(
-    "runner",
-    { SUKUNA_HOME: home },
-    home,
-    () => true,
-  )._unsafeUnwrap();
+  const environment = testEnvironment(home);
   const runner = await startRunnerApp({
     database: runnerDb,
     environment,
@@ -43,7 +38,7 @@ it("会話の閉鎖と削除は、対象の未取り下げ通知だけを端末�
   let shouldFail = true;
   try {
     const started = await initializeRuntime(
-      { homeDir: home },
+      { directories: directoriesIn(home) },
       {
         socket: environment.socket,
         log: () => {},

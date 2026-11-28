@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { basename, join } from "node:path";
 import { capture } from "./evidence";
+import { databasePath } from "./database-path";
 
 const test = base.extend<{ worktreeProject: string }>({
   worktreeProject: async ({ browserName }, use) => {
@@ -11,7 +12,7 @@ const test = base.extend<{ worktreeProject: string }>({
     if (!home) throw new Error("E2E のデータディレクトリがありません。");
     const cwd = realpathSync(mkdtempSync(join(home, `terminal-project-${browserName}-`)));
     const id = basename(cwd);
-    const db = new Database(join(home, "sukuna.db"), { fileMustExist: true });
+    const db = new Database(databasePath(home), { fileMustExist: true });
     db.pragma("foreign_keys = ON");
     try {
       execFileSync("git", ["init", "-q", "-b", "main", cwd]);

@@ -8,7 +8,7 @@ const id = "e2e-work-monitor";
 const sessionId = "e2e-work-monitor-session";
 const now = Date.now();
 const project = join(home, "shop-api");
-const database = new Database(join(home, "sukuna.db"), { fileMustExist: true });
+const database = new Database(join(home, "data", "sukuna", "sukuna.db"), { fileMustExist: true });
 try {
   database
     .prepare(

@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { capture } from "./evidence";
+import { databasePath } from "./database-path";
 
 const title = "在庫の引き当ての相談";
 const firstLine = "export const reservationTimeout = 30;";
@@ -16,7 +17,7 @@ const test = base.extend<{ fileConversation: string }>({
 
     const cwd = mkdtempSync(join(home, `file-navigation-${browserName}-`));
     const id = basename(cwd);
-    const db = new Database(join(home, "sukuna.db"), { fileMustExist: true });
+    const db = new Database(databasePath(home), { fileMustExist: true });
     db.pragma("foreign_keys = ON");
     try {
       execFileSync("git", ["init", "-q", "-b", "main", cwd]);

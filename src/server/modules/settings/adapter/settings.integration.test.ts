@@ -25,6 +25,7 @@ import { attachUpgradeHandler } from "../../../runtime";
 import { restrictNetworkAccess } from "../../../network-access";
 import { WsHub } from "../../../ws-hub";
 import { createSettingsDependencies } from "./dependencies";
+import { directoriesIn } from "../../../../test/directories";
 
 const keymap = {
   version: 1,
@@ -59,7 +60,7 @@ describe("設定と配信", () => {
       restoreGeneration,
       settings: createSettingsDependencies(
         () => database.db,
-        home,
+        directoriesIn(home),
         () => hub.settingsChanged(),
       ),
     });

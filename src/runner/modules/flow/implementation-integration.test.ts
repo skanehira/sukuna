@@ -671,6 +671,29 @@ it("端末の終了確認が届くまで古い ID の作業場所を保持し、
   expect(existsSync(c.cwd)).toBe(false);
 });
 
+it("worktree の排他を別の処理が持つ間は完了した issue の worktree を残し、解放後に片付ける", async () => {
+  const path = prepareGit();
+  const held = seededImplementation("held", 41, path);
+  seededImplementation("later", 42, path);
+  for (const id of ["held", "later"])
+    f.db.update(issues).set({ state: "done" }).where(eq(issues.id, id)).run();
+  const removed = (id: string) => f.events(id).some(({ type }) => type === "worktree_removed");
+  const lease = createWorktreeActivity(f.opened.directories.state)
+    .acquire([held.id])
+    ._unsafeUnwrap();
+  try {
+    await f.restart();
+    await expect.poll(() => removed("later"), { timeout: 2500 }).toBe(true);
+    expect(existsSync(held.path)).toBe(true);
+    expect(removed("held")).toBe(false);
+  } finally {
+    lease.release();
+  }
+  await notify("held");
+  await expect.poll(() => removed("held"), { timeout: 2500 }).toBe(true);
+  expect(existsSync(held.path)).toBe(false);
+});
+
 it("画面サーバーがいなければ完了だけ記録し、接続が戻ったときに片付ける", async () => {
   const path = prepareGit();
   const head = git(path, "rev-parse", "HEAD");
@@ -1181,7 +1204,9 @@ it("中間の親の再開を排他で保存できない間は祖父とその依�
   f.addIssue("waiting", 4, { state: "ready" });
   f.depend("waiting", "grandparent");
   f.addIssue("independent", 5, { state: "ready" });
-  const held = createWorktreeActivity(f.opened.sqlite.name).acquire([parent.id])._unsafeUnwrap();
+  const held = createWorktreeActivity(f.opened.directories.state)
+    .acquire([parent.id])
+    ._unsafeUnwrap();
   try {
     expect((await f.request("/api/issues/child/reopen", "POST")).status).toBe(200);
     await expect.poll(() => conversation("independent")?.worktreeId).toBeTruthy();

@@ -15,12 +15,20 @@ import Database from "better-sqlite3";
 import { expect, it } from "vite-plus/test";
 import { migrations } from "../shared/db/migrate";
 import { createTempHome, removeTempHome, tableNames } from "../shared/db/test-helpers";
+import { vitePlusVariables, xdgDirectoriesIn, xdgVariablesIn } from "../test/directories";
 
 it("開発用ランナーのコマンドを実行すると、全テーブルを用意して起動し、SIGTERM で終了する", async () => {
   const home = createTempHome();
+  const directories = xdgDirectoriesIn(home);
   const child = spawn("vp", ["run", "dev:runner"], {
     cwd: fileURLToPath(new URL("../..", import.meta.url)),
-    env: { ...process.env, NODE_ENV: "development", VITEST: undefined, SUKUNA_HOME: home },
+    env: {
+      ...process.env,
+      NODE_ENV: "development",
+      VITEST: undefined,
+      ...vitePlusVariables(),
+      ...xdgVariablesIn(home),
+    },
     stdio: ["ignore", "pipe", "pipe"],
     detached: true,
   });
@@ -62,7 +70,7 @@ it("開発用ランナーのコマンドを実行すると、全テーブルを�
       });
     });
 
-    const sqlite = new Database(join(home, "sukuna.db"), { readonly: true });
+    const sqlite = new Database(join(directories.data, "sukuna.db"), { readonly: true });
     try {
       expect(tableNames(sqlite)).toEqual([
         "conversation_events",
@@ -86,7 +94,7 @@ it("開発用ランナーのコマンドを実行すると、全テーブルを�
       expect(sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get()).toEqual({
         count: migrations.length,
       });
-      expect(existsSync(join(home, "db.lock"))).toBe(false);
+      expect(existsSync(join(directories.state, "db.lock"))).toBe(false);
     } finally {
       sqlite.close();
     }
@@ -122,10 +130,16 @@ it.each([
     cpSync(join(root, "src"), join(sandbox, "src"), { recursive: true });
     cpSync(join(root, "package.json"), join(sandbox, "package.json"));
     symlinkSync(join(root, "node_modules"), join(sandbox, "node_modules"), "dir");
-    const home = join(sandbox, "data");
+    const directories = xdgDirectoriesIn(join(sandbox, "data"));
     const child = spawn("vp", ["run", "dev:runner"], {
       cwd: sandbox,
-      env: { ...process.env, NODE_ENV: "development", VITEST: undefined, SUKUNA_HOME: home },
+      env: {
+        ...process.env,
+        NODE_ENV: "development",
+        VITEST: undefined,
+        ...vitePlusVariables(),
+        ...xdgVariablesIn(join(sandbox, "data")),
+      },
       stdio: ["ignore", "pipe", "pipe"],
       detached: true,
     });
@@ -208,12 +222,12 @@ it.each([
         { component: "runner", message: "entry updated" },
         { component: "runner", message: `received ${signal}` },
       ]);
-      const sqlite = new Database(join(home, "sukuna.db"), { readonly: true });
+      const sqlite = new Database(join(directories.data, "sukuna.db"), { readonly: true });
       try {
         expect(sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get()).toEqual({
           count: migrations.length,
         });
-        expect(existsSync(join(home, "db.lock"))).toBe(false);
+        expect(existsSync(join(directories.state, "db.lock"))).toBe(false);
       } finally {
         sqlite.close();
       }

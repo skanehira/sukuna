@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import Database from "better-sqlite3";
-import { join } from "node:path";
 import { capture } from "./evidence";
+import { databasePath } from "./database-path";
 
 test.use({ viewport: { width: 1440, height: 900 } });
 const projectId = "inbox-e2e-project";
@@ -15,7 +15,7 @@ const conversations = [
 test.beforeAll(() => {
   const home = process.env.SUKUNA_E2E_HOME;
   if (!home) throw new Error("E2E のデータの置き場所がありません");
-  const db = new Database(join(home, "sukuna.db"));
+  const db = new Database(databasePath(home));
   db.pragma("foreign_keys = ON");
   db.prepare("INSERT INTO projects (id, name, path, default_branch) VALUES (?, ?, ?, ?)").run(
     projectId,
@@ -38,7 +38,7 @@ test.beforeAll(() => {
   db.close();
 });
 test.afterAll(() => {
-  const db = new Database(join(process.env.SUKUNA_E2E_HOME!, "sukuna.db"));
+  const db = new Database(databasePath(process.env.SUKUNA_E2E_HOME!));
   db.pragma("foreign_keys = ON");
   db.prepare("DELETE FROM conversations WHERE project_id = ?").run(projectId);
   db.prepare("DELETE FROM projects WHERE id = ?").run(projectId);

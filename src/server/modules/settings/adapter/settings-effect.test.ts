@@ -14,6 +14,7 @@ import { incomingWith } from "../../identity/test-support";
 import { issueFixture } from "../../issue/test-support";
 import { createProjectDependencies } from "../../workspace/adapter/project-dependencies";
 import { createSettingsDependencies } from "./dependencies";
+import { directoriesIn } from "../../../../test/directories";
 
 const flow = issueFixture(
   {
@@ -55,7 +56,7 @@ beforeEach(() => {
     build: "settings-effect",
     settings: createSettingsDependencies(
       () => flow.db,
-      cwd,
+      directoriesIn(cwd),
       () => flow.hub.settingsChanged(),
       undefined,
       {

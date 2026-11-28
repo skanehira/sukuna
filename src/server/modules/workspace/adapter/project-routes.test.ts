@@ -13,7 +13,6 @@ import {
 import { openDatabase } from "../../../../shared/db/open";
 import { notifications } from "../../../../shared/db/schema";
 import { createInboxRepository } from "../../inbox/adapter/inbox-repository";
-import { readEnvironment } from "../../../../shared/env";
 import { ScriptedGh } from "../../../../shared/gh/scripted-gh";
 import { createApp } from "../../../app";
 import { RunnerLink, runnerUnavailable } from "../../../runner-link";
@@ -22,6 +21,7 @@ import { incomingWith } from "../../identity/test-support";
 import { createProjectDependencies } from "./project-dependencies";
 import { createWorktreeDependencies } from "./worktree-dependencies";
 import { WorkspaceClock } from "./worktree-conversation-test-support";
+import { directoriesIn, testEnvironment } from "../../../../test/directories";
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -74,12 +74,7 @@ async function fixture(options: { ghExit?: number; ghStderr?: string } = {}) {
   const database = openMigratedDatabase(home);
   cleanups.push(() => database.close());
   const clock = new WorkspaceClock();
-  const environment = readEnvironment(
-    "runner",
-    { SUKUNA_HOME: home },
-    home,
-    () => true,
-  )._unsafeUnwrap();
+  const environment = testEnvironment(home);
   const agent = new ScriptedAgent({
     rules: [
       {
@@ -876,7 +871,7 @@ it.each([
   const original = f.runner.runtime.store.get(limited);
   const otherOriginal = f.runner.runtime.store.get(other);
   expect(original?.resetsAt).toBe(5000);
-  const writer = openDatabase(f.home);
+  const writer = openDatabase(directoriesIn(f.home));
   try {
     if (locked) {
       f.database.sqlite.pragma("busy_timeout = 0");
@@ -998,7 +993,7 @@ it.each([
     );
     expect(f.messages.filter((m) => (m as { type?: string }).type === "notice")).toEqual([]);
 
-    const reopened = openDatabase(f.home);
+    const reopened = openDatabase(directoriesIn(f.home));
     try {
       const next = new WsHub(reopened.sqlite, {
         inbox: { repository: createInboxRepository(() => reopened.db), resetTime: () => "" },
@@ -1083,7 +1078,7 @@ it("独立対照: 再登録後に新しく判断待ちへ進んだissueは画面
       "INSERT INTO issue_events(issue_id,seq,type,payload,created_at) VALUES ('new-i',1,'state_changed','{}',1500)",
     )
     .run();
-  const reopened = openDatabase(f.home);
+  const reopened = openDatabase(directoriesIn(f.home));
   try {
     const hub = new WsHub(reopened.sqlite, {
       inbox: { repository: createInboxRepository(() => reopened.db), resetTime: () => "" },
@@ -1128,7 +1123,7 @@ it("同じissueの再登録時の待機を記録しても、次に承認待ち�
   expect(f.database.db.select().from(notifications).all()).toEqual([]);
   event.run(2, JSON.stringify({ from: "design_review", to: "design" }));
   event.run(3, JSON.stringify({ from: "design", to: "design_review" }));
-  const reopened = openDatabase(f.home);
+  const reopened = openDatabase(directoriesIn(f.home));
   try {
     const hub = new WsHub(reopened.sqlite, {
       inbox: { repository: createInboxRepository(() => reopened.db), resetTime: () => "" },

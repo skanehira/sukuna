@@ -57,7 +57,7 @@ if (environment.isErr()) {
 }
 const env = environment.value;
 try {
-  rotateLog(join(env.home, "logs", "server.log"));
+  rotateLog(join(env.directories.state, "logs", "server.log"));
 } catch (error) {
   log({ level: "warn", component: "server", message: "ログを整理できませんでした。", error });
 }
@@ -70,7 +70,7 @@ const restoreReceiptWarning = (error: unknown) =>
     error,
   });
 const initialized = await initializeRuntime(
-  { homeDir: env.home, restoreReceiptWarning },
+  { directories: env.directories, restoreReceiptWarning },
   { socket: env.socket, log },
 );
 if (initialized.isErr()) {
@@ -95,11 +95,11 @@ const server = serve(
       restoreGeneration: readRestoreGeneration(getDatabase().sqlite),
       settings: createSettingsDependencies(
         () => getDatabase().db,
-        env.home,
+        env.directories,
         () => getWsHub().settingsChanged(),
         process.platform === "darwin" && process.env.NODE_ENV === "production"
           ? {
-              launchd: launchdEnvironment(env.home).launchd,
+              launchd: launchdEnvironment(env.directories).launchd,
               now: Date.now,
               receiptWarning: restoreReceiptWarning,
             }

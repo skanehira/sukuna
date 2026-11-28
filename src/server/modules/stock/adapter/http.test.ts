@@ -21,7 +21,6 @@ import { createWorkspaceDependencies } from "../../workspace/adapter/dependencie
 import { createStockDependencies } from "./dependencies";
 import { startRunnerApp } from "../../../../runner/app";
 import { ScriptedAgent } from "../../../../runner/modules/conversation/adapter/scripted-agent";
-import { readEnvironment } from "../../../../shared/env";
 import { RunnerLink } from "../../../runner-link";
 import { WsHub } from "../../../ws-hub";
 import {
@@ -30,6 +29,7 @@ import {
   threadsResponseSchema,
 } from "../../../../shared/stock";
 import type { StockItem, Quote } from "../../../../shared/stock";
+import { directoriesIn, testEnvironment } from "../../../../test/directories";
 
 describe("ストックとスレッド API", () => {
   let requestClock: number;
@@ -92,7 +92,7 @@ describe("ストックとスレッド API", () => {
     cwd = join(home, "workspace");
     mkdirSync(cwd);
     database = openMigratedDatabase(home);
-    screenDatabase = openDatabase(home);
+    screenDatabase = openDatabase(directoriesIn(home));
     database.sqlite
       .prepare("INSERT INTO projects (id,name,path,default_branch) VALUES ('p','fixture',?,'main')")
       .run(cwd);
@@ -158,12 +158,7 @@ describe("ストックとスレッド API", () => {
         },
       },
       database,
-      environment: readEnvironment(
-        "runner",
-        { SUKUNA_HOME: home },
-        home,
-        () => true,
-      )._unsafeUnwrap(),
+      environment: testEnvironment(home),
       agent,
       log: () => {},
     });

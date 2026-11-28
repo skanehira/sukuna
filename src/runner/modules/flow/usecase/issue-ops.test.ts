@@ -566,7 +566,7 @@ describe("確定した issue の変更を自動フローに反映する", () => 
     f.depend("i", "dependency");
     await api("/api/issues/dependency/withdraw", "POST");
     expect(await view("i")).toMatchObject({ state: "stopped", stopReason: "dependency_withdrawn" });
-    const lease = createWorktreeActivity(f.opened.sqlite.name)
+    const lease = createWorktreeActivity(f.opened.directories.state)
       .acquire([implementation.worktreeId!])
       ._unsafeUnwrap();
     try {
@@ -590,7 +590,7 @@ describe("確定した issue の変更を自動フローに反映する", () => 
     f.addIssue("waiting", 40, { state: "ready" });
     f.depend("waiting", "dependency");
     f.depend("i", "dependency");
-    const lease = createWorktreeActivity(f.opened.sqlite.name)
+    const lease = createWorktreeActivity(f.opened.directories.state)
       .acquire([implementation.worktreeId!])
       ._unsafeUnwrap();
     try {
@@ -663,7 +663,7 @@ describe("確定した issue の変更を自動フローに反映する", () => 
     let release: (() => void) | undefined;
     f.interceptGitBefore((args) => {
       if (args[0] !== "status" || release) return;
-      const lease = createWorktreeActivity(f.opened.sqlite.name)
+      const lease = createWorktreeActivity(f.opened.directories.state)
         .acquire([design.id])
         ._unsafeUnwrap();
       release = () => lease.release();

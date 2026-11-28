@@ -30,7 +30,7 @@ export function createDesignFlow(
   >,
   gitRunner: GitRunner = createGitCli(),
 ) {
-  const activity = createWorktreeActivity(database.sqlite.name);
+  const activity = createWorktreeActivity(database.directories.state);
   const workspaceGit = createWorktreeGit(gitRunner, gh);
   const ownedTrees = createImplementationTrees(database);
   const ownedGit = createImplementationGit(gitRunner, gh);

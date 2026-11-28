@@ -2,14 +2,11 @@ import { afterEach, expect, it } from "vite-plus/test";
 import { chmodSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AsyncQueue } from "../../../../shared/async-queue";
-import {
-  createTempHome,
-  openMigratedDatabase,
-  removeTempHome,
-} from "../../../../shared/db/test-helpers";
+import { createTempHome, removeTempHome } from "../../../../shared/db/test-helpers";
+import { applyMigrations, migrations } from "../../../../shared/db/migrate";
+import { openDatabase } from "../../../../shared/db/open";
 import { ok } from "neverthrow";
 import { createLogger } from "../../../../shared/log";
-import { readEnvironment } from "../../../../shared/env";
 import { startRunnerApp } from "../../../app";
 import { RunnerLink } from "../../../../server/runner-link";
 import { createApp } from "../../../../server/app";
@@ -18,6 +15,7 @@ import { incomingWith } from "../../../../server/modules/identity/test-support";
 import type { AgentOutput, AgentSession, OpenParams } from "../domain/agent-port";
 import type { Clock } from "../domain/clock";
 import { ScriptedAgent, turnEnd } from "./scripted-agent";
+import { separateDirectoriesIn, testEnvironment } from "../../../../test/directories";
 
 const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1cAAAAASUVORK5CYII=",
@@ -76,7 +74,10 @@ afterEach(async () => {
 });
 async function fixture(clock?: Clock) {
   const home = createTempHome();
-  const database = openMigratedDatabase(home);
+  const directories = separateDirectoriesIn(home);
+  const data = directories.data;
+  const database = openDatabase(directories);
+  applyMigrations(database.sqlite, migrations)._unsafeUnwrap();
   const agent = new RecordingAgent();
   const notices: unknown[] = [];
   const logs: Record<string, unknown>[] = [];
@@ -84,7 +85,7 @@ async function fixture(clock?: Clock) {
     database,
     agent,
     clock,
-    environment: readEnvironment("runner", { SUKUNA_HOME: home }, home, () => true)._unsafeUnwrap(),
+    environment: { ...testEnvironment(home), directories },
     log: createLogger({
       now: () => 1000,
       write: (line) => {
@@ -128,7 +129,7 @@ async function fixture(clock?: Clock) {
   const ipc = async (operation: string) =>
     (await link.call("POST", `/conversations/${id}/${operation}`, {}))._unsafeUnwrap();
   const save = (image: (typeof fixtures)[number], conversationId = id) => {
-    const directory = join(home, "images", conversationId);
+    const directory = join(data, "images", conversationId);
     mkdirSync(directory, { recursive: true });
     writeFileSync(join(directory, `${image.id}.${image.extension}`), image.data);
   };
@@ -138,7 +139,7 @@ async function fixture(clock?: Clock) {
     database.close();
     removeTempHome(home);
   });
-  return { home, database, agent, notices, logs, runner, id, post, ipc, save };
+  return { data, database, agent, notices, logs, runner, id, post, ipc, save };
 }
 const delivered = { status: 202, body: { result: "delivered", queueItem: null } };
 const missing = {
@@ -188,7 +189,7 @@ it("直接送信は実画像のバイトと形式をAIへ渡し、相対パス�
     },
   ]);
   fixtures.forEach((image) =>
-    rmSync(join(f.home, "images", f.id, `${image.id}.${image.extension}`)),
+    rmSync(join(f.data, "images", f.id, `${image.id}.${image.extension}`)),
   );
   const before = snapshot(f);
   expect({
@@ -276,7 +277,7 @@ it.each(["manual", "send", "interrupt"])(
     await f.post("作業開始", [], "start");
     f.save({ ...fixtures[0]!, id: "missing" });
     await f.post("預かった指示", [fixtures[0]!.id, "missing"], "queued");
-    rmSync(join(f.home, "images", f.id, "missing.png"));
+    rmSync(join(f.data, "images", f.id, "missing.png"));
     if (mode !== "interrupt") await f.ipc("stop");
     const before = snapshot(f);
     const retry = async () =>
@@ -316,8 +317,8 @@ it.each([false, true])(
     await f.post("作業開始", [], "start");
     const imageIds = [...(alsoMissing ? ["missing"] : []), fixtures[0]!.id];
     await f.post("預かった指示", imageIds, "queued");
-    if (alsoMissing) rmSync(join(f.home, "images", f.id, "missing.png"));
-    const imageFile = join(f.home, "images", f.id, `${fixtures[0]!.id}.png`);
+    if (alsoMissing) rmSync(join(f.data, "images", f.id, "missing.png"));
+    const imageFile = join(f.data, "images", f.id, `${fixtures[0]!.id}.png`);
     const before = snapshot(f);
     chmodSync(imageFile, 0);
     try {
@@ -401,7 +402,7 @@ it.each([false, true])(
     await f.post("作業開始", [], "start");
     await f.post("預かった指示", ["missing-1", fixtures[0]!.id, "missing-2"], "queued");
     for (const id of ["missing-1", ...(allMissing ? [fixtures[0]!.id] : []), "missing-2"])
-      rmSync(join(f.home, "images", f.id, `${id}.png`));
+      rmSync(join(f.data, "images", f.id, `${id}.png`));
     f.agent.outputs.get(f.id)!.push(turnEnd("success"));
     await expect.poll(() => f.agent.messages.length).toBe(2);
     await expect.poll(() => f.notices.length).toBe(1);
@@ -484,18 +485,18 @@ it.each([
   "unsupported",
 ])("会話の外や未対応形式の画像ID %s を400で拒み、保存も送信もしない", async (kind) => {
   const f = await fixture();
-  const directory = join(f.home, "images", f.id);
+  const directory = join(f.data, "images", f.id);
   mkdirSync(directory, { recursive: true });
   f.save(fixtures[0]!, "other");
   let imageId = fixtures[0]!.id;
   if (kind === "file-symlink")
-    symlinkSync(join(f.home, "images/other", `${imageId}.png`), join(directory, `${imageId}.png`));
+    symlinkSync(join(f.data, "images/other", `${imageId}.png`), join(directory, `${imageId}.png`));
   else if (kind === "directory-symlink") {
     rmSync(directory, { recursive: true });
-    symlinkSync(join(f.home, "images/other"), directory);
+    symlinkSync(join(f.data, "images/other"), directory);
   } else if (kind === "unsupported") writeFileSync(join(directory, `${imageId}.txt`), png);
   else if (kind === "traversal") imageId = `../other/${imageId}`;
-  else if (kind === "absolute") imageId = join(f.home, "images/other", imageId);
+  else if (kind === "absolute") imageId = join(f.data, "images/other", imageId);
   else if (kind === "backslash") imageId = `..\\other\\${imageId}`;
   const before = snapshot(f);
   expect({

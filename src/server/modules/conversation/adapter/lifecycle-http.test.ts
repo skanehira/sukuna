@@ -15,7 +15,6 @@ import {
   openMigratedDatabase,
   removeTempHome,
 } from "../../../../shared/db/test-helpers";
-import { readEnvironment } from "../../../../shared/env";
 import { closingSummarySchema, lifecycleSearchResponseSchema } from "../../../../shared/lifecycle";
 import { createApp } from "../../../app";
 import { RunnerLink } from "../../../runner-link";
@@ -31,6 +30,7 @@ import { createLifecycleDependencies } from "./lifecycle-dependencies";
 import { createGitCli, type GitRunner } from "../../workspace/adapter/git-cli";
 import type { GhRunner } from "../../../../shared/gh/gh-runner";
 import { createConversationDependencies } from "./dependencies";
+import { directoriesIn, testEnvironment } from "../../../../test/directories";
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -78,7 +78,7 @@ async function fixture(
   const hash = git(project, "rev-parse", "HEAD");
   writeFileSync(join(project, "unfinished.txt"), "uncommitted");
   const database = openMigratedDatabase(home);
-  const runnerDb = openDatabase(home);
+  const runnerDb = openDatabase(directoriesIn(home));
   const sqlite = database.sqlite;
   sqlite
     .prepare(
@@ -87,12 +87,7 @@ async function fixture(
     .run(project);
   options.seed?.(sqlite, project);
   const sdk = createWorkspaceAgent("scripted");
-  const environment = readEnvironment(
-    "runner",
-    { SUKUNA_HOME: home },
-    home,
-    () => true,
-  )._unsafeUnwrap();
+  const environment = testEnvironment(home);
   const runnerRequests: string[] = [];
   const releaseReplies: { path: string; status: number }[] = [];
   const launchRunner = () =>

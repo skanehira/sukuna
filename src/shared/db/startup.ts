@@ -9,11 +9,11 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import { err, ok, type Result } from "neverthrow";
 import { applyMigrations, migrations, type Migration } from "./migrate";
+import type { Directories } from "../env";
 import { openDatabase, type OpenedDatabase } from "./open";
 import { recoverRestore, restoreWorkerLockPath } from "./restore-state";
 
@@ -45,7 +45,7 @@ export type AcquireLockOptions = {
 };
 
 export type StartupOptions = {
-  homeDir?: string;
+  directories: Directories;
   migrations?: Migration[];
   lock?: Omit<AcquireLockOptions, "lockPath">;
   restoreReceiptWarning?: (error: unknown) => void;
@@ -187,11 +187,12 @@ export async function acquireLock(
 }
 
 export async function startDatabase(
-  options: StartupOptions = {},
+  options: StartupOptions,
 ): Promise<Result<OpenedDatabase, StartupError>> {
-  const homeDir = options.homeDir ?? process.env.SUKUNA_HOME ?? join(homedir(), ".sukuna");
+  const { directories } = options;
   try {
-    mkdirSync(homeDir, { recursive: true });
+    for (const directory of [directories.data, directories.state, directories.runtime])
+      mkdirSync(directory, { recursive: true, mode: 0o700 });
   } catch (error) {
     return err({
       type: "open_failed",
@@ -199,29 +200,32 @@ export async function startDatabase(
     });
   }
 
-  const lockResult = await acquireLock({ lockPath: join(homeDir, "db.lock"), ...options.lock });
+  const lockResult = await acquireLock({
+    lockPath: join(directories.state, "db.lock"),
+    ...options.lock,
+  });
   if (lockResult.isErr()) return err(lockResult.error);
   const lock = lockResult.value;
 
   let opened: OpenedDatabase | undefined;
   try {
-    opened = openDatabase(homeDir);
+    opened = openDatabase(directories);
     const migrationResult = applyMigrations(opened.sqlite, options.migrations ?? migrations);
     if (migrationResult.isErr()) {
       opened.close();
       return err({ type: "migration_failed", message: migrationResult.error.message });
     }
-    if (existsSync(join(homeDir, "restore.json"))) {
+    if (existsSync(join(directories.state, "restore.json"))) {
       const worker = await acquireLock({
         ...options.lock,
-        lockPath: restoreWorkerLockPath(homeDir),
+        lockPath: restoreWorkerLockPath(directories.state),
         timeoutMs: 0,
       });
       if (worker.isOk()) {
         try {
           recoverRestore(
             opened.sqlite,
-            homeDir,
+            directories,
             options.now ?? options.lock?.now ?? Date.now,
             options.lock?.isProcessAlive ?? isProcessAlive,
             options.restoreReceiptWarning,

@@ -31,7 +31,7 @@ export function createIssueOperations(
     clear: dependency.clear,
     hasDesignWorktree,
     run: (action) =>
-      createWorktreeActivity(database.sqlite.name).run((reservation) =>
+      createWorktreeActivity(database.directories.state).run((reservation) =>
         db.transaction(
           (tx) => action(createIssueDataRepository(tx), createIssueRepository(tx, reservation)),
           {

@@ -1,11 +1,12 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 import Database from "better-sqlite3";
 import { openDatabase } from "./open";
 import { acquireLock, startDatabase } from "./startup";
 import { createTempHome, removeTempHome, tableNames } from "./test-helpers";
+import { directoriesIn, xdgDirectoriesIn } from "../../test/directories";
 
 type FakeClock = {
   now: () => number;
@@ -360,19 +361,25 @@ describe("データベースのロック", () => {
 });
 
 describe("起動の処理", () => {
-  it("空のデータの置き場所で起動すると、データベースができて全テーブルがそろい、ロックが残らない", async () => {
+  it("空のデータの置き場所で起動すると、3 つのディレクトリを持ち主だけの権限で作り、データベースができて全テーブルがそろい、ロックが残らない", async () => {
     const home = createTempHome();
+    const directories = xdgDirectoriesIn(home);
 
     try {
-      const result = await startDatabase({ homeDir: home });
+      const result = await startDatabase({ directories });
 
       expect(result.isOk()).toBe(true);
       if (!result.isOk()) throw new Error("起動に失敗しました");
       const opened = result.value;
       try {
         expect(tableNames(opened.sqlite)).toHaveLength(17);
-        expect(existsSync(join(home, "sukuna.db"))).toBe(true);
-        expect(existsSync(join(home, "db.lock"))).toBe(false);
+        expect(
+          [directories.data, directories.state, directories.runtime].map(
+            (directory) => statSync(directory).mode & 0o777,
+          ),
+        ).toEqual([0o700, 0o700, 0o700]);
+        expect(existsSync(join(directories.data, "sukuna.db"))).toBe(true);
+        expect(existsSync(join(directories.state, "db.lock"))).toBe(false);
       } finally {
         opened.close();
       }
@@ -392,15 +399,17 @@ describe("起動の処理", () => {
       },
     ];
 
+    const directories = xdgDirectoriesIn(home);
+
     try {
-      const result = await startDatabase({ homeDir: home, migrations: broken });
+      const result = await startDatabase({ directories, migrations: broken });
 
       expect(result.isErr()).toBe(true);
       if (!result.isErr()) throw new Error("起動に成功してしまいました");
       expect(result.error.type).toBe("migration_failed");
-      expect(existsSync(join(home, "db.lock"))).toBe(false);
+      expect(existsSync(join(directories.state, "db.lock"))).toBe(false);
 
-      const opened = openDatabase(home);
+      const opened = openDatabase(directories);
       try {
         expect(tableNames(opened.sqlite)).toEqual([]);
       } finally {
@@ -417,7 +426,7 @@ describe("起動の処理", () => {
     writeFileSync(filePath, "");
 
     try {
-      const result = await startDatabase({ homeDir: join(filePath, "data") });
+      const result = await startDatabase({ directories: directoriesIn(join(filePath, "data")) });
 
       expect(result.isErr()).toBe(true);
       if (!result.isErr()) throw new Error("起動に成功してしまいました");
@@ -429,15 +438,16 @@ describe("起動の処理", () => {
 
   it("データベースを開けなければ、起動の処理は失敗を返し、ロックが残らない", async () => {
     const home = createTempHome();
-    mkdirSync(join(home, "sukuna.db"));
+    const directories = xdgDirectoriesIn(home);
+    mkdirSync(join(directories.data, "sukuna.db"), { recursive: true });
 
     try {
-      const result = await startDatabase({ homeDir: home });
+      const result = await startDatabase({ directories });
 
       expect(result.isErr()).toBe(true);
       if (!result.isErr()) throw new Error("起動に成功してしまいました");
       expect(result.error.type).toBe("open_failed");
-      expect(existsSync(join(home, "db.lock"))).toBe(false);
+      expect(existsSync(join(directories.state, "db.lock"))).toBe(false);
     } finally {
       removeTempHome(home);
     }
@@ -445,20 +455,22 @@ describe("起動の処理", () => {
 
   it("ほかのプロセスがロックを持ったままなら、起動の処理は失敗を返し、データベースを作らない", async () => {
     const home = createTempHome();
-    writeFileSync(join(home, "db.lock"), String(process.pid));
+    const directories = xdgDirectoriesIn(home);
+    mkdirSync(directories.state, { recursive: true });
+    writeFileSync(join(directories.state, "db.lock"), String(process.pid));
     const clock = fakeClock();
 
     try {
       const result = await startDatabase({
-        homeDir: home,
+        directories,
         lock: { timeoutMs: 60_000, intervalMs: 500, now: clock.now, sleep: clock.sleep },
       });
 
       expect(result.isErr()).toBe(true);
       if (!result.isErr()) throw new Error("起動に成功してしまいました");
       expect(result.error.type).toBe("lock_timeout");
-      expect(existsSync(join(home, "sukuna.db"))).toBe(false);
-      expect(existsSync(join(home, "db.lock"))).toBe(true);
+      expect(existsSync(join(directories.data, "sukuna.db"))).toBe(false);
+      expect(existsSync(join(directories.state, "db.lock"))).toBe(true);
     } finally {
       removeTempHome(home);
     }

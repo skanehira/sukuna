@@ -19,6 +19,7 @@ import {
 } from "../../../../shared/recap/api";
 import type { DecisionItem } from "../../../../shared/recap/decision-file";
 import type { RecapDependencies } from "../domain/ports";
+import { directoriesIn } from "../../../../test/directories";
 
 const state = { reflectedSeq: 0, failedAt: null, updating: false };
 const item: DecisionItem = {
@@ -270,7 +271,7 @@ describe("会話の直近・目次・決まったこと API", () => {
   });
   it("SQLite が書き込み中でも内部のエラーコードを公開せず再操作を案内する", async () => {
     database.sqlite.prepare("INSERT INTO toc_entries VALUES ('c',1,'最初',1)").run();
-    const other = openDatabase(home);
+    const other = openDatabase(directoriesIn(home));
     database.sqlite.pragma("busy_timeout = 0");
     other.sqlite.exec("BEGIN IMMEDIATE");
     try {

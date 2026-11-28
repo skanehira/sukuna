@@ -17,7 +17,7 @@ const { issues, issueEvents, issueDependencies, conversations } = schema;
 export function createIssueUnitOfWork(database: OpenedDatabase): IssueUnitOfWorkPort {
   return {
     run: (action) =>
-      createWorktreeActivity(database.sqlite.name).run((reservation) =>
+      createWorktreeActivity(database.directories.state).run((reservation) =>
         database.db.transaction((tx) => action(createIssueRepository(tx, reservation)), {
           behavior: "immediate",
         }),

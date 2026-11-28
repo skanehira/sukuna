@@ -13,6 +13,7 @@ import {
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
+import type { Directories } from "../../../../shared/env";
 import type { RestoreRequest, RestoreStatus } from "../../../../shared/settings/restore-schema";
 import { acquireLock } from "../../../../shared/db/startup";
 import {
@@ -44,18 +45,18 @@ function regularFile(path: string): boolean {
 }
 
 export function createRestoreFiles(
-  home: string,
+  { data, state }: Directories,
   receiptWarning: (error: unknown) => void = () => {},
 ) {
-  const dir = join(home, "backups");
-  const marker = join(home, "restore.json");
-  const dbPath = join(home, "sukuna.db");
+  const dir = join(data, "backups");
+  const marker = join(state, "restore.json");
+  const dbPath = join(data, "sukuna.db");
   const sourcePath = (id: string) => {
     const name = backupFileName(id);
     return name === undefined ? undefined : join(dir, name);
   };
   const locked = async (run: () => Promise<void> | void) => {
-    const lock = await acquireLock({ lockPath: join(home, "db.lock") });
+    const lock = await acquireLock({ lockPath: join(state, "db.lock") });
     if (lock.isErr()) throw new Error(lock.error.message);
     try {
       await run();
@@ -67,7 +68,7 @@ export function createRestoreFiles(
   return {
     async lockWorker(timeoutMs?: number) {
       const result = await acquireLock({
-        lockPath: restoreWorkerLockPath(home),
+        lockPath: restoreWorkerLockPath(state),
         ...(timeoutMs === undefined ? {} : { timeoutMs }),
       });
       if (result.isOk()) return result.value;
@@ -75,19 +76,19 @@ export function createRestoreFiles(
       throw new Error(result.error.message);
     },
     lookup(id: string) {
-      if (readRestoreRequest(home)?.requestId === id) return { status: "pending" as const };
-      const result = readRestoreReceipt(home, receiptWarning);
+      if (readRestoreRequest(state)?.requestId === id) return { status: "pending" as const };
+      const result = readRestoreReceipt(state, receiptWarning);
       return result?.requestId === id ? result : undefined;
     },
-    recordResult: (result: RestoreStatus) => writeRestoreReceipt(home, result),
-    readRequest: () => readRestoreRequest(home),
+    recordResult: (result: RestoreStatus) => writeRestoreReceipt(state, result),
+    readRequest: () => readRestoreRequest(state),
     hasRequest: () => existsSync(marker),
     backupExists(id: string) {
       const path = sourcePath(id);
       return path !== undefined && regularFile(path);
     },
     createRequest(request: RestoreRequest) {
-      const temporary = join(home, `restore-${randomUUID()}.tmp`);
+      const temporary = join(state, `restore-${randomUUID()}.tmp`);
       writeFileSync(temporary, JSON.stringify(request), { mode: 0o600, flag: "wx" });
       try {
         linkSync(temporary, marker);
@@ -100,11 +101,11 @@ export function createRestoreFiles(
       }
     },
     recordWorker(request: RestoreRequest, workerPid: number) {
-      if (readRestoreRequest(home)?.requestId === request.requestId)
+      if (readRestoreRequest(state)?.requestId === request.requestId)
         replaceRestoreValue(marker, { ...request, workerPid });
     },
     clearRequest(request: RestoreRequest) {
-      const current = readRestoreRequest(home);
+      const current = readRestoreRequest(state);
       if (
         current &&
         current.requestId === request.requestId &&
@@ -127,7 +128,7 @@ export function createRestoreFiles(
       return locked(async () => {
         const path = sourcePath(request.backupId);
         if (!path || !regularFile(path)) throw new Error("バックアップが見つかりません。");
-        const temp = join(home, "restore-db.tmp");
+        const temp = join(data, "restore-db.tmp");
         const snapshotName = beforeRestoreName(new Date(status.at));
         const snapshot = join(dir, snapshotName);
         const pendingBackup = join(dir, snapshotName + ".tmp");
@@ -136,7 +137,7 @@ export function createRestoreFiles(
           mkdirSync(dir, { recursive: true, mode: 0o700 });
           await current.backup(pendingBackup);
           chmodSync(pendingBackup, 0o600);
-          removeRestoreStaging(home);
+          removeRestoreStaging(data);
           copyFileSync(path, temp);
           chmodSync(temp, 0o600);
           renameSync(pendingBackup, snapshot);
@@ -174,7 +175,7 @@ export function createRestoreFiles(
         } finally {
           if (current.open) current.close();
           rmSync(pendingBackup, { force: true });
-          removeRestoreStaging(home);
+          removeRestoreStaging(data);
         }
       });
     },

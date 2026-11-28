@@ -49,9 +49,11 @@ const acceptedInputPrefix = "runner-accepted-input:";
 const selectConversation = `SELECT id, project_id AS projectId, kind, issue_id AS issueId, parent_conversation_id AS parentConversationId, COALESCE(title, '') AS title, session_id AS sessionId, cwd, worktree_id AS worktreeId, run_state AS runState, stop_reason AS stopReason, resets_at AS resetsAt, last_seq AS lastSeq, last_activity_at AS lastActivityAt, closed_at AS closedAt FROM conversations`;
 export class SqliteConversationStore implements ConversationStore {
   private sqlite: Database.Database;
+  private stateDirectory: string;
   private reservation: WorktreeActivityReservation | null = null;
-  constructor(sqlite: Database.Database) {
+  constructor(sqlite: Database.Database, stateDirectory: string) {
     this.sqlite = sqlite;
+    this.stateDirectory = stateDirectory;
   }
   transaction<T>(operation: () => T): T {
     try {
@@ -75,7 +77,7 @@ export class SqliteConversationStore implements ConversationStore {
       this.reservation.acquire(ids);
       return operation();
     }
-    return createWorktreeActivity(this.sqlite.name).run((reservation) => {
+    return createWorktreeActivity(this.stateDirectory).run((reservation) => {
       this.reservation = reservation;
       try {
         reservation.acquire(ids);
@@ -145,7 +147,7 @@ export class SqliteConversationStore implements ConversationStore {
     });
   }
   reserveProjectRun(projectId: string): ProjectRunReservation {
-    const lease = reserveProjectActivity(this.sqlite.name, projectId, "run");
+    const lease = reserveProjectActivity(this.stateDirectory, projectId, "run");
     if (lease.isErr()) {
       if (lease.error.code === "conflict") throw new ProjectRunBusy();
       throw new Error(lease.error.message);

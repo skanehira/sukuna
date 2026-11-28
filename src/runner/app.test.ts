@@ -6,9 +6,9 @@ import { writeFileSync, readFileSync } from "node:fs";
 import { expect, it } from "vite-plus/test";
 import { createTempHome, openMigratedDatabase, removeTempHome } from "../shared/db/test-helpers";
 import { startRunnerApp } from "./app";
-import { readEnvironment } from "../shared/env";
 import type { LogEntry } from "../shared/log";
 import { ScriptedAgent } from "./modules/conversation/adapter/scripted-agent";
+import { testEnvironment, xdgDirectoriesIn, xdgVariablesIn } from "../test/directories";
 
 it("並行する2会話の全ログに対象の会話とissueを載せる", async () => {
   const home = createTempHome();
@@ -23,7 +23,7 @@ it("並行する2会話の全ログに対象の会話とissueを載せる", asyn
   });
   const app = await startRunnerApp({
     database,
-    environment: readEnvironment("runner", { SUKUNA_HOME: home }, home, () => true)._unsafeUnwrap(),
+    environment: testEnvironment(home),
     agent,
     log: (entry) => {
       entries.push(entry);
@@ -125,6 +125,7 @@ it.each(["working", "waiting_answer", "waiting_permission", "idle"] as const)(
   "%s のランナーは SIGTERM でAIを停止し未保存出力を残して20秒以内に終わり、次の起動で復旧する",
   async (state) => {
     const home = createTempHome();
+    const directories = xdgDirectoriesIn(home);
     const root = fileURLToPath(new URL("../..", import.meta.url));
     const script = join(home, "agent.json");
     writeFileSync(
@@ -176,7 +177,7 @@ it.each(["working", "waiting_answer", "waiting_permission", "idle"] as const)(
       env: {
         ...process.env,
         NODE_ENV: "development",
-        SUKUNA_HOME: home,
+        ...xdgVariablesIn(home),
         SUKUNA_AGENT: "fake",
         SUKUNA_AGENT_SCRIPT: script,
       },
@@ -199,7 +200,7 @@ it.each(["working", "waiting_answer", "waiting_permission", "idle"] as const)(
       child.kill("SIGTERM");
       expect(await exited).toBe(0);
       expect(performance.now() - start).toBeLessThan(20000);
-      const opened = openMigratedDatabase(home);
+      const opened = openMigratedDatabase(directories.data);
       expect(
         opened.sqlite
           .prepare("SELECT type FROM conversation_events WHERE conversation_id = ? ORDER BY seq")
@@ -245,7 +246,7 @@ it.each(["working", "waiting_answer", "waiting_permission", "idle"] as const)(
           env: {
             ...process.env,
             NODE_ENV: "development",
-            SUKUNA_HOME: home,
+            ...xdgVariablesIn(home),
             SUKUNA_AGENT: "fake",
             SUKUNA_AGENT_SCRIPT: script,
           },
@@ -267,7 +268,7 @@ it.each(["working", "waiting_answer", "waiting_permission", "idle"] as const)(
         });
         second.kill("SIGTERM");
         expect(await secondExit).toBe(0);
-        const recovered = openMigratedDatabase(home);
+        const recovered = openMigratedDatabase(directories.data);
         expect(
           recovered.sqlite
             .prepare("SELECT run_state, stop_reason FROM conversations WHERE id = ?")
@@ -287,7 +288,7 @@ it.each(["working", "waiting_answer", "waiting_permission", "idle"] as const)(
             : [{ payload: JSON.stringify({ reason: "restarted", previous_run_state: state }) }],
         );
         recovered.close();
-        expect(readFileSync(join(home, "runner/children"), "utf8")).toBe("");
+        expect(readFileSync(join(directories.state, "runner/children"), "utf8")).toBe("");
       } finally {
         if (second.exitCode === null) {
           second.kill("SIGKILL");

@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import { capture } from "./evidence";
+import { databasePath } from "./database-path";
 
 const title = "長い会話のキー応答";
 const test = base.extend<{ workload: { ids: string[]; counts: () => number[] } }>({
@@ -13,7 +14,7 @@ const test = base.extend<{ workload: { ids: string[]; counts: () => number[] } }
     const project = randomUUID();
     const ids = Array.from({ length: 12 }, () => randomUUID());
     const directory = mkdtempSync(join(home, "key-performance-"));
-    const db = new Database(join(home, "sukuna.db"), { fileMustExist: true });
+    const db = new Database(databasePath(home), { fileMustExist: true });
     db.pragma("foreign_keys = ON");
     db.pragma("busy_timeout = 5000");
     const count = db

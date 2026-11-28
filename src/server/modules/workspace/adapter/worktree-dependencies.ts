@@ -22,7 +22,7 @@ export function createWorktreeDependencies(
 ): WorktreeDependencies {
   const git = options.git ?? createGitCli();
   const activity: WorktreeDependencies["activity"] = {
-    acquire: (ids) => createWorktreeActivity(database().sqlite.name).acquire(ids),
+    acquire: (ids) => createWorktreeActivity(database().directories.state).acquire(ids),
   };
   return {
     activity,

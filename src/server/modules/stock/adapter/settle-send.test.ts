@@ -8,6 +8,7 @@ import {
 import { STOCK_SEND_SETTLEMENT_TIMEOUT_MS } from "../../../../shared/ipc";
 import { stockSendReceipt } from "../../../../shared/stock-send-receipts";
 import { createStockSendSettlement } from "./settle-send";
+import { directoriesIn } from "../../../../test/directories";
 
 let home: string;
 let runner: OpenedDatabase;
@@ -22,7 +23,7 @@ const unresolved = {
 beforeEach(() => {
   home = createTempHome();
   runner = openMigratedDatabase(home);
-  server = openDatabase(home);
+  server = openDatabase(directoriesIn(home));
   runner.sqlite
     .prepare("INSERT INTO projects (id,name,path,default_branch) VALUES ('p','fixture',?,'main')")
     .run(home);
