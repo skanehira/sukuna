@@ -13,7 +13,13 @@ export class TerminalInput {
     this.controller.update({ mode: "TERMINAL" });
   }
   receive(event: KeyboardEvent): boolean {
-    if (this.controller.snapshot().mode !== "TERMINAL") return false;
+    if (this.controller.snapshot().mode !== "TERMINAL" || event.metaKey) return false;
+    if (this.intercept(event)) return true;
+    if (eventKey(event)) this.send(terminalText(event));
+    return false;
+  }
+  intercept(event: KeyboardEvent): boolean {
+    if (this.controller.snapshot().mode !== "TERMINAL" || event.metaKey) return false;
     const token = eventKey(event);
     if (!token) return false;
     const keys = `${this.prefix}${token}`;
@@ -43,9 +49,7 @@ export class TerminalInput {
     if (this.pending) this.send(this.pending);
     this.prefix = "";
     this.pending = "";
-    if (hold(token)) return true;
-    this.send(text);
-    return false;
+    return hold(token);
   }
 }
 

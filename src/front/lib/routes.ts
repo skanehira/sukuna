@@ -22,6 +22,7 @@ export function parseRoute(url: string): Route {
     projects: "project",
     conversations: "conversation",
     issues: "issue",
+    terminals: "terminal",
   };
   if (parts.length === 0) return { kind: "home" };
   if (kinds[parts[0]] && parts[1]) {
@@ -56,6 +57,7 @@ export function routeUrl(route: Route): string {
     project: "projects",
     conversation: "conversations",
     issue: "issues",
+    terminal: "terminals",
   };
   const path = kinds[route.kind]
     ? `/${kinds[route.kind]}/${encodeURIComponent(route.id ?? "")}${route.view ? `/${route.view}` : ""}`

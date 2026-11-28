@@ -46,6 +46,14 @@ export function createWorktreeRoutes(deps: WorktreeDependencies): Hono {
   );
   const terminals = deps.terminals;
   if (terminals)
+    app.get("/terminals/:id", (c) => {
+      if (c.req.method !== "HEAD") return c.notFound();
+      c.header("Cache-Control", "no-store");
+      const origin = c.req.header("origin");
+      if (origin !== undefined && origin !== new URL(c.req.url).origin) return c.body(null, 401);
+      return c.body(null, terminals.sessions.has(c.req.param("id")) ? 204 : 404);
+    });
+  if (terminals)
     app.post("/terminals", async (c) => {
       const origin = c.req.header("origin");
       if (origin !== undefined && origin !== new URL(c.req.url).origin)
