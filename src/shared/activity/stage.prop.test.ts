@@ -1,6 +1,6 @@
 import { fc, test } from "@fast-check/vitest";
 import { expect } from "vite-plus/test";
-import { formatStageElapsed, resolveStage } from "./stage";
+import { formatOutputTokens, formatStageElapsed, formatTurnElapsed, resolveStage } from "./stage";
 
 const stages = [
   { stage: "implement", stageLabel: "実装" },
@@ -39,3 +39,22 @@ test.prop([
         : `${Math.floor(minutes / 60)}時間${minutes % 60}分`,
   );
 });
+test.prop([
+  fc.integer({ min: 0, max: 3599 }),
+  fc.integer({ min: 0, max: 999 }),
+  fc.integer({ min: 0, max: 100000 }),
+])("1 時間未満の番の経過は、書いた文を分と秒に読み戻すと元の秒数になる", (n, remainder, start) => {
+  const text = formatTurnElapsed(start, { now: () => start + n * 1000 + remainder });
+  const [, minutes, seconds] = /^(?:(\d+)分)?(\d+)秒$/.exec(text) ?? [];
+  expect(Number(minutes ?? 0) * 60 + Number(seconds)).toBe(n);
+});
+test.prop([fc.integer({ min: 0, max: 999_999_999 })])(
+  "出力トークンの数の書いた文を読み戻すと、元の数を小数 1 桁で切り捨てた値になる",
+  (tokens) => {
+    const [, value, suffix] = /^(\d+(?:\.\d)?)([kM]?)$/.exec(formatOutputTokens(tokens)) ?? [];
+    const unit = suffix === "M" ? 1_000_000 : suffix === "k" ? 1000 : 1;
+    const tenths = suffix ? Number(value?.replace(".", "")) : Number(value) * 10;
+    expect(tenths).toBe(Math.floor((tokens * 10) / unit));
+    expect(unit).toBe(tokens < 1000 ? 1 : tokens < 1_000_000 ? 1000 : 1_000_000);
+  },
+);

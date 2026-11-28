@@ -77,9 +77,17 @@ const messageSchema = z.looseObject({
   slash_commands: z.array(z.string()).optional(),
   skills: z.array(z.string()).optional(),
   event: z
-    .object({
+    .looseObject({
       type: z.string(),
-      delta: z.object({ type: z.string(), text: z.string().optional() }).optional(),
+      delta: z
+        .looseObject({
+          type: z.string().optional(),
+          text: z.string().optional(),
+          thinking: z.string().optional(),
+          partial_json: z.string().optional(),
+        })
+        .optional(),
+      usage: z.looseObject({ output_tokens: z.number() }).optional(),
     })
     .optional(),
   tool_use_result: z.unknown().optional(),
@@ -107,6 +115,28 @@ const messageSchema = z.looseObject({
   tasks: z.array(z.object({ task_id: z.string() })).optional(),
 });
 
+function streamOutputs(
+  event: z.infer<typeof messageSchema>["event"],
+  parentToolUseId: string | null,
+): AgentOutput[] {
+  if (event?.type === "message_start") return [{ kind: "message_start", parentToolUseId }];
+  if (event?.type === "message_delta" && event.usage)
+    return [{ kind: "message_usage", outputTokens: event.usage.output_tokens, parentToolUseId }];
+  if (event?.type !== "content_block_delta") return [];
+  const { delta } = event;
+  if (delta?.type === "text_delta")
+    return [{ kind: "text_delta", text: delta.text ?? "", parentToolUseId }];
+  const written =
+    delta?.type === "thinking_delta"
+      ? delta.thinking
+      : delta?.type === "input_json_delta"
+        ? delta.partial_json
+        : undefined;
+  return written === undefined
+    ? []
+    : [{ kind: "output_chars", characters: Array.from(written).length, parentToolUseId }];
+}
+
 export function mapSdkMessage(
   raw: unknown,
   previousTasks: ReadonlySet<string> = new Set(),
@@ -126,12 +156,7 @@ export function mapSdkMessage(
         })),
       },
     ];
-  if (
-    m.type === "stream_event" &&
-    m.event?.type === "content_block_delta" &&
-    m.event.delta?.type === "text_delta"
-  )
-    return [{ kind: "text_delta", text: m.event.delta.text ?? "", parentToolUseId }];
+  if (m.type === "stream_event") return streamOutputs(m.event, parentToolUseId);
   if (m.type === "assistant") {
     const outputs: AgentOutput[] = m.error ? [{ kind: "assistant_error", error: m.error }] : [];
     for (const [index, block] of (m.message?.content ?? []).entries()) {

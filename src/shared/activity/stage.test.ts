@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { formatStageElapsed, resolveStage, type ActivityEvent } from "./stage";
+import {
+  formatOutputTokens,
+  formatStageElapsed,
+  formatTurnElapsed,
+  resolveStage,
+  type ActivityEvent,
+} from "./stage";
 
 describe("作業の工程", () => {
   it.each<[string | null, readonly ActivityEvent[], string, string, number]>([
@@ -98,4 +104,24 @@ it("状態変更と段階変更は対応する種類と状態の記録だけを�
       ],
     }),
   ).toEqual({ stage: "review", stageLabel: "レビュー", stageStartedAt: 10 });
+});
+
+it.each([
+  [-1, "0秒"],
+  [59_999, "59秒"],
+  [60_000, "1分0秒"],
+  [3_599_999, "59分59秒"],
+  [3_600_000, "1時間0分"],
+])("番の経過 %i ms を境界に従って秒まで表す", (now, expected) => {
+  expect(formatTurnElapsed(0, { now: () => now })).toBe(expected);
+});
+
+it.each([
+  [999, "999"],
+  [1000, "1.0k"],
+  [2149, "2.1k"],
+  [999_999, "999.9k"],
+  [1_000_000, "1.0M"],
+])("出力トークンの数 %i を %s と書く", (tokens, expected) => {
+  expect(formatOutputTokens(tokens)).toBe(expected);
 });

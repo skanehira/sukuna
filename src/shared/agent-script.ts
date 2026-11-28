@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { hunkSchema, questionsSchema } from "./events";
 const stepSchema = z.union([
-  z.object({ text: z.string() }),
+  z.object({ text: z.string(), usage: z.number().int().nonnegative().optional() }),
   z.object({
     stream: z.object({
       prefix: z.string(),

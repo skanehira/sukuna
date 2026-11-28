@@ -26,3 +26,29 @@ it("書きかけを100msでまとめ、購読解除後には送らない", () =>
     vi.useRealTimers();
   }
 });
+it("出力トークンの数を会話ごとに500msでまとめ、最後の値だけを送る", () => {
+  vi.useFakeTimers();
+  try {
+    const feed = new ChangeFeed({
+      setTimeout: (fn, ms) => {
+        const timer = setTimeout(fn, ms);
+        return () => clearTimeout(timer);
+      },
+    });
+    const notices: RunnerNotice[] = [];
+    feed.subscribe((n) => notices.push(n));
+    feed.outputTokens("a", 0);
+    feed.outputTokens("a", 120);
+    feed.outputTokens("b", 7);
+    vi.advanceTimersByTime(499);
+    expect(notices).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(notices).toEqual([
+      { kind: "output_tokens", conversation_id: "a", tokens: 120 },
+      { kind: "output_tokens", conversation_id: "b", tokens: 7 },
+    ]);
+    feed.close();
+  } finally {
+    vi.useRealTimers();
+  }
+});

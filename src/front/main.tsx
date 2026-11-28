@@ -13,6 +13,7 @@ import { createRecapApi } from "./lib/recap/api";
 import { createConversationApi } from "./lib/conversation/api";
 import { createLifecycleApi } from "./lib/lifecycle/api";
 import { createProgressApi } from "./lib/conversation/work-monitor";
+import { reducedMotionPreference } from "./components/working-line";
 import { createConversationWorkspace } from "./lib/conversation/workspace";
 import { createStockApi } from "./lib/stock/api";
 import { createFilesApi } from "./lib/files/api";
@@ -138,7 +139,11 @@ const conversations = createConversationWorkspace(
     files: createFilesApi(request),
     verifyConnection: (signal) => restoreConnection.verify(signal, buildCheck.observe),
     recap: { api: createRecapApi(request), storage: window.sessionStorage },
-    progress: { api: createProgressApi(request), storage: window.sessionStorage },
+    progress: {
+      api: createProgressApi(request),
+      storage: window.sessionStorage,
+      motion: reducedMotionPreference(window),
+    },
     stock: stockApi,
     lifecycle: {
       api: createLifecycleApi(request),

@@ -198,3 +198,18 @@ it("後からappを購読してもランナーの現在の接続状態を受け�
   hub.receive(c.socket, { op: "subscribe", topic: "app" });
   expect(c.sent).toEqual([{ topic: "app", seq: 3, type: "runner", payload: { connected: true } }]);
 });
+it("ランナーの出力トークンの数を、会話の購読者へ最後の番号とともに送る", () => {
+  conversation("a", 3);
+  const hub = new WsHub(database.sqlite);
+  const a = client();
+  const other = client();
+  hub.add(a.socket);
+  hub.add(other.socket);
+  hub.receive(a.socket, { op: "subscribe", topic: "conversation:a", after: 3 });
+  hub.receive(other.socket, { op: "subscribe", topic: "conversation:other" });
+  hub.notice({ kind: "output_tokens", conversation_id: "a", tokens: 2149 });
+  expect(a.sent).toEqual([
+    { topic: "conversation:a", seq: 3, type: "output_tokens", payload: { tokens: 2149 } },
+  ]);
+  expect(other.sent).toEqual([]);
+});

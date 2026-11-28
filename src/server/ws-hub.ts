@@ -286,7 +286,7 @@ export class WsHub {
       this.inbox([notice.conversation_id], notice.issue_id ? [notice.issue_id] : [], [
         notice.project_id,
       ]);
-    } else if (notice.kind === "delta") {
+    } else if (notice.kind === "delta" || notice.kind === "output_tokens") {
       const row = this.database
         .prepare("SELECT last_seq FROM conversations WHERE id=?")
         .get(notice.conversation_id) as { last_seq: number } | undefined;
@@ -294,8 +294,9 @@ export class WsHub {
         this.publish({
           topic: `conversation:${notice.conversation_id}`,
           seq: row.last_seq,
-          type: "delta",
-          payload: { text: notice.text },
+          ...(notice.kind === "delta"
+            ? { type: "delta", payload: { text: notice.text } }
+            : { type: "output_tokens", payload: { tokens: notice.tokens } }),
         });
     } else if (notice.kind === "conversation_parts") {
       const row = this.conversationParts(notice.conversation_id, notice.parts);

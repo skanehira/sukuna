@@ -63,6 +63,14 @@ import { UsageLimitTimer } from "./usage-limit-timer";
 import { recordRateLimit } from "./record-rate-limit";
 import type { TimelineInputComment } from "../../../../shared/progress/schema";
 import { unavailableRunnerError } from "../../../../shared/ipc";
+import { countsFromEvent } from "../../../../shared/activity/last-action";
+import {
+  countOutputTokens,
+  emptyOutputTokens,
+  outputTokenTotal,
+  type CountedOutput,
+  type OutputTokens,
+} from "../domain/output-tokens";
 
 export type OperationError = {
   code: "conflict" | "not_found" | "internal" | "invalid_input" | "runner_unavailable";
@@ -76,6 +84,7 @@ export type RuntimeSignal = { conversationId: string } & (
   | { type: "stopped"; reason: string; previousRunState?: RunState }
   | { type: "inputRecorded"; seq: number; eventType: string }
   | { type: "delta"; text: string }
+  | { type: "outputTokens"; tokens: number }
   | { type: "parts"; parts: ("queue" | "answers" | "stock" | "threads" | "draft")[] }
 );
 export type RuntimeOptions = {
@@ -188,6 +197,7 @@ export class ConversationRuntime {
   private operations = new Map<string, Promise<unknown>>();
   private acceptedDeliveries = new Map<string, { instructionId: string; job: Promise<void> }>();
   private listeners = new Set<(signal: RuntimeSignal) => void | Promise<void>>();
+  private outputTokens = new Map<string, OutputTokens>();
   closing = false;
   options: RuntimeOptions;
   constructor(options: RuntimeOptions) {
@@ -297,6 +307,12 @@ export class ConversationRuntime {
           seq: event.seq,
           eventType: event.type,
         });
+    }
+    if (recorded.some((event) => countsFromEvent(event.type))) {
+      const counted = this.outputTokens.get(id);
+      this.outputTokens.delete(id);
+      if (counted && outputTokenTotal(counted) > 0)
+        this.signal({ type: "outputTokens", conversationId: id, tokens: 0 });
     }
     const current = this.store.get(id)?.runState;
     if (previous && current && previous !== current)
@@ -995,9 +1011,16 @@ export class ConversationRuntime {
       if (projectId) this.options.commands?.remember(id, projectId, output.commands);
       return;
     }
-    if (output.kind === "text_delta") {
-      if (output.parentToolUseId === null)
+    if (
+      output.kind === "message_start" ||
+      output.kind === "text_delta" ||
+      output.kind === "output_chars" ||
+      output.kind === "message_usage"
+    ) {
+      if (output.parentToolUseId !== null) return;
+      if (output.kind === "text_delta")
         this.signal({ type: "delta", conversationId: id, text: output.text });
+      this.countOutputTokens(id, output);
       return;
     }
     if (output.kind === "assistant_error") {
@@ -1087,6 +1110,14 @@ export class ConversationRuntime {
           )
         : outputEvents(output),
     );
+  }
+  private countOutputTokens(id: string, output: CountedOutput): void {
+    const previous = this.outputTokens.get(id) ?? emptyOutputTokens;
+    const next = countOutputTokens(previous, output);
+    this.outputTokens.set(id, next);
+    const tokens = outputTokenTotal(next);
+    if (tokens !== outputTokenTotal(previous))
+      this.signal({ type: "outputTokens", conversationId: id, tokens });
   }
   private writeToolImage(id: string, image: { mediaType: string; data: Buffer }): string | null {
     const writer = this.options.toolImages;

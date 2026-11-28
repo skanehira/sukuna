@@ -163,6 +163,8 @@ export async function startRunnerApp(options: {
         });
       if (signal.type === "turnEnded") recap.enqueue(signal.conversationId, signal.endSeq);
       if (signal.type === "delta") changes.delta(signal.conversationId, signal.text);
+      if (signal.type === "outputTokens")
+        changes.outputTokens(signal.conversationId, signal.tokens);
       if (signal.type === "event" && conversation) {
         if (signal.event.type === "assistant_text" || signal.event.type === "turn_end")
           changes.discardDelta(conversation.id);

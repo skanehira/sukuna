@@ -25,6 +25,7 @@ import {
 import { consultationContent, mapTimelineAnchors, replaceRange } from "./timeline-draft";
 import { consultationPrefix, continueWork } from "../work-actions";
 import { eventSchema, startsAssistantResponse, type Answers } from "../../../shared/events";
+import { countsFromEvent } from "../../../shared/activity/last-action";
 import type { ServerMessage } from "../../../shared/ws";
 import type { BufferHandle } from "../../buffer/Buffer";
 import type { BufferController, PastedImage, PromptSpec } from "../../buffer/controller";
@@ -59,6 +60,7 @@ export type ConversationEnvironment = {
   openExternal?(url: string): void;
 };
 type QuestionEvent = Extract<Event, { type: "question" }>;
+type WorkingSignals = { online: boolean; outputTokens: number | null };
 type QuestionDisplay = "pending" | "answered" | "retired";
 type Block = { event: Event; lines: LineInfo[] };
 type UndoRequest = { message: ConversationMessage; local: DraftSync };
@@ -106,6 +108,8 @@ export class ConversationSession {
   private queueOperation = false;
   private queueEditing: QueueItem | null = null;
   private online = true;
+  private signals: WorkingSignals = { online: true, outputTokens: null };
+  private workingListeners = new Set<() => void>();
   private viewConnection: symbol | null = null;
   readonly id: string;
   readonly api: ConversationApi;
@@ -133,6 +137,17 @@ export class ConversationSession {
     this.view = view;
   }
   snapshot = () => this.state;
+  workingSnapshot = () => this.signals;
+  subscribeWorking = (listener: () => void): (() => void) => {
+    this.workingListeners.add(listener);
+    return () => {
+      this.workingListeners.delete(listener);
+    };
+  };
+  private updateWorking(change: Partial<WorkingSignals>): void {
+    this.signals = { ...this.signals, ...change };
+    this.workingListeners.forEach((listener) => listener());
+  }
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
     return () => {
@@ -1468,14 +1483,18 @@ export class ConversationSession {
       return;
     if (message.type === "changed" || message.type === "state") this.recap?.changed();
     if (message.type === "delta") this.delta(message.payload.text);
+    else if (message.type === "output_tokens")
+      this.updateWorking({ outputTokens: message.payload.tokens });
     else if (message.type === "event") {
       const value = eventSchema.safeParse(message.payload);
-      if (value.success)
+      if (value.success) {
         this.receiveEvent({
           ...value.data,
           seq: message.seq,
           createdAt: message.payload.created_at,
         });
+        if (countsFromEvent(value.data.type)) this.updateWorking({ outputTokens: null });
+      }
     } else if (message.type === "state" || message.type === "changed")
       void this.refresh().catch((error: unknown) =>
         this.controller.notify(this.reason(error), "error"),
@@ -1483,6 +1502,7 @@ export class ConversationSession {
   }
   connection(online: boolean): void {
     this.online = online;
+    this.updateWorking(online ? { online, outputTokens: null } : { online });
     if (online) void this.saveDraft();
   }
   private reason(error: unknown): string {

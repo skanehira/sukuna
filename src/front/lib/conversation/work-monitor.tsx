@@ -8,7 +8,8 @@ import {
   selectedTree,
   timelineLines,
 } from "../../components/timeline-pane";
-import { WorkingLine, liveActivity } from "../../components/working-line";
+import { WorkingLine, fullMotion, type MotionPreference } from "../../components/working-line";
+import { turnProgress } from "../../../shared/activity/last-action";
 import { progressResponseSchema, type ProgressResponse } from "../../../shared/progress/schema";
 import type { ServerMessage } from "../../../shared/ws";
 import type { ActionContext } from "../../buffer/keymap/registry";
@@ -44,6 +45,7 @@ export type WorkMonitorOptions = {
   storage: TabStorage;
   now: () => number;
   schedule: (fn: () => void, milliseconds: number) => () => void;
+  motion?: MotionPreference;
 };
 
 export class WorkMonitor {
@@ -89,6 +91,10 @@ export class WorkMonitor {
     };
   };
   now = () => this.options.now();
+  schedule = (fn: () => void, milliseconds: number) => this.options.schedule(fn, milliseconds);
+  get motion(): MotionPreference {
+    return this.options.motion ?? fullMotion;
+  }
   get conversationId(): string {
     return this.conversation.id;
   }
@@ -353,14 +359,26 @@ export function WorkingActivity({
 }) {
   const { data: progress } = useSyncExternalStore(monitor.subscribe, monitor.snapshot);
   const { data } = useSyncExternalStore(session.subscribe, session.snapshot);
-  const conversation = data?.conversation;
-  const activity = conversation
-    ? liveActivity(
-        progress?.activity ?? null,
-        session.eventRecords(),
-        conversation.cwd,
-        conversation.runState,
-      )
-    : null;
-  return <WorkingLine activity={activity} now={monitor.now} />;
+  const signals = useSyncExternalStore(session.subscribeWorking, session.workingSnapshot);
+  const { motion } = monitor;
+  const reducedMotion = useSyncExternalStore(motion.subscribe, motion.snapshot);
+  if (data?.conversation.runState !== "working") return null;
+  const turn = turnProgress(session.eventRecords());
+  const activity = progress?.activity;
+  return (
+    <WorkingLine
+      status={{
+        action: turn.action,
+        turnStartedAt: turn.startedAt,
+        outputTokens: signals.outputTokens,
+        stage:
+          activity && activity.stage !== "reply"
+            ? { label: activity.stageLabel, startedAt: activity.stageStartedAt }
+            : null,
+      }}
+      still={reducedMotion || !signals.online}
+      now={monitor.now}
+      schedule={monitor.schedule}
+    />
+  );
 }

@@ -30,7 +30,7 @@ import type { StockApi } from "../stock/api";
 import { conversationSource } from "../stock/quote";
 import { createStockWorkspace } from "../stock/workspace";
 import type { InboxStore } from "../inbox-store";
-import { MonitorPane, WorkingActivity, WorkMonitor, type ProgressApi } from "./work-monitor";
+import { MonitorPane, WorkingActivity, WorkMonitor, type WorkMonitorOptions } from "./work-monitor";
 import { timelineActions } from "../work-actions";
 
 export function createConversationWorkspace(
@@ -49,7 +49,7 @@ export function createConversationWorkspace(
     progress,
     stock: stockApi,
   }: {
-    progress?: { api: ProgressApi; storage: TabStorage };
+    progress?: Pick<WorkMonitorOptions, "api" | "storage" | "motion">;
     recap?: { api: RecapApi; storage: TabStorage };
     lifecycle?: LifecycleOptions;
     settingsChanged?: () => void;
