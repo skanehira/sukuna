@@ -532,6 +532,7 @@ const THEME = (side) => EditorView.theme({
   ".cm-gutters": { backgroundColor: "transparent", border: "none", color: "var(--muted)", fontFamily: MONO, fontSize: "12px" },
   ".app-num .cm-gutterElement": { width: "2.5rem", textAlign: "right", paddingRight: "8px" }, ".app-num .cur": { color: "var(--ink)" },
   ".app-sign .cm-gutterElement": { width: SIGN_W[side] + "px", textAlign: "center", color: "var(--accent)", fontWeight: "700", fontSize: side === "list" ? "8px" : "12px" },
+  ".app-buffer-demo & .cm-fat-cursor": { display: "none !important" },
   ".cm-activeLine": { backgroundColor: "transparent" }, "&.cm-focused .cm-activeLine": { backgroundColor: "var(--raised)" },
   ".cm-activeLine.bg-add": { backgroundColor: "var(--add)" }, ".cm-activeLine.bg-del": { backgroundColor: "var(--del)" },
   "&.cm-focused .cm-line.app-you.cm-activeLine": { backgroundColor: "var(--line)" },
@@ -549,7 +550,7 @@ const NOCUR = (l) => !!l && (l.k === "you" || l.k === "ai" || l.k === "sep" || l
 const POS = load("pos", {});
 window.addEventListener("pagehide", () => save("pos", POS));
 const modeName = (e) => e.mode === "visual" ? { linewise: "VISUAL LINE", blockwise: "VISUAL BLOCK" }[e.subMode] || "VISUAL" : e.mode === "insert" ? "INSERT" : e.mode === "replace" ? "REPLACE" : "NORMAL";
-function Buffer({ lines, marks, side, crash, posKey, startLine, act, onKeys, onMode, onView, onFocus, onLine }) {
+function Buffer({ lines, marks, side, crash, posKey, startLine, demo, act, onKeys, onMode, onView, onFocus, onLine }) {
   if (crash) throw new Error("demo");
   const host = useRef(null), view = useRef(null), latest = useRef({}), lastKey = useRef("");
   latest.current = { act, onKeys, onMode, onFocus, onLine };
@@ -595,11 +596,15 @@ function Buffer({ lines, marks, side, crash, posKey, startLine, act, onKeys, onM
     /* 開いたときのカーソルは、見出しではなく最初の中身の行に置く */
     const top = Math.max(0, lines.findIndex((l) => !["head", "sect"].includes(l.k) && !NOCUR(l)));
     let at0 = startLine || top; while (at0 < lines.length - 1 && NOCUR(lines[at0])) at0 += 1; while (at0 > 0 && NOCUR(lines[at0])) at0 -= 1;
-    const head = POS[posKey] ?? first.line(Math.min(at0 + 1, first.lines)).from;
+    const demoLine = demo && first.line(lines.findIndex((line) => line.id === "d1") + 1);
+    const head = demoLine ? demoLine.from + 4 : POS[posKey] ?? first.line(Math.min(at0 + 1, first.lines)).from;
     view.current = new EditorView({ parent: host.current, state: make(head) });
     if (startLine) view.current.dispatch({ effects: EditorView.scrollIntoView(head, { y: "start" }) });
     HANDLERS.set(view.current, (name, args) => latest.current.act?.(name, args));
     bind(); onView?.(view.current);
+    if (demo === "visual") {
+      for (const key of ["v", "6", "l"]) Vim.handleKey(getCM(view.current), key, "user");
+    }
     return () => { onView?.(null); view.current.destroy(); view.current = null; };
   }, []);
   const first = useRef(true);
@@ -612,7 +617,7 @@ function Buffer({ lines, marks, side, crash, posKey, startLine, act, onKeys, onM
     view.current.setState(st); view.current.dispatch({ selection: { anchor: Math.min(line.from + col, line.to) } });
     HANDLERS.set(view.current, (name, args) => latest.current.act?.(name, args)); bind();
   }, [sig]);
-  return <div ref={host} className="flex-1 min-h-0 flex flex-col [&>.cm-editor]:flex-1" />;
+  return <div ref={host} className={`flex-1 min-h-0 flex flex-col [&>.cm-editor]:flex-1 ${demo ? "app-buffer-demo" : ""}`} />;
 }
 const SKILLS = ["/dev-spec", "/dev-impl", "/workflow-review", "/workflow-commit"];
 /* プロジェクトの登録の欄のパスの候補。Mac Studio の上のディレクトリの見本 (名前, Git のリポジトリか) */
@@ -747,6 +752,7 @@ function PC() {
   const [threads, setThreads] = useKept("pc.threads", []);
   const [queue, setQueue] = useKept("pc.queue", []);
   const [thinking] = useState(() => once("pc.thinking") ?? false);
+  const [bufferDemo] = useState(() => once("pc.bufferDemo"));
   const [chatWorking] = useState(() => once("pc.chatWorking") ?? false);
   const [seen, setSeen] = useState(() => new Set(load("pc.seen", [])));
   /* 「ここから未読」の区切りは、未読のある会話を開いているあいだだけ出す。別の画面へ移ると消え、開き直しても出ない */
@@ -1193,7 +1199,7 @@ function PC() {
           <Boundary scope="ウィンドウ" onReset={() => setCrash(false)} onHome={() => { setCrash(false); open({ s: "home" }); }}>
             {v.s === "terminal" && mode === "TERMINAL"
               ? <pre className="flex-1 overflow-auto px-3 py-1 text-[13px] leading-5 font-mono">{term.join("\n")}█</pre>
-              : <Buffer key={key} side={side} posKey={key} lines={mainMenu} marks={v.s === "home" ? listMarks(mainLines) : marks} crash={crash} startLine={hasUnread(v) ? at("unread") : working ? WORKING.length - 1 : 0} {...bufProps("main")} />}
+              : <Buffer key={key} side={side} posKey={key} lines={mainMenu} marks={v.s === "home" ? listMarks(mainLines) : marks} crash={crash} demo={bufferDemo} startLine={hasUnread(v) ? at("unread") : working ? WORKING.length - 1 : 0} {...bufProps("main")} />}
           </Boundary>
           {working && <WorkingStrip thinking={thinking} chat={v.s === "conv"} />}
         </Frame>
@@ -1644,6 +1650,8 @@ const SKETCH_VIEWS = {
   "pc-home": pc({ s: "home" }),
   "pc-home--whichkey": pc({ s: "home" }, null, { once: { "pc.leader": " " } }),
   "pc-home--switch": pc({ s: "home" }, "switch"),
+  "pc-conv--cursor": pc(CONV_V, null, { once: { "pc.bufferDemo": "normal" } }),
+  "pc-conv--visual": pc(CONV_V, null, { once: { "pc.bufferDemo": "visual" } }),
   "pc-conv--recent": pc(CONV_V, "recent"),
   "pc-conv--working": pc({ ...CONV_V, conv: 1 }, null, { once: { "pc.chatWorking": true } }),
   "pc-conv--answers": pc(CONV_V, null, { keep: { "pc.answers": { q1: "A", q2: "変えられるようにして。既定は 30 分" } } }),
