@@ -57,7 +57,7 @@ issue の中の「差分」の表示である (UI_SKETCH.html の `pc-issue-diff
 | 差分の行を選んで Space q / Space c | 選んだ箇所を引用にして質問 / 指示を書き、実装の会話のストックに入る。行の左に印が付く |
 | メニュー「merge を許可する」(説明は「CI が通ると merge する」) で Enter | 確認「merge を許可しますか? (y / n)」を出す。送っていない指示があれば「送っていない指示が n 件あります。許可しても送られずに残ります」を添える。merge 前の確認で止まっているときだけ出す |
 | 確認で y | 許可を送る。「merge を許可しました」のお知らせが出て、issue は実装中になる |
-| メニュー「指摘を書いて実装に戻す」で Enter | 実装の会話の入力欄を開く。入力欄の見出しに、一緒に届くストックの指示の件数を出す。Normal モードの Enter で、文とストックの指示を 1 通で送る |
+| メニュー「指摘を書いて実装に戻す」で Enter | 実装の会話の入力欄を開く。見出しに、一緒に送るストックの指示の件数を出す。Normal モードの Enter で、本文と対象のストック ID を会話の送信 API に渡す |
 | Space s c / Space s a | ストックの指示を 1 通にまとめて、実装の会話へ送る |
 | Space s q | 質問ごとにスレッドが始まる。issue の状態は変えない |
 | メニュー「GitHub から読み直す」で Enter | PR を取得し直して、表示を入れ替える |
@@ -233,7 +233,7 @@ PR の画面から送った指示も、会話から送った発言も、実装�
 - 409 `conflict`: GitHub を使わないプロジェクト / PR が無い / PR が merge 済みか閉じている
 - 502 `github_unavailable`: 投稿に失敗した。どの指示にも投稿の記録を付けない
 
-ストックへの指示の送信は `features/stock-thread.md` と `features/conversation.md` の API を使う。この機能は、それらが実装の会話に届ける前に呼ぶ `deliverImplInstruction` を持つ。
+Space s c などでストックを送るときは、`features/stock-thread.md` の送信 API を使う。「指摘を書いて実装に戻す」から送るときは、`features/conversation.md` の `POST /api/conversations/:id/messages` を使う。本文と `stockIds` を 1 回の要求に入れる。ランナーは実装の会話に指示を届ける前に `deliverImplInstruction` を呼ぶ。
 
 ### ランナーへの操作
 

@@ -310,7 +310,7 @@ type KeymapEntry = {
 | `Space q` / `Space c` | `stock.question` / `stock.instruct` | 選んだ箇所に質問 / 指示を書いてストックする | Normal、Visual | `stock-thread` |
 | `Space l` | `stock.list` | ストックの一覧 | Normal | `stock-thread` |
 | `Space s a` / `Space s q` / `Space s c` | `stock.send.all` / `stock.send.questions` / `stock.send.instructions` | ストックを全部 / 質問だけ / 指示だけ送る | Normal | `stock-thread` |
-| `Space s g` | `stock.publish` | 選んだ指示を PR のレビューコメントとして GitHub に投稿する | Normal (ストックの一覧) | `pr-review` |
+| `Space s g` | `stock.publish` | ストックの指示を PR のレビューコメントとして GitHub に投稿する | Normal (カーソルの指示)、Visual (選んだ範囲の指示)。どちらもストックの一覧 | `pr-review` |
 | `Space r` | `thread.list` | スレッド | Normal | `stock-thread` |
 | `Space i` / `Space m` / `Space d` | `recap.recent` / `recap.toc` / `recap.decisions` | 直近 / 目次 / 決まったこと | Normal (会話) | `recap` |
 | `Space t` | `timeline.open` | タイムライン | Normal | `work-monitor` |
