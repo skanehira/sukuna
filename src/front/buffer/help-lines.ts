@@ -33,6 +33,12 @@ const actionOrder = new Map(
     "prompt.submit",
     "prompt.interrupt",
     "prompt.complete",
+    "prompt.image.prev",
+    "prompt.image.next",
+    "prompt.image.delete",
+    "prompt.image.open",
+    "prompt.image.leave",
+    "prompt.image.insert",
     "agent.stop",
     "diff.expand",
     "diff.collapse",
@@ -141,6 +147,7 @@ export function helpLines(
     normal: "Normal",
     visual: "Visual",
     prompt: "入力欄",
+    "prompt-images": "入力欄の画像の段",
     terminal: "ターミナル",
   };
   for (const entry of entries) {

@@ -377,7 +377,10 @@ const stockSeed = (id: string, text: string, start: number, end = start): StockI
   },
 });
 
-async function openThread(events: Event[]) {
+async function openThread(
+  events: Event[],
+  { draft = null, saved = [] }: { draft?: Snapshot["draft"]; saved?: unknown[] } = {},
+) {
   const title = "期限についての質問";
   const snapshot = {
     conversation: {
@@ -398,13 +401,21 @@ async function openThread(events: Event[]) {
       lastPosition: null,
       closedAt: 100,
     },
-    draft: null,
+    draft,
     queue: [],
     pendingAnswers: null,
     pendingPermission: null,
     commands: [],
   } satisfies Snapshot;
-  const conversations = createConversationApi(async (path) => {
+  const conversations = createConversationApi(async (path, init) => {
+    if (path === "/api/conversations/thread/draft" && init?.method === "PUT") {
+      const body = JSON.parse(init.body as string) as { text: string; images: string[] };
+      saved.push(body);
+      return Response.json({
+        applied: true,
+        draft: { text: body.text, images: body.images, updatedAt: 2, updatedBy: "test" },
+      });
+    }
     if (path === "/api/conversations/thread") return Response.json(snapshot);
     if (typeof path === "string" && path.startsWith("/api/conversations/thread/events?"))
       return Response.json({ events, lastSeq: events.length, hasMore: false });
@@ -471,6 +482,30 @@ it("（US-014）右に開いたスレッドでもツールの結果の画像を�
       "src",
       "/api/conversations/thread/images/01J0000000000000000000000A",
     );
+  } finally {
+    f.close();
+  }
+});
+
+it("右のウィンドウのスレッドの入力欄では、d がそのスレッドの書きかけの画像を外す", async () => {
+  const saved: unknown[] = [];
+  const { f, thread } = await openThread([], {
+    draft: { text: "返信", images: ["img-a", "img-b"], updatedAt: 1, updatedBy: "other" },
+    saved,
+  });
+  try {
+    expect(thread).toBeVisible();
+    await f.press("i");
+    await f.press("Escape", { key: "w", ctrlKey: true }, "j");
+    await f.press("d");
+    await waitFor(() =>
+      expect(saved).toEqual([{ text: "返信", images: ["img-a"], clientId: "test", editedAt: 2 }]),
+    );
+    expect(
+      within(screen.getByRole("listbox", { name: "貼った画像" }))
+        .getAllByRole("img")
+        .map((image) => image.getAttribute("src")),
+    ).toEqual(["/api/conversations/thread/images/img-a"]);
   } finally {
     f.close();
   }

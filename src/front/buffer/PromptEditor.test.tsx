@@ -7,6 +7,7 @@ import { Layout } from "./Layout";
 import { Frame } from "./Frame";
 import { Buffer } from "./Buffer";
 import { BufferController, type PromptSpec } from "./controller";
+import type { ClipboardPort } from "./clipboard";
 import { createBrowserController } from "../lib/browser";
 import type { CompletionResult } from "./completion";
 function mount(text: string, extra: Partial<PromptSpec> = {}) {
@@ -726,4 +727,142 @@ describe("Tab で問い合わせる候補", () => {
       alert: screen.getByRole("alert").textContent,
     }).toEqual({ text: "src/sh", alert: "パスは / または ~/ で始まる形で指定してください。" });
   });
+});
+
+describe("Ctrl+v の貼り付け", () => {
+  function clipboard(
+    port: Partial<ClipboardPort> & Pick<ClipboardPort, "secure" | "mac">,
+  ): ClipboardPort {
+    return { write: vi.fn(), fallback: vi.fn(() => true), notify: vi.fn(), ...port };
+  }
+  it("（US-047）安全なオリジンでないページの Insert の Ctrl+v は、macOS なら Cmd+V を案内し、ほかの端末ではブラウザに渡す", () => {
+    const read = vi.fn<NonNullable<ClipboardPort["read"]>>();
+    const { view, controller } = mount("本文", { paste: vi.fn() });
+    controller.options.clipboard = clipboard({ secure: false, mac: false, read });
+    let passed = false;
+    act(() => {
+      passed = fireEvent.keyDown(view.contentDOM, { key: "v", ctrlKey: true });
+    });
+    expect({ passed, notice: controller.snapshot().notice }).toEqual({
+      passed: true,
+      notice: null,
+    });
+    controller.options.clipboard = clipboard({ secure: false, mac: true, read });
+    act(() => {
+      passed = fireEvent.keyDown(view.contentDOM, { key: "v", ctrlKey: true });
+    });
+    expect({
+      passed,
+      text: view.state.doc.toString(),
+      alert: screen.getByRole("alert").textContent,
+      notice: controller.snapshot().notice?.kind,
+      read: read.mock.calls.length,
+    }).toEqual({
+      passed: false,
+      text: "本文",
+      alert: "このページではクリップボードを読めません。Cmd+V で貼り付けてください",
+      notice: "error",
+      read: 0,
+    });
+    key(view, "Escape");
+    key(view, "v", true);
+    expect(controller.snapshot().mode).toBe("VISUAL BLOCK");
+  });
+  it.each([
+    { secure: false, mac: true, expected: "Esc Normal へ (送るのは Normal から)　Cmd+V 貼り付け" },
+    { secure: true, mac: true, expected: "Esc Normal へ (送るのは Normal から)　Ctrl+v 貼り付け" },
+    {
+      secure: false,
+      mac: false,
+      expected: "Esc Normal へ (送るのは Normal から)　Ctrl+v 貼り付け",
+    },
+  ])(
+    "画像を受け付ける欄の Insert のヒントに貼り付けのキーを出す (安全なオリジン: $secure、macOS: $mac)",
+    ({ secure, mac, expected }) => {
+      const controller = new BufferController({ clipboard: clipboard({ secure, mac }) });
+      controller.openPrompt({
+        label: "指示",
+        target: "会話",
+        verb: "送る",
+        submit: vi.fn(),
+        close: vi.fn(),
+        paste: vi.fn(),
+      });
+      render(<Layout controller={controller} main={<div>会話</div>} />);
+      expect(screen.getByText(/^Esc Normal へ/).textContent).toBe(expected);
+    },
+  );
+  it.each([
+    {
+      name: "画像があれば画像だけを貼り付けの処理に渡す",
+      content: { images: ["shot.png"], text: "文字" },
+      acceptsImages: true,
+      expected: { text: "本文", pasted: [["shot.png"]], notice: null },
+    },
+    {
+      name: "画像が無く文字があればカーソルの位置に文字を入れる",
+      content: { images: [], text: "追加" },
+      acceptsImages: true,
+      expected: { text: "本追加文", pasted: [], notice: null },
+    },
+    {
+      name: "画像を受け付けない欄では画像だけのとき案内する",
+      content: { images: ["shot.png"], text: "" },
+      acceptsImages: false,
+      expected: {
+        text: "本文",
+        pasted: [],
+        notice: { message: "この入力欄には画像を添えられません", kind: "info" },
+      },
+    },
+    {
+      name: "画像も文字も無ければ案内する",
+      content: { images: [], text: "" },
+      acceptsImages: true,
+      expected: {
+        text: "本文",
+        pasted: [],
+        notice: { message: "クリップボードに貼り付けられるものがありません", kind: "info" },
+      },
+    },
+    {
+      name: "読み取りを許可されなければ許可を案内する",
+      content: null,
+      acceptsImages: true,
+      expected: {
+        text: "本文",
+        pasted: [],
+        notice: {
+          message:
+            "クリップボードを読めませんでした。ブラウザで、このページにクリップボードの読み取りを許可してください",
+          kind: "error",
+        },
+      },
+    },
+  ])(
+    "安全なオリジンの macOS で Ctrl+v を押すと、$name",
+    async ({ content, acceptsImages, expected }) => {
+      const paste = vi.fn<(images: File[]) => void>();
+      const { view, controller } = mount("本文", acceptsImages ? { paste } : {});
+      controller.options.clipboard = clipboard({
+        secure: true,
+        mac: true,
+        read: async () => {
+          if (!content) throw new DOMException("denied", "NotAllowedError");
+          return {
+            images: content.images.map((name) => new File(["png"], name, { type: "image/png" })),
+            text: content.text,
+          };
+        },
+      });
+      act(() => view.dispatch({ selection: { anchor: 1 } }));
+      key(view, "v", true);
+      await act(async () => {});
+      expect({
+        text: view.state.doc.toString(),
+        pasted: paste.mock.calls.map(([files]) => files.map((file) => file.name)),
+        notice: controller.snapshot().notice,
+      }).toEqual(expected);
+    },
+  );
 });

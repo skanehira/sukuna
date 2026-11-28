@@ -238,6 +238,25 @@ it("ファイルを読んでいる間に別タブで保存した指示を、相�
   );
 });
 
+it("画像を外す操作を持たない差し戻しの入力欄には、書きかけの画像の縮小を並べない", async () => {
+  const f = fixture();
+  f.data.draft = { text: "直して", images: ["img-a"], updatedAt: 10, updatedBy: "other" };
+  await f.session.load();
+  f.session.openDesignRejection(
+    "設計",
+    async () => {},
+    () => {},
+  );
+  f.data.draft = { ...f.data.draft, images: ["img-a", "img-b"], updatedAt: 20 };
+  await f.session.refresh();
+  const prompt = f.session.controller.snapshot().prompt;
+  expect({ label: prompt?.label, images: prompt?.images, pasted: prompt?.pastedImages }).toEqual({
+    label: "差し戻し",
+    images: 2,
+    pasted: undefined,
+  });
+});
+
 it("相談のために下書きを取得している間に右を閉じたら、入力欄を開かない", async () => {
   const f = fixture();
   await f.session.load();

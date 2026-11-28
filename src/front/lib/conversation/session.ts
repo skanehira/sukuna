@@ -27,7 +27,7 @@ import { consultationPrefix, continueWork } from "../work-actions";
 import { eventSchema, startsAssistantResponse, type Answers } from "../../../shared/events";
 import type { ServerMessage } from "../../../shared/ws";
 import type { BufferHandle } from "../../buffer/Buffer";
-import type { BufferController, PromptSpec } from "../../buffer/controller";
+import type { BufferController, PastedImage, PromptSpec } from "../../buffer/controller";
 import type { LineInfo } from "../../buffer/line";
 import { canPlaceCursor } from "../../buffer/no-cursor";
 import type { WorkMonitor } from "./work-monitor";
@@ -41,7 +41,7 @@ import {
   type CancelledDraft,
 } from "./queue-undo";
 import { ConversationApiError } from "./api";
-import { eventLines, stoppedText, type ConversationLine } from "./lines";
+import { conversationImageUrl, eventLines, stoppedText, type ConversationLine } from "./lines";
 import type {
   ConversationApi,
   DraftContent,
@@ -255,8 +255,10 @@ export class ConversationSession {
           ...conversationCommands.images,
           run: async (args) => {
             if (args.join(" ") !== "clear") throw new Error("使い方: :images clear");
-            this.editDraft(this.draft.content().text, []);
-            await this.saveDraft();
+            const prompt = this.controller.snapshot().prompt;
+            if (!prompt?.clearImages)
+              throw new Error("画像を貼れる入力欄を開いてから使ってください");
+            await prompt.clearImages();
           },
         }),
       );
@@ -801,6 +803,10 @@ export class ConversationSession {
       verb: "送る",
       initialText: content.text,
       images: content.images.length,
+      pastedImages: this.pastedImages(content.images),
+      removeImage: (id) => this.removeImage(id),
+      openImage: (image) => this.env.openExternal?.(image.url),
+      clearImages: () => this.clearImages(),
       commands: this.state.data!.commands,
       allowEmpty: true,
       allowChange: (text, edits) => this.allowUndoEdit({ ...this.draft.content(), text }, edits),
@@ -917,7 +923,12 @@ export class ConversationSession {
     );
     await this.refresh();
   }
-  private editDraft(text: string, images = this.draft.content().images, edits?: ChangeDesc): void {
+  private editDraft(
+    text: string,
+    images = this.draft.content().images,
+    edits?: ChangeDesc,
+    scheduleSave = true,
+  ): void {
     const previous = this.draft.content();
     const anchors = previous.timeline_anchors;
     const change = edits ?? replaceRange(previous.text, text);
@@ -935,10 +946,12 @@ export class ConversationSession {
     )
       return;
     this.messageId = null;
-    this.cancelSave?.();
-    this.cancelSave = this.env.schedule(() => {
-      void this.saveDraft();
-    }, 500);
+    if (scheduleSave) {
+      this.cancelSave?.();
+      this.cancelSave = this.env.schedule(() => {
+        void this.saveDraft();
+      }, 500);
+    }
     this.syncDraftPrompt({ clearUnsent: !text && !images.length });
   }
   private movedCancelledDraft(content: DraftContent, edits: ChangeDesc): CancelledDraft | null {
@@ -993,6 +1006,7 @@ export class ConversationSession {
     if (replaceText) this.controller.replacePromptText(draft.text);
     this.controller.patchPrompt({
       images: draft.images.length,
+      ...(prompt.removeImage ? { pastedImages: this.pastedImages(draft.images) } : {}),
       ...(clearUnsent ? { unsent: undefined } : {}),
     });
   }
@@ -1251,6 +1265,27 @@ export class ConversationSession {
       const { image } = await this.api.upload(this.id, file);
       this.editDraft(this.draft.content().text, [...this.draft.content().images, image.id]);
     }
+  }
+  private pastedImages(images: string[]): PastedImage[] {
+    return images.map((id) => ({ id, url: conversationImageUrl(this.id, id) }));
+  }
+  private removeImage(id: string): void {
+    const { text, images } = this.draft.content();
+    const index = images.indexOf(id);
+    if (index < 0) return;
+    this.editDraft(
+      text,
+      images.filter((image) => image !== id),
+      undefined,
+      !this.queueEditing,
+    );
+    if (this.draft.content().images.includes(id)) return;
+    this.controller.notify(`画像 ${index + 1} を外しました`);
+    if (!this.queueEditing) void this.saveDraft();
+  }
+  private async clearImages(): Promise<void> {
+    this.editDraft(this.draft.content().text, [], undefined, !this.queueEditing);
+    if (!this.queueEditing) await this.saveDraft();
   }
   private selectedQueue(): QueueItem | undefined {
     const line = this.controller.currentLine();

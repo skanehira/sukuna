@@ -69,6 +69,7 @@ export function Layout({
             controller={controller}
             spec={state.prompt}
             active={state.active === "prompt"}
+            selectedImage={state.promptImage}
           />
         ) : null}
         {state.prefix ? <WhichKey controller={controller} prefix={state.prefix} /> : null}

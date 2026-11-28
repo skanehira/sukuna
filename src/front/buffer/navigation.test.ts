@@ -3,7 +3,7 @@ import { RightWindow } from "./right-window";
 import { PositionStore } from "./position-store";
 import { JumpHistory } from "./jump-history";
 import { openRoute, routeUrl } from "../lib/routes";
-import { copyText } from "./clipboard";
+import { browserClipboard, copyText } from "./clipboard";
 
 describe("右のウィンドウ", () => {
   it("別の表示を積み、前の表示へ戻り、最後は閉じる", () => {
@@ -134,6 +134,34 @@ describe("コピー", () => {
     expect(notify.mock.calls).toEqual([
       ["クリップボードに書けませんでした。Vim のレジスタには入っています", "error"],
     ]);
+  });
+  it("macOS かをプラットフォームの名前で決め、読んだ中身を画像のファイルと文字に分ける", async () => {
+    const blobs: Record<string, Blob> = {
+      "image/png": new Blob(["png"], { type: "image/png" }),
+      "text/plain": new Blob(["貼る文字"], { type: "text/plain" }),
+    };
+    const navigator = (platform: string) =>
+      ({
+        platform,
+        clipboard: {
+          read: async () => [
+            { types: Object.keys(blobs), getType: async (type: string) => blobs[type] },
+          ],
+        },
+      }) as unknown as Navigator;
+    const mac = browserClipboard(document, navigator("MacIntel"), true, vi.fn());
+    const content = await mac.read!();
+    expect({
+      mac: mac.mac,
+      other: browserClipboard(document, navigator("Win32"), true, vi.fn()).mac,
+      images: content.images.map((file) => [file.name, file.type]),
+      text: content.text,
+    }).toEqual({
+      mac: true,
+      other: false,
+      images: [["clipboard.png", "image/png"]],
+      text: "貼る文字",
+    });
   });
 });
 
