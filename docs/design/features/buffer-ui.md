@@ -248,7 +248,7 @@ type ActionDef = {
 };
 type KeymapEntry = {
   keys: string; // Vim の記法 (例: "<Space>q", "<C-w>h", "dd")
-  context: "normal" | "visual" | "prompt" | "terminal";
+  context: "normal" | "visual" | "prompt" | "prompt-images" | "terminal"; // prompt-images は入力欄の画像の段
   to: { action: string } | { keys: string } | null; // 動作、Vim のキー列、割り当てを外す
 };
 // 設定の keymap の値は { version: 1, entries: KeymapEntry[] }
@@ -295,6 +295,10 @@ type KeymapEntry = {
 | `Ctrl+o` | `jump.back` | ジャンプの履歴を 1 つ戻る (「ジャンプの履歴」) | Normal | `buffer-ui` |
 | `Ctrl+w h` / `Ctrl+w l` (`Ctrl+w Ctrl+h` / `Ctrl+w Ctrl+l`、`Space w h` / `Space w l`) | `win.left` / `win.right` | 左 / 右のウィンドウへ | Normal、入力欄 (Normal) | `buffer-ui` |
 | `Ctrl+w j` / `Ctrl+w k` (`Space w j` / `Space w k`) | `win.down` / `win.up` | 入力欄へ / 主のウィンドウへ。入力欄の本文では `win.down` で画像の段へ、画像の段では `win.up` で本文へ | Normal、入力欄 (Normal)、入力欄の画像の段 | `buffer-ui` |
+| `h` / `l` | `prompt.image.prev` / `prompt.image.next` | 左 / 右の画像を選ぶ | 入力欄の画像の段 | `conversation` |
+| `d` | `prompt.image.delete` | 選んだ画像を外す | 入力欄の画像の段 | `conversation` |
+| Enter | `prompt.image.open` | 選んだ画像を元の大きさで新しいタブに開く | 入力欄の画像の段 | `conversation` |
+| Esc、Ctrl+[ / `i` | `prompt.image.leave` / `prompt.image.insert` | 本文の Normal へ / 本文の Insert へ戻る | 入力欄の画像の段 | `buffer-ui` |
 | `Space p` | `tree.focus` | ツリーへ移る | Normal | `buffer-ui` |
 | `i` / `a` | `prompt.open` | 入力欄を開く。値の行では値を書く | Normal | `buffer-ui` (開く)、各機能 (送り先) |
 | `dd` | `item.delete` | 行の対象を取り消す・消す | Normal | 各機能 |
@@ -455,9 +459,10 @@ Space を押すと、ステータス行の上に、続けて押せるキーの�
 | Insert | Enter | 改行する |
 | Normal | Enter | 送る (開いた機能の送る処理を呼ぶ) |
 | Normal | Alt+Enter | AI を止めてすぐ送る。AI が作業中の会話への指示のときだけ |
-| Normal (ビジュアルモードでない) | Esc、Ctrl+[ | 閉じる。書きかけの文を、開いた機能に渡す |
-| Normal | `Ctrl+w k` | 入力欄を開いたまま、主のウィンドウへ移る |
-| Normal | `Ctrl+w j` | 開いた機能が画像を渡していれば、画像の段へ移る。画像の段のキーは `features/conversation.md`「入力欄で確かめて外す」に従う |
+| 本文の Normal (ビジュアルモードでない) | Esc、Ctrl+[ | 閉じる。書きかけの文を、開いた機能に渡す |
+| 本文の Normal | `Ctrl+w k` | 入力欄を開いたまま、主のウィンドウへ移る |
+| 本文の Normal | `Ctrl+w j` | 開いた機能が画像を渡していれば、画像の段へ移る |
+| 画像の段 | 割り当ての `context` が `prompt-images` の行のキー | 画像を選ぶ・外す・開く・本文へ戻る。動きは `features/conversation.md`「入力欄で確かめて外す」に従う |
 | 本文が `/` で始まる 1 語 | Tab | 先頭の候補を入れて空白を足す。続けて Tab を押すと、次の候補に入れ替える |
 | Insert | Ctrl+v | macOS では、アプリがクリップボードを読み、画像は開いた機能の貼り付けの処理に渡し、文字はカーソルの位置に入れる。ほかの端末ではブラウザに渡す。端末とページごとの扱いは `features/conversation.md`「貼り付けた画像」に従う |
 | どれでも | ブラウザの貼り付け | 画像は開いた機能の貼り付けの処理に渡し、文字はカーソルの位置に入れる |

@@ -270,7 +270,7 @@ issue の会話 (`kind` が `triage` / `design` / `impl`) へ開発者の指示�
 
 #### 入力欄で確かめて外す
 
-開いている入力欄に画像があれば、本文の下に縮小を貼った順に並べ、左上に 1 から始まる番号を付ける。見た目は `features/buffer-ui.md`「入力欄」に従う。縮小は、本文と同じ入力欄の中の「画像の段」として、キーで選んで外せる。
+開いている入力欄に画像があれば、本文の下に縮小を貼った順に並べ、左上に 1 から始まる番号を付ける。見た目は `features/buffer-ui.md`「入力欄」に従う。縮小は、本文と同じ入力欄の中の「画像の段」として、キーで選んで外せる。キーは既定の割り当てで、動作の名前と変え方は `features/buffer-ui.md`「キーの割り当て」の `prompt-images` の行に従う。
 
 | 場所 | キー | 起きること |
 | --- | --- | --- |
@@ -278,10 +278,14 @@ issue の会話 (`kind` が `triage` / `design` / `impl`) へ開発者の指示�
 | 画像の段 | `h` / `l` | 左 / 右の画像を選ぶ。端では止まる |
 | 画像の段 | `d` | 選んだ画像を外す。お知らせ「画像 <番号> を外しました」を出す。残りの縮小は詰めて番号を振り直し、同じ位置の画像を選ぶ (最後の画像を外したときは、1 つ左の画像を選ぶ)。画像が無くなれば本文の Normal へ戻る |
 | 画像の段 | Enter | 選んだ画像を、元の大きさでブラウザの新しいタブに開く |
-| 画像の段 | `Ctrl+w k`、Esc、Ctrl+[、`i` | 本文へ戻る。`Ctrl+w k` と Esc と Ctrl+[ は Normal、`i` は Insert で戻る |
+| 画像の段 | `Ctrl+w k`、Esc、Ctrl+[ | 本文の Normal へ戻る |
+| 画像の段 | `i` | 本文の Insert へ戻る |
 
 - 選んだ画像には、accent の 2px の枠を付ける。画像の段にいるあいだ、ステータス行のモードは「IMAGE」とする
-- 画像の段にいるあいだ、ほかのキー (文字の入力、`:` を除く) は何もしない。`:` はコマンド行を開く
+- 画像の段では、ウィンドウを移る動作 (`win.*`) とコマンド行は、本文の Normal と同じに呼べる。`win.up` だけは本文へ戻る動作になる。ほかのキーは何もしない
+- 画像の段にいるあいだは、キーを受け取る場所を本文から画像の段へ移す。本文に文字は入らず、IME の変換中のキーには何もしない
+- 入力欄の外へ移ったとき (マウスで主のウィンドウを押した、`win.left` で左のウィンドウへ移ったなど) は、画像の段を抜ける。入力欄へ戻ると、本文の Normal になる
+- 選んでいる画像は画像の ID で覚える。別の端末の保存で画像が変わっても、選んでいる画像が残っていれば選び続ける。消えていれば同じ位置の画像を選び、画像が無くなれば本文の Normal へ戻る
 - 外す画像の対象は、開いている入力欄ごとに次の表のとおりである。`:images clear` (貼った画像をすべて外す) も同じ対象に効く。画像を貼れる入力欄が開いていなければ、`:images clear` はエラーのお知らせ「画像を貼れる入力欄を開いてから使ってください」を出す
 
 | 開いている入力欄 | 外す画像 | 外したことが残るとき |
@@ -293,7 +297,6 @@ issue の会話 (`kind` が `triage` / `design` / `impl`) へ開発者の指示�
 - 外す前の確認は出さない。外した画像は、貼り直せば戻るためである
 - 外しても、画像のファイルは消さない。ファイルは会話を削除するときに消える (`features/conversation-lifecycle.md`)
 - 書きかけの画像を外す操作は、書きかけの添付の編集として扱う。保存と端末をまたぐ扱いは「書きかけの入力と未送信」、取り消した指示を戻した直後の制限は「指示を届ける規則」に従う
-- 画像の段にいるあいだに別の端末の保存で画像が減ったら、選ぶ位置を残った画像の数に収める。画像が無くなれば本文の Normal へ戻る
 - 縮小を読み込めない画像 (復元のあとでファイルが無い画像) は、縮小の代わりに「見つかりません」の枠を出す。選んで `d` で外せる。送ると、下の「見つからないとき」のとおりに断られる
 
 決定: 画像は、入力欄の画像の段で選んで `d` で外す
@@ -520,6 +523,7 @@ DESIGN.md「API 一覧」のうち本機能の分を書く。エラーの形と�
 | 画像を新しいタブで開く口 (ほかの機能と同じ `openExternal` を会話のセッションに渡す) | UI | `src/front/main.tsx`、`src/front/lib/conversation/session.ts` |
 | Ctrl+v のクリップボードの読み取り、入力欄の縮小の表示 | UI | `src/front/buffer/PromptEditor.tsx`、`src/front/buffer/clipboard.ts`、`src/front/buffer/controller.ts`、`src/front/lib/browser.ts` |
 | 画像の段のキー (選ぶ、`d` で外す、Enter で開く) と `:images clear` (開いている入力欄の画像に効かせる) | UI | `src/front/buffer/PromptEditor.tsx`、`src/front/buffer/controller.ts`、`src/front/lib/conversation/session.ts` |
+| 割り当ての `prompt-images` の文脈と既定のキー | UI | `src/front/buffer/keymap/registry.ts`、`src/front/buffer/keymap/defaults.ts` |
 | API のハンドラ | API ハンドラ | `src/server/modules/conversation/adapter/http.ts` |
 | テーブルの読み書き | インフラ (Repository) | `src/server/modules/conversation/adapter/repository.ts` |
 | 会話の実行 (開く、届ける、預かった指示を届ける、止める、再開する) → conversations、conversation_events、queued_instructions、stock_items (`sent_seq`) | ユースケース | `features/runtime.md`「実装の配置」の `src/runner/modules/conversation/usecase/*.ts` に足す (ファイルは同書が正本) |
