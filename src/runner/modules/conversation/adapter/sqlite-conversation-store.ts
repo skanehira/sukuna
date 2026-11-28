@@ -26,7 +26,12 @@ import {
 } from "../../../../shared/conversation/sqlite-workspace-switch-receipts";
 import { err, ok, Result } from "neverthrow";
 import type Database from "better-sqlite3";
-import { eventSchema, type ConversationEvent, type StoredEvent } from "../../../../shared/events";
+import {
+  answersSchema,
+  eventSchema,
+  type ConversationEvent,
+  type StoredEvent,
+} from "../../../../shared/events";
 import { nextRunState } from "../domain/run-state";
 import { timelineAnchorSchema } from "../../../../shared/progress/draft";
 import { timelineInputCommentSchema } from "../../../../shared/progress/schema";
@@ -540,6 +545,12 @@ export class SqliteConversationStore implements ConversationStore {
         )
         .get(id, questionSeq) !== undefined && !wasQuestionSuperseded(this.sqlite, id, questionSeq)
     );
+  }
+  pendingAnswers(id: string, questionSeq: number) {
+    const row = this.sqlite
+      .prepare("SELECT answers FROM pending_answers WHERE conversation_id=? AND question_seq=?")
+      .get(id, questionSeq) as { answers: string } | undefined;
+    return row ? answersSchema.parse(JSON.parse(row.answers)) : null;
   }
   finishAnswers(id: string, questionSeq: number): void {
     this.sqlite

@@ -963,7 +963,7 @@ it("前の質問の送信確認で y を押しても、別端末の新しい回�
 
     controller.answer(confirmYes);
     await controller.run("conversation.answers.send", answerContext);
-    expect(sends).toEqual([["c1", false, 4]]);
+    expect(sends).toEqual([["c1", { confirmUnanswered: false, questionSeq: 4 }]]);
   } finally {
     disconnect();
   }
@@ -995,7 +995,7 @@ it("前の送信確認を n で閉じたあと、割り当て済みの操作で�
     await f.session.refresh();
     await controller.run("conversation.answers.confirm", answerContext);
     expect({ sends, confirmation: controller.snapshot().confirmation }).toEqual({
-      sends: [["c1", false, 4]],
+      sends: [["c1", { confirmUnanswered: false, questionSeq: 4 }]],
       confirmation: null,
     });
   } finally {
@@ -1022,8 +1022,77 @@ it("右のスレッドは未回答の確認を表示し、y を押してから�
       confirmation: context,
     });
     expect(controller.answer(confirmYes)).toBe(true);
-    expect(sends).toEqual([["c1", true, 2]]);
+    expect(sends).toEqual([
+      [
+        "c1",
+        {
+          confirmUnanswered: true,
+          questionSeq: 2,
+          confirmedAnswers: f.data.pendingAnswers?.answers,
+        },
+      ],
+    ]);
   } finally {
+    disconnect();
+  }
+});
+
+it("右のスレッドで確認中に回答を受信しても、y は確認を開いた時点の内容にだけ同意する", async () => {
+  const { f, controller, disconnect, context } = await answeringFixture(
+    [firstQuestion, anotherQuestion, firstQuestion],
+    "stock-thread",
+  );
+  const first = {
+    questionSeq: 2,
+    answers: { "0": { choices: ["方式A"], text: null }, "1": { choices: ["方式B"], text: null } },
+  };
+  const latest = { questionSeq: 2, answers: { "0": { choices: ["方式B"], text: null } } };
+  f.data.pendingAnswers = first;
+  await f.session.refresh();
+
+  const sends: Parameters<ConversationApi["sendAnswers"]>[] = [];
+  const rejected = deferred();
+  f.api.sendAnswers = async (...args) => {
+    sends.push(args);
+    if (sends.length !== 1) return;
+    await rejected.promise;
+    throw new ConversationApiError(
+      409,
+      "answers_changed",
+      "回答が変わりました。内容を確認してからもう一度送ってください。",
+    );
+  };
+
+  try {
+    await controller.run("conversation.answers.send", context);
+    expect(controller.snapshot().confirmation?.text).toBe(
+      "答えていない質問が 1 件あります。このまま送りますか?",
+    );
+    f.data.pendingAnswers = latest;
+    await f.session.refresh();
+    expect(controller.answer(confirmYes)).toBe(true);
+    expect(sends).toEqual([
+      ["c1", { questionSeq: 2, confirmUnanswered: true, confirmedAnswers: first.answers }],
+    ]);
+
+    rejected.resolve();
+    await expect
+      .poll(() => controller.snapshot().notice)
+      .toEqual({
+        kind: "error",
+        message: "回答が変わりました。内容を確認してからもう一度送ってください。",
+      });
+    await controller.run("conversation.answers.send", context);
+    expect(controller.snapshot().confirmation?.text).toBe(
+      "答えていない質問が 2 件あります。このまま送りますか?",
+    );
+    expect(controller.answer(confirmYes)).toBe(true);
+    expect(sends[1]).toEqual([
+      "c1",
+      { questionSeq: 2, confirmUnanswered: true, confirmedAnswers: latest.answers },
+    ]);
+  } finally {
+    rejected.resolve();
     disconnect();
   }
 });
@@ -1128,7 +1197,10 @@ it.each([false, true])(
           message: "回答が変わりました。内容を確認してからもう一度送ってください。",
         });
       expect(controller.answer(confirmYes)).toBe(true);
-      expect({ otherAccepted, sends }).toEqual({ otherAccepted: 1, sends: [["c1", false, 2]] });
+      expect({ otherAccepted, sends }).toEqual({
+        otherAccepted: 1,
+        sends: [["c1", { confirmUnanswered: false, questionSeq: 2 }]],
+      });
 
       await controller.run("conversation.answers.send", context);
       expect(controller.snapshot().confirmation?.text).toBe(
@@ -1136,8 +1208,15 @@ it.each([false, true])(
       );
       expect(controller.answer(confirmYes)).toBe(true);
       expect(sends).toEqual([
-        ["c1", false, 2],
-        ["c1", true, 2],
+        ["c1", { confirmUnanswered: false, questionSeq: 2 }],
+        [
+          "c1",
+          {
+            confirmUnanswered: true,
+            questionSeq: 2,
+            confirmedAnswers: f.data.pendingAnswers?.answers,
+          },
+        ],
       ]);
     } finally {
       fail.resolve();
@@ -1221,7 +1300,16 @@ it("次の番が出力なしで終わった場合、前の質問の送信確認�
       },
     });
     expect(controller.answer(confirmYes)).toBe(true);
-    expect(sends).toEqual([["c1", true, 2]]);
+    expect(sends).toEqual([
+      [
+        "c1",
+        {
+          confirmUnanswered: true,
+          questionSeq: 2,
+          confirmedAnswers: f.data.pendingAnswers?.answers,
+        },
+      ],
+    ]);
   } finally {
     disconnect();
   }

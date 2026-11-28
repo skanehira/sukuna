@@ -15,6 +15,7 @@ export type ConversationError = {
     | "invalid_input"
     | "conflict"
     | "unanswered_questions"
+    | "answers_changed"
     | "internal"
     | "runner_unavailable"
     | "worktree_failed";

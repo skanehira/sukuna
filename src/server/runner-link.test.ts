@@ -105,6 +105,34 @@ async function fixture() {
     },
   };
 }
+it("未対応の操作が平文の404を返したとき、API にランナー更新の案内を渡す", async () => {
+  const s = await fixture();
+  const connected = s.connected();
+  s.link.start();
+  await connected;
+  s.operation((response) =>
+    response.writeHead(404, { "content-type": "text/plain" }).end("404 Not Found"),
+  );
+
+  try {
+    const message = "ランナーを更新してください。";
+    const response = await s.link.forward(
+      "POST",
+      "/conversations/a/answers/checked",
+      {},
+      {
+        missingRouteMessage: message,
+      },
+    );
+    expect({ status: response.status, body: await response.json() }).toEqual({
+      status: 503,
+      body: { error: { code: "runner_unavailable", message } },
+    });
+  } finally {
+    await s.close();
+  }
+});
+
 it.each(["end", "close", "error"] as const)(
   "初回未接続とchangesの%s後は操作せず503を返し、回復後は成功する",
   async (ending) => {

@@ -13,6 +13,7 @@ import {
   type ConversationDraft,
   type ConversationMessage,
 } from "../../../shared/conversation/api";
+import { answersChanged } from "../../../shared/conversation/answers";
 import type { ChangeDesc } from "@codemirror/state";
 import {
   commentsFromAnchors,
@@ -635,23 +636,28 @@ export class ConversationSession {
     this.emit();
     return true;
   }
-  private confirmAnswerSend(context: ActionContext, questionSeq: number, missing: number): void {
+  private confirmAnswerSend(
+    context: ActionContext,
+    questionSeq: number,
+    missing: number,
+    answers: Answers,
+  ): void {
     this.dismissAnswerConfirmation = this.controller.confirm(
       `答えていない質問が ${missing} 件あります。このまま送りますか?`,
       context,
-      () => this.sendAnswers(context, true, questionSeq),
+      () => this.sendAnswers(context, answers, questionSeq),
     );
   }
   private async sendAnswers(
     context: ActionContext,
-    confirmed = false,
+    confirmedAnswers?: Answers,
     questionSeq = this.question?.seq,
   ): Promise<void> {
     if (questionSeq === undefined) return;
     const question = this.question;
     if (question?.seq !== questionSeq)
       throw new Error("回答する質問が変わりました。読み直してください。");
-    const answers = this.answersForCurrentQuestion();
+    const answers = confirmedAnswers ?? this.answersForCurrentQuestion();
     const count = Object.values(answers).filter(
       (answer) => answer.choices.length || answer.text?.trim(),
     ).length;
@@ -660,12 +666,20 @@ export class ConversationSession {
       return;
     }
     const missing = question.payload.questions.length - count;
-    if (missing && !confirmed) return this.confirmAnswerSend(context, questionSeq, missing);
+    if (missing && !confirmedAnswers)
+      return this.confirmAnswerSend(context, questionSeq, missing, answers);
     const viewConnection = this.viewConnection;
     try {
-      await this.api.sendAnswers(this.id, confirmed, questionSeq);
+      await this.api.sendAnswers(this.id, {
+        questionSeq,
+        confirmUnanswered: confirmedAnswers !== undefined,
+        ...(confirmedAnswers && { confirmedAnswers }),
+      });
     } catch (error) {
-      if (!(error instanceof ConversationApiError) || error.code !== "unanswered_questions")
+      if (
+        !(error instanceof ConversationApiError) ||
+        (error.code !== "unanswered_questions" && error.code !== answersChanged.code)
+      )
         throw error;
       const stillCurrent = () =>
         viewConnection !== null &&
@@ -678,11 +692,7 @@ export class ConversationSession {
         if (stillCurrent()) throw readError;
         return;
       }
-      if (stillCurrent())
-        this.controller.notify(
-          "回答が変わりました。内容を確認してからもう一度送ってください。",
-          "error",
-        );
+      if (stillCurrent()) this.controller.notify(answersChanged.message, "error");
       return;
     }
     this.controller.notify(`回答 ${count} 件を 1 通にまとめて送りました`);

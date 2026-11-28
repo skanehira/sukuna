@@ -100,6 +100,58 @@
       ]
     },
     {
+      "match": "^回答の送信確認を試す$",
+      "steps": [
+        {
+          "ask": [
+            {
+              "question": "在庫を戻す方法は?",
+              "header": "方法",
+              "multi_select": false,
+              "options": [
+                {
+                  "label": "定期処理",
+                  "description": "1分ごと"
+                },
+                {
+                  "label": "次の処理",
+                  "description": "必要なとき"
+                }
+              ]
+            },
+            {
+              "question": "設定で変えられるようにする?",
+              "header": "設定",
+              "multi_select": false,
+              "options": [
+                {
+                  "label": "はい",
+                  "description": "設定で変える"
+                }
+              ]
+            },
+            {
+              "question": "履歴を残しますか?",
+              "header": "履歴",
+              "multi_select": false,
+              "options": [
+                {
+                  "label": "残す",
+                  "description": "履歴を保存する"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "text": "回答を受け取りました。"
+        },
+        {
+          "end": "success"
+        }
+      ]
+    },
+    {
       "match": "^ストックの確認を始める$",
       "steps": [
         { "text": "在庫を記録します。\n期限を検査します。\n結果を返します。" },
@@ -168,6 +220,11 @@
     }
   ],
   "completions": [
+    {
+      "purpose": "recap",
+      "match": "回答を受け取りました。",
+      "text": "{\"chapter\":{\"kind\":\"new\",\"title\":\"回答の確認\"},\"decisions\":[],\"changes\":[],\"questions\":[],\"answered\":[]}"
+    },
     {
       "purpose": "recap",
       "match": "引き当ての期限は 30 分にしてください。",

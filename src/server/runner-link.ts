@@ -11,6 +11,7 @@ import {
 } from "../shared/ipc";
 import type { Logger } from "../shared/log";
 type Clock = { setTimeout(callback: () => void, ms: number): () => void };
+type CallOptions = { missingRouteMessage: string };
 
 export type RunnerUnavailable = { code: "runner_unavailable"; message: string };
 export const runnerUnavailable: RunnerUnavailable = unavailableRunnerError;
@@ -47,6 +48,7 @@ export class RunnerLink {
     method: string,
     path: string,
     input?: unknown,
+    options?: CallOptions,
   ): Promise<Result<IpcResponse, RunnerUnavailable>> {
     const deadline = this.now() + RUNNER_IPC_TIMEOUT_MS;
     return new Promise((resolve) => {
@@ -72,6 +74,10 @@ export class RunnerLink {
             body += part;
           });
           res.on("end", () => {
+            if (options && res.statusCode === 404 && body === "404 Not Found") {
+              finish(err({ code: "runner_unavailable", message: options.missingRouteMessage }));
+              return;
+            }
             try {
               finish(ok({ status: res.statusCode ?? 500, body: body ? JSON.parse(body) : null }));
             } catch {
@@ -89,9 +95,14 @@ export class RunnerLink {
       req.end(input === undefined ? undefined : JSON.stringify(input));
     });
   }
-  async forward(method: string, path: string, input?: unknown): Promise<Response> {
+  async forward(
+    method: string,
+    path: string,
+    input?: unknown,
+    options?: CallOptions,
+  ): Promise<Response> {
     if (!this.connected) return Response.json({ error: runnerUnavailable }, { status: 503 });
-    const result = await this.call(method, path, input);
+    const result = await this.call(method, path, input, options);
     return result.isErr()
       ? Response.json({ error: result.error }, { status: 503 })
       : Response.json(result.value.body, { status: result.value.status });

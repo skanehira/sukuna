@@ -5,6 +5,7 @@ import type {
   ConversationDraftRequest,
   ConversationMessage,
   ConversationQueueItem,
+  SendConversationAnswers,
 } from "../../../shared/conversation/api";
 import type { StockSendInput } from "../../../shared/stock";
 
@@ -64,12 +65,7 @@ export type ConversationApi = {
     questionSeq: number,
     answers: Answers,
   ): Promise<{ pendingAnswers: Snapshot["pendingAnswers"] }>;
-  sendAnswers(
-    this: void,
-    id: string,
-    confirmUnanswered: boolean,
-    questionSeq: number,
-  ): Promise<unknown>;
+  sendAnswers(this: void, id: string, body: SendConversationAnswers): Promise<unknown>;
   permission(
     this: void,
     id: string,

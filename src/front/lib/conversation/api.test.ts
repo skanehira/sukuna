@@ -12,7 +12,7 @@ it("会話APIがJSONでない404を返しても、画面へ見つからないこ
   );
 });
 
-it("回答の送信では確認した質問の番号を送る", async () => {
+it("回答の送信では確認した質問の番号と回答内容を送る", async () => {
   const requests: { path: string; method: string | undefined; body: unknown }[] = [];
   const api = createConversationApi(async (path, init) => {
     if (typeof path !== "string" || typeof init?.body !== "string")
@@ -21,12 +21,15 @@ it("回答の送信では確認した質問の番号を送る", async () => {
     return Response.json({ result: "answered" }, { status: 202 });
   });
 
-  expect(await api.sendAnswers("c1", true, 9)).toEqual({ result: "answered" });
+  const confirmedAnswers = { "0": { choices: ["A"], text: null } };
+  expect(
+    await api.sendAnswers("c1", { questionSeq: 9, confirmUnanswered: true, confirmedAnswers }),
+  ).toEqual({ result: "answered" });
   expect(requests).toEqual([
     {
       path: "/api/conversations/c1/answers/send",
       method: "POST",
-      body: { questionSeq: 9, confirmUnanswered: true },
+      body: { questionSeq: 9, confirmUnanswered: true, confirmedAnswers },
     },
   ]);
 });

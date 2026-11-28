@@ -1,3 +1,6 @@
+import { getRequestListener } from "@hono/node-server";
+import { Hono } from "hono";
+import { createServer } from "node:http";
 import { createWorktreeActivity } from "../../../../shared/workspace/sqlite-worktree-activity";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
@@ -1449,6 +1452,277 @@ it("回答を全問まとめて一度だけAIに返し、確認が必要な未�
       .all(id),
   }).toEqual({ pending: null, questions: [{ answered: 1 }, { answered: 1 }] });
 });
+const changedAnswersResponse = {
+  status: 409,
+  body: {
+    error: {
+      code: "answers_changed",
+      message: "回答が変わりました。内容を確認してからもう一度送ってください。",
+    },
+  },
+};
+
+it.each([
+  {
+    change: "未回答が増えた",
+    currentAnswers: { "0": { choices: ["A"], text: null } },
+    received: { Q1: "A", Q2: "(開発者は答えなかった)", Q3: "(開発者は答えなかった)" },
+  },
+  {
+    change: "件数は同じで記述が変わった",
+    currentAnswers: {
+      "0": { choices: ["A"], text: null },
+      "1": { choices: ["A"], text: "編集後" },
+    },
+    received: { Q1: "A", Q2: "A: 編集後", Q3: "(開発者は答えなかった)" },
+  },
+])(
+  "同じ質問で $change とき、古い送信確認を拒み、確認し直した回答を届ける",
+  async ({ currentAnswers, received }) => {
+    const f = await fixture({
+      rules: [],
+      fallback: [{ ask: [question("Q1"), question("Q2"), question("Q3")] }, { hold: true }],
+    });
+    const id = await f.start();
+    await f.send(id, "質問");
+    await settled(f, id, "waiting_answer");
+    const q = f
+      .runner()
+      .runtime.store.events(id)
+      .find((event) => event.type === "question")!;
+    const path = `/conversations/${id}/answers`;
+    const first = {
+      questionSeq: q.seq,
+      answers: { "0": { choices: ["A"], text: null }, "1": { choices: ["A"], text: "確認時" } },
+    };
+    await f.request(path, "PUT", first);
+    const latest = { questionSeq: q.seq, answers: currentAnswers };
+    await f.request(path, "PUT", latest);
+    const send = { questionSeq: q.seq, confirmUnanswered: true };
+    const forwarded: unknown[] = [];
+    const call = f.link.call.bind(f.link);
+    f.link.call = (method, ipcPath, input, options) => {
+      if (method === "POST" && ipcPath === `${path}/checked`) forwarded.push(input);
+      return call(method, ipcPath, input, options);
+    };
+
+    expect(
+      await f.request(`${path}/send`, "POST", { ...send, confirmedAnswers: first.answers }),
+    ).toEqual(changedAnswersResponse);
+    expect(forwarded).toEqual([]);
+    expect((await f.snapshot(id)).body.pendingAnswers).toEqual(latest);
+    expect(
+      await f.request(`${path}/send`, "POST", { ...send, confirmedAnswers: latest.answers }),
+    ).toEqual({ status: 202, body: { result: "answered" } });
+    expect(f.agent.receivedAnswers).toEqual([
+      { requestId: q.payload.request_id, answers: received },
+    ]);
+    expect((await f.snapshot(id)).body.pendingAnswers).toBeNull();
+  },
+);
+
+it("画面のサーバーだけを更新した場合は未回答付き送信を保留し、全問に答えた送信は届ける", async () => {
+  const f = await fixture({
+    rules: [],
+    fallback: [{ ask: [question("Q1"), question("Q2")] }, { hold: true }],
+  });
+  const id = await f.start();
+  await f.send(id, "質問");
+  await settled(f, id, "waiting_answer");
+  const q = f
+    .runner()
+    .runtime.store.events(id)
+    .find((event) => event.type === "question")!;
+  const path = `/conversations/${id}/answers`;
+  const stored = { questionSeq: q.seq, answers: { "0": { choices: ["A"], text: null } } };
+  await f.request(path, "PUT", stored);
+
+  const forward = f.link.call.bind(f.link);
+  const reached = deferred();
+  const release = deferred();
+  const old = new Hono();
+  old.use("*", async (_c, next) => {
+    reached.resolve();
+    await release.promise;
+    await next();
+  });
+  old.post(path, async (c) => {
+    const input = await c.req.json<{ request_id: string; answers: unknown }>();
+    const result = await forward("POST", path, {
+      request_id: input.request_id,
+      answers: input.answers,
+    });
+    return result.isOk()
+      ? Response.json(result.value.body, { status: result.value.status })
+      : c.json({ error: result.error }, 503);
+  });
+  const socket = join(f.home, "old-runner.sock");
+  const server = createServer(getRequestListener(old.fetch)).listen(socket);
+  await once(server, "listening");
+  const legacyRunner = new RunnerLink({
+    socket,
+    log: () => {},
+    notice: () => {},
+    connection: () => {},
+  });
+  const sent: string[] = [];
+  f.link.call = (method, ipcPath, input, options) => {
+    if (method !== "POST" || (ipcPath !== path && ipcPath !== `${path}/checked`))
+      return forward(method, ipcPath, input, options);
+    sent.push(ipcPath);
+    return legacyRunner.call(method, ipcPath, input, options);
+  };
+
+  const send = f.request(`${path}/send`, "POST", {
+    questionSeq: q.seq,
+    confirmUnanswered: true,
+    confirmedAnswers: stored.answers,
+  });
+  try {
+    await reached.promise;
+    const latest = { questionSeq: q.seq, answers: { "0": { choices: ["B"], text: null } } };
+    await f.request(path, "PUT", latest);
+    release.resolve();
+    expect(await send).toEqual({
+      status: 503,
+      body: {
+        error: {
+          code: "runner_unavailable",
+          message: "ランナーを更新してから、回答を見直してもう一度送ってください。",
+        },
+      },
+    });
+    expect(sent).toEqual([`${path}/checked`]);
+    expect((await f.snapshot(id)).body.pendingAnswers).toEqual(latest);
+    expect(f.agent.receivedAnswers).toEqual([]);
+
+    await f.request(path, "PUT", {
+      questionSeq: q.seq,
+      answers: { ...stored.answers, "1": { choices: ["B"], text: null } },
+    });
+    expect(await f.request(`${path}/send`, "POST", { confirmUnanswered: false })).toEqual({
+      status: 202,
+      body: { result: "answered" },
+    });
+    expect(sent).toEqual([`${path}/checked`, path]);
+    expect(f.agent.receivedAnswers).toEqual([
+      { requestId: q.payload.request_id, answers: { Q1: "A", Q2: "B" } },
+    ]);
+  } finally {
+    release.resolve();
+    await send;
+    const closed = once(server, "close");
+    server.close();
+    server.closeAllConnections();
+    await closed;
+  }
+});
+
+it("IPC が遅れて届いたとき、回答待ちの AI に古い回答を返さない", async () => {
+  const f = await fixture({
+    rules: [],
+    fallback: [{ ask: [question("Q1"), question("Q2")] }, { hold: true }],
+  });
+  const id = await f.start();
+  await f.send(id, "質問");
+  await settled(f, id, "waiting_answer");
+  const q = f
+    .runner()
+    .runtime.store.events(id)
+    .find((event) => event.type === "question")!;
+  const path = `/conversations/${id}/answers`;
+  const first = { "0": { choices: ["A"], text: null } };
+  const latest = { questionSeq: q.seq, answers: { "0": { choices: ["B"], text: null } } };
+  await f.request(path, "PUT", { questionSeq: q.seq, answers: first });
+
+  const dispatched = deferred();
+  const forward = deferred();
+  const call = f.link.call.bind(f.link);
+  f.link.call = async (method, ipcPath, input, options) => {
+    if (method === "POST" && ipcPath === `${path}/checked`) {
+      dispatched.resolve();
+      await forward.promise;
+    }
+    return call(method, ipcPath, input, options);
+  };
+  const send = { questionSeq: q.seq, confirmUnanswered: true };
+  const pending = f.request(`${path}/send`, "POST", { ...send, confirmedAnswers: first });
+  try {
+    await dispatched.promise;
+    await f.request(path, "PUT", latest);
+    forward.resolve();
+
+    expect(await pending).toEqual(changedAnswersResponse);
+    expect((await f.snapshot(id)).body.pendingAnswers).toEqual(latest);
+    expect(f.agent.receivedAnswers).toEqual([]);
+    expect(
+      await f.request(`${path}/send`, "POST", { ...send, confirmedAnswers: latest.answers }),
+    ).toEqual({ status: 202, body: { result: "answered" } });
+    expect(f.agent.receivedAnswers).toEqual([
+      { requestId: q.payload.request_id, answers: { Q1: "B", Q2: "(開発者は答えなかった)" } },
+    ]);
+  } finally {
+    forward.resolve();
+    await pending;
+  }
+});
+
+it("IPC の往復中に更新された回答を拒み、停止した質問の回答を書きかけとして残す", async () => {
+  const f = await fixture({
+    rules: [{ match: "^質問$", steps: [{ ask: [question("Q1"), question("Q2")] }] }],
+    fallback: [{ hold: true }],
+  });
+  const id = await f.start();
+  await f.send(id, "質問");
+  await settled(f, id, "waiting_answer");
+  const q = f
+    .runner()
+    .runtime.store.events(id)
+    .find((event) => event.type === "question")!;
+  const path = `/conversations/${id}/answers`;
+  const first = { "0": { choices: ["A"], text: null } };
+  await f.request(path, "PUT", { questionSeq: q.seq, answers: first });
+  await f.request(`/conversations/${id}/stop`, "POST");
+
+  const reached = deferred();
+  const resume = deferred();
+  f.runner().runtime.runOptions.registerDeliveryGuard(async (_conversation, input) => {
+    if (input.origin === "answer_text") {
+      reached.resolve();
+      await resume.promise;
+    }
+    return ok(undefined);
+  });
+  const send = { questionSeq: q.seq, confirmUnanswered: true };
+  const sending = f.request(`${path}/send`, "POST", { ...send, confirmedAnswers: first });
+  try {
+    await reached.promise;
+    const latest = { questionSeq: q.seq, answers: { "0": { choices: ["B"], text: null } } };
+    await f.request(path, "PUT", latest);
+    resume.resolve();
+
+    expect(await sending).toEqual(changedAnswersResponse);
+    expect((await f.snapshot(id)).body.pendingAnswers).toEqual(latest);
+    expect(f.agent.sent.map((message) => message.text)).toEqual(["質問"]);
+    expect(
+      f
+        .runner()
+        .runtime.store.events(id)
+        .filter((event) => event.type === "answer"),
+    ).toEqual([]);
+    expect(
+      await f.request(`${path}/send`, "POST", { ...send, confirmedAnswers: latest.answers }),
+    ).toEqual({ status: 202, body: { result: "delivered" } });
+    expect(f.agent.sent.map((message) => message.text)).toEqual([
+      "質問",
+      "Q: Q1\nA: B\n\nQ: Q2\nA: (開発者は答えなかった)",
+    ]);
+  } finally {
+    resume.resolve();
+    await sending;
+  }
+});
+
 it("同じ番の発言では未回答の質問を保ち、次の番の発言で前の回答を片づける", async () => {
   const f = await fixture({
     rules: [
@@ -1703,7 +1977,9 @@ it("旧形式は最初の質問へだけ送り、遅れて届いても次の質�
 
   const first = await saveAnswer(0);
   expect(await f.request(`${path}/send`, "POST", legacySend)).toEqual(response);
-  expect(sentAnswers.splice(0)).toEqual([{ request_id: first.payload.request_id, answers }]);
+  expect(sentAnswers.splice(0)).toEqual([
+    { request_id: first.payload.request_id, question_seq: first.seq, answers },
+  ]);
   const rejectLegacyAndSendCurrent = async (index: number) => {
     const current = await saveAnswer(index);
     expect(await f.request(`${path}/send`, "POST", legacySend)).toEqual({
@@ -1716,7 +1992,9 @@ it("旧形式は最初の質問へだけ送り、遅れて届いても次の質�
     expect(
       await f.request(`${path}/send`, "POST", { ...legacySend, questionSeq: current.seq }),
     ).toEqual(response);
-    expect(sentAnswers.splice(0)).toEqual([{ request_id: current.payload.request_id, answers }]);
+    expect(sentAnswers.splice(0)).toEqual([
+      { request_id: current.payload.request_id, question_seq: current.seq, answers },
+    ]);
   };
   await rejectLegacyAndSendCurrent(1);
   await settled(f, id, "idle");
@@ -1866,14 +2144,23 @@ it("停止した質問への保存済み回答は通常の指示として届け�
     .runner()
     .runtime.store.events(id)
     .find((e) => e.type === "question")!;
-  await f.request(`/conversations/${id}/answers`, "PUT", {
-    questionSeq: q.seq,
-    answers: { "0": { choices: ["A"], text: null } },
-  });
+  const answers = { "0": { choices: ["A"], text: null } };
+  await f.request(`/conversations/${id}/answers`, "PUT", { questionSeq: q.seq, answers });
   await f.request(`/conversations/${id}/stop`, "POST");
   f.database.sqlite.prepare("UPDATE conversations SET closed_at=500 WHERE id=?").run(id);
+  const send = `/conversations/${id}/answers/send`;
+  expect(await f.request(send, "POST", { confirmUnanswered: true })).toEqual(
+    changedAnswersResponse,
+  );
+  expect(await f.request(send, "POST", { questionSeq: q.seq, confirmUnanswered: true })).toEqual(
+    changedAnswersResponse,
+  );
   expect(
-    await f.request(`/conversations/${id}/answers/send`, "POST", { confirmUnanswered: true }),
+    await f.request(send, "POST", {
+      questionSeq: q.seq,
+      confirmUnanswered: true,
+      confirmedAnswers: answers,
+    }),
   ).toEqual({ status: 202, body: { result: "delivered" } });
   expect(f.agent.sent.map((m) => m.text)).toEqual([
     "質問",

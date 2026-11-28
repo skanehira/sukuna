@@ -58,7 +58,12 @@ export const sendMessageSchema = z
       !restore_draft || (origin === "developer" && !interrupt),
   );
 export const forkConversationSchema = z.object({ title: z.string(), kind: z.literal("thread") });
-export const answerSchema = z.object({ request_id: z.string(), answers: answersSchema });
+export const answerSchema = z.object({
+  request_id: z.string(),
+  question_seq: z.number().int().positive().optional(),
+  answers: answersSchema,
+});
+export const checkedAnswerSchema = answerSchema.required({ question_seq: true });
 export const permissionSchema = z.object({
   behavior: z.enum(["allow", "deny"]),
   message: z.string().optional(),

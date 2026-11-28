@@ -13,6 +13,7 @@ export type MessageDependencies = {
       method: string,
       path: string,
       input?: unknown,
+      options?: { missingRouteMessage: string },
     ): Promise<Result<{ status: number; body: unknown }, { code: string; message: string }>>;
   };
   repository: {
