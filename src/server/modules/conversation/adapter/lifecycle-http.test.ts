@@ -870,37 +870,44 @@ it("Git の取得が締切を越えても他の項目を返し、会話を閉じ
 });
 
 it("コミットと未コミットを上限まで返し、上流にないコミットを数える", async () => {
-  const f = await fixture();
+  const realGit = createGitCli();
+  const committed = Math.floor(startedAt / 1000) + 10;
+  const log = Array.from(
+    { length: 51 },
+    (_, index) => `${committed + index}\t${String(index).padStart(40, "0")}\t変更${index + 1}`,
+  ).join("\n");
+  const paths = Array.from({ length: 21 }, (_, index) => `f-${String(index).padStart(2, "0")}.txt`);
+  const status = paths.map((path) => `?? ${path}\0`).join("");
+  const f = await fixture({
+    git: {
+      run: (args, opts) => {
+        if (args[0] === "log") return Promise.resolve({ stdout: log, stderr: "", exitCode: 0 });
+        if (args[0] === "status")
+          return Promise.resolve({ stdout: status, stderr: "", exitCode: 0 });
+        return realGit.run(args, opts);
+      },
+    },
+  });
   f.addConversation("chat");
   f.event("chat", 1, "user_message", { text: "確認", images: [], origin: "developer" });
   git(f.project, "branch", "upstream", f.hash);
   git(f.project, "branch", "--set-upstream-to=upstream");
-  for (let number = 1; number <= 50; number += 1)
+  for (let number = 1; number <= 2; number += 1)
     git(f.project, "commit", "--allow-empty", "-m", `変更${number}`);
-  for (let index = 0; index < 20; index += 1) {
-    writeFileSync(join(f.project, `f-${String(index).padStart(2, "0")}.txt`), "new");
-  }
   const result = await f.request("GET", "/conversations/chat/closing-summary");
   expect(result).toMatchObject({
     status: 200,
     body: {
       outputs: { commits: { ok: true, more: 1 } },
       remaining: {
-        uncommitted: {
-          ok: true,
-          more: 1,
-          items: Array.from(
-            { length: 20 },
-            (_, index) => `f-${String(index).padStart(2, "0")}.txt`,
-          ),
-        },
-        unpushed: { ok: true, count: 50, upstream: true },
+        uncommitted: { ok: true, more: 1, items: paths.slice(0, 20) },
+        unpushed: { ok: true, count: 2, upstream: true },
       },
     },
   });
   const commits = closingSummarySchema.parse(result.body).outputs.commits;
   expect(commits?.ok && commits.items.map(({ subject }) => subject)).toEqual(
-    Array.from({ length: 50 }, (_, index) => `変更${50 - index}`),
+    Array.from({ length: 50 }, (_, index) => `変更${51 - index}`),
   );
 });
 

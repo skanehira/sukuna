@@ -860,15 +860,14 @@ describe("会話のファイル API", () => {
   );
 
   it("名前の検索は 200 件まで返し、201 件目があれば truncated にする", async () => {
-    for (let i = 0; i < 200; i += 1)
-      writeFileSync(join(cwd, `name-${String(i).padStart(3, "0")}.txt`), "");
-    const matches = Array.from({ length: 200 }, (_, i) => ({
-      path: `name-${String(i).padStart(3, "0")}.txt`,
-    }));
-    const first = await request("/api/conversations/c/search?mode=name&q=name-");
+    const paths = (count: number) =>
+      Array.from({ length: count }, (_, i) => `name-${String(i).padStart(3, "0")}.txt`);
+    const matches = paths(200).map((path) => ({ path }));
+    const search = (files: string[]) =>
+      requestListing("/api/conversations/c/search?mode=name&q=name-", files);
+    const first = await search(paths(200));
     expect(await first.json()).toEqual({ mode: "name", query: "name-", matches, truncated: false });
-    writeFileSync(join(cwd, "name-200.txt"), "");
-    const next = await request("/api/conversations/c/search?mode=name&q=name-");
+    const next = await search(paths(201));
     expect(await next.json()).toEqual({ mode: "name", query: "name-", matches, truncated: true });
   });
 
