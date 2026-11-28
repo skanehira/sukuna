@@ -315,6 +315,22 @@ export function useProjectSection(
           label: "プロジェクトのパス",
           target: "Git リポジトリ",
           verb: "登録する",
+          complete: {
+            verb: "パスを補う",
+            description: "濃い字は Git のリポジトリ",
+            async query(text) {
+              const { candidates, truncated, note } = await api.pathCandidates(text);
+              return {
+                candidates: candidates.map(({ name, text, repository }) => ({
+                  text,
+                  label: `${name}/`,
+                  strong: repository,
+                })),
+                truncated,
+                note,
+              };
+            },
+          },
           async submit(path) {
             const promptId = controller.snapshot().promptId;
             const result = await api.register(path);

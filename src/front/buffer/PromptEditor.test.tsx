@@ -8,6 +8,7 @@ import { Frame } from "./Frame";
 import { Buffer } from "./Buffer";
 import { BufferController, type PromptSpec } from "./controller";
 import { createBrowserController } from "../lib/browser";
+import type { CompletionResult } from "./completion";
 function mount(text: string, extra: Partial<PromptSpec> = {}) {
   const controller = new BufferController();
   const submit = vi.fn();
@@ -524,4 +525,205 @@ describe("入力欄の所有と StrictMode", () => {
       expect(close.mock.calls).toEqual([["送る本文"], ["新しく編集した本文"]]);
     },
   );
+});
+
+describe("Tab で問い合わせる候補", () => {
+  const candidate = (text: string, strong = false) => ({
+    text,
+    label: text.split("/").at(-2)! + "/",
+    strong,
+  });
+  const paths = (count: number) =>
+    Array.from({ length: count }, (_, index) =>
+      candidate(`/w/d${String(index).padStart(2, "0")}/`),
+    );
+  const labels = (count: number) =>
+    paths(count)
+      .map(({ label }) => label)
+      .join("");
+  const panel = () => screen.queryByLabelText("候補")?.textContent ?? null;
+  const strong = () =>
+    [...(screen.queryByLabelText("候補")?.querySelectorAll(".text-ink") ?? [])].map(
+      (node) => node.textContent,
+    );
+  function mountQuery(text: string, query: (text: string) => Promise<CompletionResult>) {
+    return mount(text, {
+      label: "プロジェクトのパス",
+      complete: { verb: "パスを補う", description: "濃い字は Git のリポジトリ", query },
+    });
+  }
+  function deferred() {
+    const calls: {
+      text: string;
+      resolve(result: CompletionResult): void;
+      reject(error: Error): void;
+    }[] = [];
+    const query = (text: string) =>
+      new Promise<CompletionResult>((resolve, reject) => calls.push({ text, resolve, reject }));
+    return { calls, query };
+  }
+  const tab = async (view: EditorView) => {
+    await act(async () => {
+      fireEvent.keyDown(view.contentDOM, { key: "Tab" });
+    });
+  };
+  const type = (view: EditorView, insert: string) =>
+    act(() => view.dispatch({ changes: { from: view.state.doc.length, insert } }));
+
+  it.each([
+    {
+      case: "1 件なら本文をその候補に替えて候補の段を出さない",
+      typed: "~/src/sh",
+      result: { candidates: [candidate("~/src/shop-api/", true)], truncated: false, note: null },
+      text: "~/src/shop-api/",
+      shown: null,
+      strong: [],
+    },
+    {
+      case: "2 件以上なら共通する先頭まで伸ばし、強調した候補を濃く並べて説明を添える",
+      typed: "~/src/sh",
+      result: {
+        candidates: [candidate("~/src/shop-api/", true), candidate("~/src/shop-web/")],
+        truncated: false,
+        note: null,
+      },
+      text: "~/src/shop-",
+      shown: "shop-api/shop-web/濃い字は Git のリポジトリ",
+      strong: ["shop-api/"],
+    },
+    {
+      case: "30 件を超える分は出さずに残りの件数を出す",
+      typed: "/w/",
+      result: { candidates: paths(31), truncated: false, note: null },
+      text: "/w/d",
+      shown: `${labels(30)}…ほか 1 件濃い字は Git のリポジトリ`,
+      strong: [],
+    },
+    {
+      case: "上限で切ったなら本文を伸ばさず、残りの件数に「以上」を付ける",
+      typed: "/w/",
+      result: { candidates: paths(31), truncated: true, note: null },
+      text: "/w/",
+      shown: `${labels(30)}…ほか 1 件以上濃い字は Git のリポジトリ`,
+      strong: [],
+    },
+    {
+      case: "0 件なら本文を変えずに案内を出す",
+      typed: "~/src/sh",
+      result: { candidates: [], truncated: false, note: "一致するディレクトリはありません" },
+      text: "~/src/sh",
+      shown: "一致するディレクトリはありません",
+      strong: [],
+    },
+  ])("$case", async ({ typed, result, text, shown, strong: expected }) => {
+    const query = vi.fn(async () => result);
+    const { view, controller } = mountQuery(typed, query);
+    await tab(view);
+    expect({
+      queried: query.mock.calls,
+      text: view.state.doc.toString(),
+      draft: controller.promptText(),
+      shown: panel(),
+      strong: strong(),
+    }).toEqual({ queried: [[typed]], text, draft: text, shown, strong: expected });
+  });
+
+  it("Tab 以外で本文が変わると候補の段を消して問い合わせ直し、補った後に続けて Tab を押すと補った本文で問い合わせ直す", async () => {
+    const results: Record<string, CompletionResult> = {
+      "~/src/sh": {
+        candidates: [candidate("~/src/shop-api/", true), candidate("~/src/shop-web/")],
+        truncated: false,
+        note: null,
+      },
+      "~/src/shop-a": {
+        candidates: [candidate("~/src/shop-api/", true)],
+        truncated: false,
+        note: null,
+      },
+      "~/src/shop-api/": {
+        candidates: [candidate("~/src/shop-api/docs/"), candidate("~/src/shop-api/src/")],
+        truncated: false,
+        note: null,
+      },
+    };
+    const query = vi.fn(async (text: string) => results[text]);
+    const { view } = mountQuery("~/src/sh", query);
+    await tab(view);
+    expect({ shown: panel(), cursor: view.state.selection.main.head }).toEqual({
+      shown: "shop-api/shop-web/濃い字は Git のリポジトリ",
+      cursor: "~/src/shop-".length,
+    });
+    type(view, "a");
+    expect(panel()).toBeNull();
+    await tab(view);
+    expect({
+      queried: query.mock.calls,
+      text: view.state.doc.toString(),
+      cursor: view.state.selection.main.head,
+    }).toEqual({
+      queried: [["~/src/sh"], ["~/src/shop-a"]],
+      text: "~/src/shop-api/",
+      cursor: "~/src/shop-api/".length,
+    });
+    await tab(view);
+    expect({ queried: query.mock.calls, shown: panel() }).toEqual({
+      queried: [["~/src/sh"], ["~/src/shop-a"], ["~/src/shop-api/"]],
+      shown: "docs/src/濃い字は Git のリポジトリ",
+    });
+  });
+
+  it("応答を待つあいだの Tab は問い合わせず、待つあいだに本文が変わった応答は出さない", async () => {
+    const { calls, query } = deferred();
+    const { view } = mountQuery("~/src/sh", query);
+    await tab(view);
+    await tab(view);
+    type(view, "o");
+    await act(async () =>
+      calls[0].resolve({
+        candidates: [candidate("~/src/shop-api/")],
+        truncated: false,
+        note: null,
+      }),
+    );
+    expect({ text: view.state.doc.toString(), shown: panel() }).toEqual({
+      text: "~/src/sho",
+      shown: null,
+    });
+    await tab(view);
+    await act(async () =>
+      calls[1].resolve({
+        candidates: [],
+        truncated: false,
+        note: "一致するディレクトリはありません",
+      }),
+    );
+    expect({ queried: calls.map(({ text }) => text), shown: panel() }).toEqual({
+      queried: ["~/src/sh", "~/src/sho"],
+      shown: "一致するディレクトリはありません",
+    });
+  });
+
+  it("応答を待つあいだに入力欄を閉じると、後から失敗が届いてもお知らせに出さない", async () => {
+    const { calls, query } = deferred();
+    const { view, controller, close } = mountQuery("~/src/sh", query);
+    await tab(view);
+    key(view, "Escape");
+    key(view, "Escape");
+    await act(async () => calls[0].reject(new Error("パスの候補を読み込めませんでした")));
+    expect({ closed: close.mock.calls, notice: controller.snapshot().notice }).toEqual({
+      closed: [["~/src/sh"]],
+      notice: null,
+    });
+  });
+
+  it("問い合わせが失敗したら本文を変えず、message をエラーのお知らせに出す", async () => {
+    const { view } = mountQuery("src/sh", async () => {
+      throw new Error("パスは / または ~/ で始まる形で指定してください。");
+    });
+    await tab(view);
+    expect({
+      text: view.state.doc.toString(),
+      alert: screen.getByRole("alert").textContent,
+    }).toEqual({ text: "src/sh", alert: "パスは / または ~/ で始まる形で指定してください。" });
+  });
 });

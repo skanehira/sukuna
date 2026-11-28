@@ -18,6 +18,7 @@ import type { LineInfo, OpenTarget } from "./line";
 import { menuAt } from "./menu";
 import { findSeqLine } from "./seq-index";
 import type { ClipboardPort } from "./clipboard";
+import type { CompletionResult } from "./completion";
 
 export function windowId(side: string): string {
   return side === "list" || side === "table" ? "main" : side;
@@ -32,6 +33,11 @@ export type PromptSpec = {
   scope?: string;
   draftBinding?: { kind: "message" } | { kind: "queue"; itemId: string };
   candidates?: string[];
+  complete?: {
+    verb: string;
+    description: string;
+    query(text: string): Promise<CompletionResult>;
+  };
   commands?: { name: string; description: string }[];
   unsent?: string;
   allowChange?(text: string, edits: ChangeDesc): boolean;

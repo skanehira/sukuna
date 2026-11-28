@@ -6,6 +6,12 @@ import { EditorView, drawSelection } from "@codemirror/view";
 import { defaultKeymap } from "@codemirror/commands";
 import { keymap } from "@codemirror/view";
 import { getCM, vim, Vim } from "@replit/codemirror-vim";
+import {
+  completeText,
+  completionPanel,
+  createCompletionGate,
+  type CompletionPanel,
+} from "./completion";
 import { promptCloseHint, type BufferController, type PromptSpec } from "./controller";
 import { applyVim, vimMode } from "./keymap/apply-vim";
 import { eventKey } from "./keymap/notation";
@@ -21,6 +27,7 @@ export function PromptEditor({
   const host = useRef<HTMLDivElement | null>(null);
   const [mode, setMode] = useState("INSERT");
   const [candidate, setCandidate] = useState<string | null>(null);
+  const [panel, setPanel] = useState<CompletionPanel | null>(null);
   const initial = useRef(spec);
   const [query, setQuery] = useState(() => controller.promptText());
   const commands = spec.commands?.filter((command) => command.name.startsWith(query.trimEnd()));
@@ -36,6 +43,35 @@ export function PromptEditor({
     let submitting = false;
     let externalChange = false;
     let completionCandidates: string[] = [];
+    const gate = createCompletionGate();
+    const replaceText = (text: string) => {
+      changingCompletion = true;
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: text },
+        selection: { anchor: text.length },
+      });
+      changingCompletion = false;
+    };
+    const queryCompletion = (complete: NonNullable<PromptSpec["complete"]>) => {
+      const ticket = gate.start();
+      if (!ticket) return;
+      const text = view.state.doc.toString();
+      complete.query(text).then(
+        (result) => {
+          if (!gate.finish(ticket)) return;
+          const next = completeText(text, result);
+          if (next !== text) replaceText(next);
+          setPanel(completionPanel(result));
+        },
+        (error: unknown) => {
+          if (!gate.finish(ticket)) return;
+          controller.notify(
+            error instanceof Error ? error.message : "候補を読み込めませんでした",
+            "error",
+          );
+        },
+      );
+    };
     const view = new EditorView({
       parent: host.current,
       state: EditorState.create({
@@ -71,6 +107,8 @@ export function PromptEditor({
                 cycling = false;
                 index = -1;
                 setCandidate(null);
+                gate.cancel();
+                setPanel(null);
               }
             }
           }),
@@ -124,6 +162,9 @@ export function PromptEditor({
             submitting = false;
           });
         }
+      } else if (token === "<Tab>" && spec.complete) {
+        consumed = true;
+        queryCompletion(spec.complete);
       } else if (token === "<Tab>") {
         consumed = true;
         const text = view.state.doc.toString();
@@ -177,6 +218,7 @@ export function PromptEditor({
     view.dispatch({ selection: { anchor: view.state.doc.length } });
     controller.focus("prompt");
     return () => {
+      gate.cancel();
       removeUpdate();
       removeFocus();
       removeKeys();
@@ -227,6 +269,21 @@ export function PromptEditor({
       {completing && spec.commands?.length === 0 ? (
         <div className="px-3 pt-2 text-[13px] text-muted">最初の指示を送ると候補が出ます</div>
       ) : null}
+      {panel?.kind === "note" ? (
+        <div aria-label="候補" className="px-3 pt-2 text-[13px] text-muted">
+          {panel.text}
+        </div>
+      ) : panel ? (
+        <div aria-label="候補" className="flex flex-wrap gap-x-3 px-3 pt-2 text-[13px]">
+          {panel.shown.map(({ text, label, strong }) => (
+            <span key={text} className={`font-mono ${strong ? "text-ink" : "text-muted"}`}>
+              {label}
+            </span>
+          ))}
+          {panel.more ? <span className="text-muted">{panel.more}</span> : null}
+          <span className="text-muted">{spec.complete?.description}</span>
+        </div>
+      ) : null}
       <div ref={host} />
       {spec.unsent ? (
         <div className="px-3 pb-2 text-[13px] text-wait">未送信: {spec.unsent}</div>
@@ -235,6 +292,7 @@ export function PromptEditor({
         {mode === "INSERT" || mode === "REPLACE"
           ? `Esc Normal へ (${spec.verb}のは Normal から)`
           : `Enter ${spec.verb}　${spec.interrupt ? "Alt+Enter AI を止めてすぐ送る　" : ""}Esc ${promptCloseHint(spec)}`}
+        {spec.complete ? `　Tab ${spec.complete.verb}` : null}
         {spec.images ? (
           <span className="ml-4 text-accent">画像 {spec.images} 件 (送信時に一緒に送る)</span>
         ) : null}
