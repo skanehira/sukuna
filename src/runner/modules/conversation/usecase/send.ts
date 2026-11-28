@@ -82,35 +82,46 @@ export async function sendUnlocked(
     }
     const queue = this.store.queue(id);
     const queuedId = this.options.id();
-    this.record(
-      id,
-      acceptance?.events ?? [],
-      () => {
-        const refused = acceptance?.check?.();
-        if (refused) throw new InputRefused(refused);
-        acceptance?.before?.();
-        this.store.enqueue({
-          id: queuedId,
-          conversationId: id,
-          text: input.text,
-          images: input.images,
-          ...(input.timelineComments === undefined
-            ? {}
-            : { timelineComments: input.timelineComments }),
-          ...(input.timelineAnchors === undefined
-            ? {}
-            : { timelineAnchors: input.timelineAnchors }),
-          position: (queue.at(-1)?.position ?? 0) + 1,
-          clientId: input.clientId ?? null,
-          createdAt: this.options.clock.now(),
-        });
-      },
-      undefined,
-      () => {
-        const refused = acceptance?.checkBeforeCommit?.();
-        if (refused) throw new InputRefused(refused);
-      },
-    );
+    const prepared = this.runOptions.prepareQueue(c, input, () => Boolean(acceptance?.check?.()), [
+      queuedId,
+    ]);
+    if (prepared.isErr()) return err(prepared.error);
+    try {
+      this.record(
+        id,
+        acceptance?.events ?? [],
+        () => {
+          const refused = acceptance?.check?.();
+          if (refused) throw new InputRefused(refused);
+          acceptance?.before?.();
+          prepared.value.before?.();
+          this.store.enqueue({
+            id: queuedId,
+            conversationId: id,
+            text: input.text,
+            images: input.images,
+            ...(input.timelineComments === undefined
+              ? {}
+              : { timelineComments: input.timelineComments }),
+            ...(input.timelineAnchors === undefined
+              ? {}
+              : { timelineAnchors: input.timelineAnchors }),
+            position: (queue.at(-1)?.position ?? 0) + 1,
+            clientId: input.clientId ?? null,
+            createdAt: this.options.clock.now(),
+          });
+        },
+        undefined,
+        () => {
+          const refused = acceptance?.checkBeforeCommit?.();
+          if (refused) throw new InputRefused(refused);
+        },
+      );
+    } catch (error) {
+      prepared.value.rejected?.();
+      throw error;
+    }
+    prepared.value.committed?.();
     this.partsChanged(id, input.restoreDraft ? ["queue", "draft"] : ["queue"]);
     accepted?.(true);
     return ok({ result: "queued", queuedId });

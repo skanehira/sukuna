@@ -132,34 +132,44 @@ async function sendInstructions(
     verify();
     current = runtime.store.get(id)!;
     if (activeStates.includes(current.runState)) {
-      runtime.record(
-        id,
-        [],
-        () => {
-          verify();
-          const now = runtime.options.clock.now();
-          const last = runtime.store.queue(id).at(-1)?.position ?? 0;
-          for (const [index, item] of messages.entries()) {
-            markSent(item, now);
-            runtime.store.enqueue({
-              id: runtime.options.id(),
-              conversationId: id,
-              stockItemId: item.id,
-              text: formatStockItem(item),
-              images: [],
-              position: last + index + 1,
-              clientId: null,
-              createdAt: now,
-            });
-          }
-          receipt?.instructions(
-            { count: messages.length, delivery: "queued" },
-            runtime.store.get(id)?.closedAt ?? null,
-          );
-        },
-        undefined,
-        verify,
-      );
+      const queuedIds = messages.map(() => runtime.options.id());
+      const prepared = runtime.runOptions.prepareQueue(current, input, cancelled, queuedIds);
+      if (prepared.isErr()) return err(prepared.error);
+      try {
+        runtime.record(
+          id,
+          [],
+          () => {
+            verify();
+            prepared.value.before?.();
+            const now = runtime.options.clock.now();
+            const last = runtime.store.queue(id).at(-1)?.position ?? 0;
+            for (const [index, item] of messages.entries()) {
+              markSent(item, now);
+              runtime.store.enqueue({
+                id: queuedIds[index]!,
+                conversationId: id,
+                stockItemId: item.id,
+                text: formatStockItem(item),
+                images: [],
+                position: last + index + 1,
+                clientId: null,
+                createdAt: now,
+              });
+            }
+            receipt?.instructions(
+              { count: messages.length, delivery: "queued" },
+              runtime.store.get(id)?.closedAt ?? null,
+            );
+          },
+          undefined,
+          verify,
+        );
+      } catch (error) {
+        prepared.value.rejected?.();
+        throw error;
+      }
+      prepared.value.committed?.();
       runtime.partsChanged(id, ["queue", "stock"]);
       return ok("queued");
     }

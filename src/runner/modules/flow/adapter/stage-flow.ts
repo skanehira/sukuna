@@ -10,7 +10,8 @@ import { onConversationSignal } from "../usecase/on-conversation-signal";
 import { createStageReports } from "../usecase/on-report";
 import { recoverAfterRestart } from "../usecase/recover-after-restart";
 import { createStageWorktreeRetry } from "../usecase/retry-stage-worktree";
-import { implementationOrigin } from "../domain/impl-history";
+import { createImplementationInstructionDelivery } from "../usecase/impl-instruction";
+import { implementationOrigin, pendingImplementationFix } from "../domain/impl-history";
 import { hasFlowHistory } from "../domain/evaluate";
 import type { IssueNotice, IssueNoticePort } from "../domain/ports";
 import { clearDependencyWithin } from "../usecase/dependency-withdrawn";
@@ -160,7 +161,9 @@ export function createStageFlow(
       if (
         c.kind === "impl" &&
         c.worktreeId &&
+        issue.state !== "done" &&
         implementationOrigin(record.events) &&
+        !pendingImplementationFix(record.events) &&
         !implementation.activeTree(c.projectId, c.id)
       )
         return err({
@@ -202,8 +205,19 @@ export function createStageFlow(
       ? { code: "conflict", message: "この issue の別の段階で AI が動いています。" }
       : null;
   });
+  const instruction = createImplementationInstructionDelivery(
+    repo,
+    runtime,
+    implementation,
+    notices,
+    schedule,
+  );
+  const retryWorktree = createStageWorktreeRetry(repo, runtime, design, notices, implementation);
+  runtime.runOptions.registerQueuePreparer(instruction.queue);
   runtime.runOptions.registerDeliveryPreparer(
-    createStageWorktreeRetry(repo, runtime, design, notices, implementation),
+    async (c, input, by, cancelled) =>
+      (await instruction.prepare(c, input, by, cancelled)) ??
+      retryWorktree(c, input, by, cancelled),
   );
   const unsubscribe = runtime.subscribe((signal) =>
     onConversationSignal(runtime, repo, notices, schedule, signal),

@@ -10,6 +10,7 @@ import type { PreparedDelivery } from "../../conversation/usecase/run-options";
 import type { StageDesign, StageRepository } from "../domain/stage-ports";
 import type { IssueNoticePort } from "../domain/ports";
 import { firstInstruction } from "../domain/instructions";
+import { implementationFixInstruction, pendingImplementationFix } from "../domain/impl-history";
 import { appendImplementationStage, moveStateWithin } from "./move-state";
 import type { createImplementationStart } from "./start-implementation";
 
@@ -41,6 +42,7 @@ export function createStageWorktreeRetry(
       return ok<PreparedDelivery>({ input });
 
     if (cancelled()) return err(unavailableRunnerError);
+    const fix = c.kind === "impl" ? pendingImplementationFix(record.events) : undefined;
     const projectRun = runtime.store.reserveProjectRun(c.projectId);
     let reserved = false;
     try {
@@ -51,7 +53,9 @@ export function createStageWorktreeRetry(
           const tree = result.value;
           return ok({
             tree,
-            first: await implementation.instruction(id, tree),
+            first: fix
+              ? implementationFixInstruction(fix)
+              : await implementation.instruction(id, tree),
             attach: (_reservation: Parameters<StageDesign["attachWorkspace"]>[3]) =>
               implementation.attach(c.id, tree)
                 ? ok(undefined)
@@ -82,7 +86,7 @@ export function createStageWorktreeRetry(
       const changed =
         by === "resume"
           ? { ...input, origin: "flow" as const, text: first }
-          : { ...input, origin: "developer" as const };
+          : { ...input, origin: fix ? input.origin : ("developer" as const) };
       let blockedByDependency = false;
       let latestNotice: Parameters<IssueNoticePort["publish"]>[0] | undefined;
       reserved = true;

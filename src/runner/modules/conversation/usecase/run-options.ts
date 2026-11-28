@@ -18,6 +18,12 @@ type DeliveryPreparer = (
   by: "message" | "resume",
   cancelled?: () => boolean,
 ) => Promise<Result<PreparedDelivery, DeliveryError>>;
+type QueuePreparer = (
+  conversation: Conversation,
+  input: SendInput,
+  cancelled: () => boolean,
+  queuedIds: readonly string[],
+) => Result<PreparedDelivery, DeliveryError>;
 
 export function prepareAcceptance(prepared: PreparedDelivery, acceptance?: InputAcceptance) {
   if (!prepared.before) return acceptance;
@@ -35,6 +41,7 @@ export function prepareAcceptance(prepared: PreparedDelivery, acceptance?: Input
 export class RunOptions {
   private startGuard?: (conversation: Conversation, checkOwner: boolean) => OperationError | null;
   private preparer?: DeliveryPreparer;
+  private queuePreparer?: QueuePreparer;
   private providers: ((conversation: Conversation) => string)[] = [];
   private directories: ((conversation: Conversation) => string[])[] = [];
   private guards: ((
@@ -63,6 +70,20 @@ export class RunOptions {
   }
   registerDeliveryPreparer(preparer: DeliveryPreparer): void {
     this.preparer = preparer;
+  }
+  registerQueuePreparer(preparer: QueuePreparer): void {
+    this.queuePreparer = preparer;
+  }
+  prepareQueue(
+    conversation: Conversation,
+    input: SendInput,
+    cancelled: () => boolean,
+    queuedIds: readonly string[],
+  ) {
+    return (
+      this.queuePreparer?.(conversation, input, cancelled, queuedIds) ??
+      ok<PreparedDelivery>({ input })
+    );
   }
   registerStartGuard(
     guard: (conversation: Conversation, checkOwner: boolean) => OperationError | null,

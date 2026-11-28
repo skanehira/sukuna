@@ -26,8 +26,48 @@ export function implementationState(record: StageSnapshot) {
 }
 
 export function implementationReady(events: readonly FlowEvent[]) {
-  const origin = implementationOrigin(events)?.seq ?? 0;
+  const origin = implementationReviewBoundary(events);
   return events.findLast((event) => event.seq > origin && event.type === "ready_for_merge");
+}
+
+function implementationReviewBoundary(events: readonly FlowEvent[]) {
+  return Math.max(
+    implementationOrigin(events)?.seq ?? 0,
+    events.findLast((event) => stateChange(event)?.cause === "impl_instruction")?.seq ?? 0,
+  );
+}
+
+export function implementationRevision(events: readonly FlowEvent[], conversationId: string) {
+  const origin = implementationOrigin(events)?.seq ?? 0;
+  const event = events.findLast(
+    ({ type, seq }) => type === "implementation_revision_requested" && seq > origin,
+  );
+  const revision = event?.payload as
+    | {
+        conversationId: string;
+        afterTurnSeq: number;
+        queuedIds: string[];
+      }
+    | undefined;
+  return revision?.conversationId === conversationId ? revision : undefined;
+}
+
+export function pendingImplementationFix(events: readonly FlowEvent[]) {
+  const origin = implementationOrigin(events);
+  if (!origin || stateChange(origin)?.cause !== "reopened_for_fix") return;
+  const reopened = events.findLast(
+    (event) => event.type === "reopened_for_fix" && event.seq > origin.seq,
+  );
+  if (!reopened || events.some((event) => event.type === "ai_started" && event.seq > reopened.seq))
+    return;
+  const url = (reopened.payload as { previousPrUrl?: string | null }).previousPrUrl;
+  return { seq: reopened.seq, previousPrUrl: url ?? null };
+}
+
+export function implementationFixInstruction({ previousPrUrl }: { previousPrUrl: string | null }) {
+  return previousPrUrl
+    ? `この issue の PR ${previousPrUrl} は merge 済みです。既定ブランチの最新から作った worktree で、新しい PR を作って次の点を直してください`
+    : "この issue の変更は既定ブランチに入っています。既定ブランチの最新から作った worktree で、次の点を直してください";
 }
 
 export function implementationPrUrl(value: unknown): string | null {
@@ -85,7 +125,7 @@ export function readyDetails(event: FlowEvent | undefined) {
 export function implementationApproval(events: readonly FlowEvent[], ready: FlowEvent | undefined) {
   const details = readyDetails(ready);
   if (!ready || !details) return;
-  const attempt = implementationOrigin(events)?.seq ?? 0;
+  const attempt = implementationReviewBoundary(events);
   const approved =
     details.approvedReadySeq === undefined
       ? ready
