@@ -366,6 +366,11 @@ SDK のメッセージは、まず Port の出力 (「Agent SDK を包む Port�
 - `tool_result` の `content` が配列で、`type` が `image` のブロックを含むときは、画像を記録の文字に入れない。文字のブロック (`type` が `text`) の `text` だけを改行でつないで `content` にする。画像のブロックを含まない配列は、配列を JSON の文字にしたまま `content` にする
 - 画像のブロックのうち、`source.type` が `base64` で、`media_type` が `image/png` / `image/jpeg` / `image/gif` / `image/webp` のものを `AgentOutput` の `images` に入れる。ほかの画像のブロック (`source.type` が `url` など) は `omittedImages` に数える
 - ランナーは、`tool_result` を記録する前に、`images` を 1 件ずつ画像のファイルに書き (「書くプロセスの分担」)、書けた画像の ID を記録の `images` に入れる。デコードした大きさが 5 MB を超える画像、21 枚目以降の画像、書き込みに失敗した画像は書かず、`omitted_images` に足す。書き込みの失敗はログに残し、番は止めない
+- 同じ `sdk_uuid` の `tool_result` をすでに記録していれば、画像を書かない。記録されない画像のファイルを残さないためである
+
+決定: 画像のブロックを含まない配列の結果は、配列を JSON の文字にしたまま残す
+理由: アプリのツールの結果 (例: `issue_create` が返す番号) は、画面がこの文字を読んで開く先を決めている。文字の形を変えると、その読み方も変える必要があり、画像の表示と関係のない変更が広がる
+採らなかった案: 文字だけの配列も、文字のブロックをつないだ文にそろえる (要約の行は読みやすくなるが、ツールの行から開く先の決め方を作り直すことになる)
 - `diff` の `hunks` は合わせて 5,000 行までを保存する。`create` の `content` も 5,000 行までとする。超えた分は切り、`truncated: true` を入れる
 - `tool_use` の `input` は、文字の値ごとに 16 KiB までとし、超えた分は切る
 - `turn_end` の `usage` と `cost_usd` は、SDK の値をそのまま写す。1 回の番の値か累計かの扱いは `features/project-settings.md`「利用量」が決める

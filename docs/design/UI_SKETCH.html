@@ -639,7 +639,7 @@ function PromptEditor({ label, initial, working, stocking, plain, onSubmit, onCl
     <div onKeyDownCapture={onKey}>
       {cands.length > 0 && <div className="text-[13px] font-mono mb-1">{cands.map((c, n) => <span key={c} className={`mr-4 ${n === 0 ? "text-accent" : "text-muted"}`}>{c}</span>)}<span className="text-muted">Tab で選ぶ</span></div>}
       <div ref={host} className="rounded-md bg-surface px-1" />
-      {images > 0 && <div aria-label="貼った画像" className="mt-1 flex flex-wrap gap-2">{Array.from({ length: images }, (_, n) => <div key={n} className="relative h-[80px] w-[120px] overflow-hidden rounded border border-line bg-surface"><span className="absolute left-0 top-0 rounded-br bg-raised px-1 font-mono text-[11px]">{n + 1}</span></div>)}</div>}
+      {images > 0 && <div aria-label="貼った画像" className="mt-1 flex flex-wrap gap-2">{Array.from({ length: images }, (_, n) => <div key={n} className="relative h-[80px] w-[142px] overflow-hidden rounded border border-line bg-surface"><span className="absolute left-0 top-0 rounded-br bg-raised px-1 font-mono text-[11px]">{n + 1}</span></div>)}</div>}
       <div className="text-[12px] text-muted mt-1 flex flex-wrap gap-x-4 items-center">
         {pmode === "INSERT" ? <Hint items={[["Esc", "Normal へ (" + verb.split(" ")[0] + "のは Normal から)"], ...(!plain ? [["Ctrl+v", "貼り付け"]] : [])]} /> : <Hint items={[["Enter", verb], ...(working && !stocking ? [["Alt+Enter", "AI を止めてすぐ送る"]] : []), ["Esc", "閉じる (書きかけは残る)"]]} />}
         {!plain && <Hint items={[["/", "スキル"]]} />}

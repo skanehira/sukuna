@@ -420,7 +420,7 @@ issue の状態の移り変わりは `features/issue-flow.md` の表が正本で
 - rg の JSON 出力では `--max-columns` が効かない。中身の検索の本文は、サーバーで先頭の 500 文字に切る。列番号は元の行の最初の一致を指す
 - CodeMirror の文字の位置は UTF-16 コード単位で数え、サロゲートペアは 2 単位になる。中身の検索の列も同じ単位で返す ([公式ガイド](https://codemirror.net/docs/guide/#data-structures))
 - Vite+ のテストのファイルキャッシュに、`import.meta.glob` が集めたマイグレーションの一覧が残ることがある。SQL ファイルを追加したあとに一覧が更新されなければ、`vp test --clearCache` を実行してからテストを流す
-- `http://macstudio:<port>` は安全なオリジンではない。Service Worker、通知の許可、Web Push の購読、クリップボードの読み取り (Clipboard API の `read`) は使えない。使えるかは実行時に判定し、使えないときは通知の購読を試みない (PoC `web-push-tailscale`)
+- `http://macstudio:<port>` は安全なオリジンではない。Service Worker、通知の許可、Web Push の購読、クリップボードの読み取り (Clipboard API の `read`) は使えない。使えるかは実行時に判定し、使えないときは通知の購読を試みない (PoC `web-push-tailscale`)。クリップボードの扱いは `features/conversation.md`「貼り付けた画像」に従う
 - 通知の取り下げは Web Push の仕組みに無い。取り下げ用の push を送り、Service Worker が同じ `tag` の通知を探して閉じる。push を受けて通知を 1 件も出さないと、Chrome が代わりの通知を出すことがある
 - Agent SDK の停止は、入力を流れとして渡した実行でだけ使える。バックグラウンドへ移ったコマンドは停止では止まらず、終わると AI の番が自動で始まる。停止の操作では、動いているバックグラウンドのタスクも止める (PoC `agent-sdk-interrupt`)
 - 作業中に優先度を付けずに送った指示は、実行中のツールが終わった時点で同じ番に入る。届く前の指示は、ランナーが保持し、番の終わりを受けてから 1 通につないで送る

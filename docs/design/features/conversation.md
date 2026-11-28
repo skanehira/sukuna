@@ -12,7 +12,7 @@
 **流れ**:
 
 1. プロジェクトを選んで会話を始める。既定はプロジェクトのディレクトリで、worktree を作るか選ぶこともできる
-2. i で入力欄を開き、指示を書く。/ でスキルの候補を出す。画像は Ctrl+v で貼り、入力欄に縮小で並べて確かめ、要らない画像は外す
+2. i で入力欄を開き、指示を書く。/ でスキルの候補を出す。画像は貼り付けると入力欄に縮小で並び、確かめて要らない画像を外せる。Mac の Ctrl+v で貼れるのは、ページを HTTPS などの安全な形で開いたときだけで、ふだんは Cmd+V で貼る
 3. 送ると、AI の発言・ツールの実行・差分が、届いた順に会話に並ぶ。ツールの結果に含まれる画像 (スクリーンショットなど) は、文字ではなく画像で出る
 4. AI の選択式の質問には、選択肢を選ぶか文章を書き、まとめて 1 通で送る
 5. 応答が終わると、会話は判断待ちか指示待ちになる
@@ -76,8 +76,8 @@
 | 入力欄 (Normal) で Alt+Enter | AI が作業中なら割り込み、お知らせ「AI を止めて、すぐに送りました」を出す。届く前の指示を前に付けたときは「AI を止めて、届く前の指示 n 件と一緒にすぐに送りました」とする。作業中でなければ Enter と同じに送る |
 | 入力欄で Esc か Ctrl+[ | Insert なら Normal へ移る。Normal なら入力欄を閉じ、書きかけを残す。書きかけがあれば、お知らせ「書きかけを残しました。i で続きを書けます」を出す |
 | 入力欄の先頭で / を打つ | スキルの候補を、打った文字に前方一致で絞って入力欄の上に出す。Tab で先頭の候補を入れる |
-| 入力欄 (Insert) で Ctrl+v | クリップボードの画像を上げ、入力欄に縮小を番号付きで並べ、下の段に「画像 n 件 (送信時に一緒に送る)」と出す。クリップボードに画像が無く文字があれば、カーソルの位置に文字を入れる (「貼り付けた画像」) |
-| 入力欄でブラウザの貼り付け (Mac の Cmd+V など) | Ctrl+v と同じに、画像を上げて縮小を並べる |
+| 入力欄 (Insert) で Ctrl+v | クリップボードの画像を上げ、入力欄に縮小を番号付きで並べ、下の段に「画像 n 件 (送信時に一緒に送る)」と出す。クリップボードに画像が無く文字があれば、カーソルの位置に文字を入れる。macOS で `http://macstudio:<port>` を開いているときは貼れず、Cmd+V を案内する (「貼り付けた画像」) |
+| 入力欄でブラウザの貼り付け (macOS の Cmd+V など) | Ctrl+v と同じに、画像を上げて縮小を並べる |
 | コマンド :images delete <番号> | その番号の画像を外し、縮小を詰めて番号を振り直す。お知らせ「画像 <番号> を外しました」を出す |
 | コマンド :images clear | 貼った画像をすべて外す |
 | ツールの結果の画像の行で Enter | その画像を、元の大きさでブラウザの新しいタブに開く |
@@ -132,7 +132,7 @@
 | 止まったこと | 区切りの行 (状態の表の「会話の末尾に出す行」) |
 | 届く前の指示 | 会話の末尾に「届く前の指示: <1 行目>」の行を書いた順に並べる。最後に「届く前の指示を送る」の行 (AI が作業中でないときだけ) |
 
-- ツールの結果の要約は、読み取りは行数、コマンドは終了コード、編集は「追加 n 行、削除 m 行」とする。画像を含む結果は、結果の文の 1 行目とし、文が無ければ「画像 n 件」とする
+- ツールの結果の要約は、読み取りは行数、コマンドは終了コード、編集は「追加 n 行、削除 m 行」とする。画像を含む結果は、結果の文の 1 行目とし、文が無ければ「画像 n 件」(n は保存できた画像の数) とする
 - 番の途中の作業中の表示は、バッファの行ではなく、主のウィンドウの下端に出す。工程・工程の経過・最後にしたことの求め方は `features/work-monitor.md`「作業の状況の求め方」が正本である
 - 書きかけの区画、質問の区画、届く前の指示の行は、状態が変わるたびに書き換える。書き換えは会話の末尾の区画に限る (`features/buffer-ui.md`「末尾の区画」)
 - 末尾の区画は、書きかけ (`reply`)、質問 (`question`)、届く前の指示 (`queue`) の順に並べる
@@ -245,33 +245,45 @@ issue の会話 (`kind` が `triage` / `design` / `impl`) へ開発者の指示�
 
 #### 貼り付けた画像
 
-- 入力欄の Insert で Ctrl+v を押すと、画面はブラウザのクリップボードの読み取り (Clipboard API の `read`) で中身を読む。Normal とビジュアルの Ctrl+v は、Vim の矩形選択のままにする
-- クリップボードに画像があれば、画像だけをすべて上げる。画像が無く文字があれば、文字をカーソルの位置に入れる
-- ブラウザの貼り付け (Mac の Cmd+V、Windows と Linux の Ctrl+Shift+V など) で届いた画像も、同じに上げる
-- 上げるときは `POST /api/conversations/:id/images` を使い、画面のサーバーがファイルに保存する。返った ID を書きかけの画像の末尾に足し、書きかけを保存する
+画像は、ブラウザの貼り付け (macOS の Cmd+V、Windows と Linux の Ctrl+V) と、macOS の Ctrl+v で入力欄に貼る。Ctrl+v は、入力欄が Insert のときに次の表のとおりに働く。
+
+| 端末とページ | Insert で Ctrl+v を押したとき |
+| --- | --- |
+| Windows、Linux | アプリは Ctrl+v を受け取らず、ブラウザに渡す。ブラウザの貼り付けとして届くので、画像も文字も貼れる |
+| macOS で、安全なオリジンのページ (HTTPS で開いたとき、Chrome の例外指定をしたとき) | アプリが Ctrl+v を受け取り、ブラウザのクリップボードの読み取り (Clipboard API の `read`) で中身を読む |
+| macOS で、安全なオリジンでないページ (`http://macstudio:<port>` で開いたとき) | ブラウザはクリップボードを読ませない (DESIGN.md「既知の制約」)。アプリが Ctrl+v を受け取り、お知らせ「このページではクリップボードを読めません。Cmd+V で貼り付けてください」を error で出す |
+
+決定: macOS の Ctrl+v だけをアプリが受け取り、ほかの端末ではブラウザに任せる
+理由: Windows と Linux では Ctrl+V がブラウザの貼り付けで、許可を求めずに画像も文字も届く。アプリがクリップボードを読むと、読み取りの許可を断った開発者は Ctrl+V で文字も貼れなくなる。macOS の Ctrl+v はブラウザの貼り付けにならないので、アプリが読むしかない
+採らなかった案: どの端末でもアプリがクリップボードを読む (Windows と Linux で許可を求めることになり、断ると貼れなくなる)
+
+- 端末が macOS かは、ブラウザが返すプラットフォームの名前で決める。安全なオリジンかは、ブラウザの判定 (`isSecureContext`) で決める
+- Normal とビジュアルの Ctrl+v は、Vim の矩形選択のままにする
+- macOS でクリップボードを読めたとき、画像があれば画像だけをすべて上げ、文字は入れない。画像が無く文字があれば、文字をカーソルの位置に入れる
+- 開発者がクリップボードの読み取りを許可しなければ、お知らせ「クリップボードを読めませんでした。ブラウザで、このページにクリップボードの読み取りを許可してください」を error で出す
+- クリップボードに画像も文字も無ければ、お知らせ「クリップボードに貼り付けられるものがありません」を出す
+- ブラウザの貼り付けで届いた画像も、Ctrl+v で読んだ画像と同じに上げる
+- 上げるときは `POST /api/conversations/:id/images` を使い、画面のサーバーがファイルに保存する。返った ID を、開いている入力欄の画像の末尾に足す。会話の指示の入力欄では、続けて書きかけを保存する
 - 画像を受け付けない入力欄 (worktree の名前の入力など) では、クリップボードの文字だけを入れる。画像しか無ければ、お知らせ「この入力欄には画像を添えられません」を出す
 - 書きかけと届く前の指示には、画像の ID の配列を持つ (DESIGN.md「データスキーマ」)
 - 指示を届けるとき、ランナーは画像を読み、指示の文と同じ 1 通に付けて AI に送る (BR-008)
 
-ページが安全なオリジンでないとき (`http://macstudio:<port>` で開いたとき。DESIGN.md「既知の制約」)、ブラウザはクリップボードの読み取りを使わせない。このときの Ctrl+v は次のように扱う。
-
-| 端末 | Ctrl+v で起きること |
-| --- | --- |
-| Windows、Linux | アプリは Ctrl+v を受け取らず、ブラウザに渡す。ブラウザの貼り付けとして届くので、画像も文字も貼れる |
-| macOS | ブラウザは Ctrl+v で貼り付けない。アプリが Ctrl+v を受け取り、お知らせ「このページではクリップボードを読めません。Cmd+V で貼り付けてください」を error で出す |
-
-- 端末が macOS かは、ブラウザが返すプラットフォームの名前で決める
-- 安全なオリジンでも、開発者がクリップボードの読み取りを許可しなければ、お知らせ「クリップボードを読めませんでした。ブラウザで、このページにクリップボードの読み取りを許可してください」を error で出す
-- クリップボードに画像も文字も無ければ、お知らせ「クリップボードに貼り付けられるものがありません」を出す
-
 #### 入力欄で確かめて外す
 
-- 書きかけに画像があれば、入力欄に縮小を貼った順に並べ、左上に 1 から始まる番号を付ける。見た目は `features/buffer-ui.md`「入力欄」に従う
-- コマンド `:images delete <番号>` で、その番号の画像を書きかけから外す。残りの縮小は詰め、番号を振り直す
-- 番号が無いか、範囲の外なら、外さずにエラーのお知らせ「使い方: :images delete <番号> (1〜<n>)」を出す。画像が無いときは「外す画像がありません」とする
+- 開いている入力欄に画像があれば、縮小を貼った順に並べ、左上に 1 から始まる番号を付ける。見た目は `features/buffer-ui.md`「入力欄」に従う
+- コマンド `:images delete <番号>` で、その番号の画像を外す。残りの縮小は詰め、番号を振り直す
 - `:images clear` は、貼った画像をすべて外す
+- 2 つのコマンドは、開いている入力欄の画像に効く。対象は次の表のとおりである。画像を貼れる入力欄が開いていなければ、エラーのお知らせ「画像を貼れる入力欄を開いてから使ってください」を出す
+
+| 開いている入力欄 | 外す画像 | 外したことが残るとき |
+| --- | --- | --- |
+| 会話の指示の入力欄 | 書きかけの画像 | すぐに書きかけを保存する |
+| 届く前の指示を cc で直している入力欄 | 直している指示の画像 | 直した指示を送ったとき。閉じれば元の指示のまま残る |
+| 右のウィンドウのスレッドの入力欄 | そのスレッドの書きかけの画像 | すぐに書きかけを保存する |
+
+- 番号が無いか、範囲の外なら、外さずにエラーのお知らせ「使い方: :images delete <番号> (1〜<n>)」を出す。画像が無いときは「外す画像がありません」とする
 - 外しても、画像のファイルは消さない。ファイルは会話を削除するときに消える (`features/conversation-lifecycle.md`)
-- 画像を外す操作は、書きかけの添付の編集として扱う。保存と端末をまたぐ扱いは「書きかけの入力と未送信」、取り消した指示を戻した直後の制限は「指示を届ける規則」に従う
+- 書きかけの画像を外す操作は、書きかけの添付の編集として扱う。保存と端末をまたぐ扱いは「書きかけの入力と未送信」、取り消した指示を戻した直後の制限は「指示を届ける規則」に従う
 - 縮小を読み込めない画像 (復元のあとでファイルが無い画像) は、縮小の代わりに「見つかりません」の枠を出す。送ると、下の「見つからないとき」のとおりに断られる
 
 #### 見つからないとき
@@ -286,12 +298,17 @@ issue の会話 (`kind` が `triage` / `design` / `impl`) へ開発者の指示�
 
 ツールの結果に画像のブロックがあれば、ランナーは画像をファイルに保存し、記録には画像の ID だけを残す (BR-103)。記録の文字には 64 KiB の上限があり、画像を文字のまま残すと切れて表示できないためである。保存の規則と記録の形は `features/runtime.md`「Agent SDK のメッセージからの写し方」に従う。
 
-- 会話には、ツールの行と「⎿ <結果の要約>」の行の下に、画像ごとに「画像 <k> / <n> (Enter で元の大きさで開く)」の行を出し、その行の下に画像を出す
+- 会話には、ツールの行と「⎿ <結果の要約>」の行の下に、保存できた画像ごとに「画像 <k> / <n> (Enter で元の大きさで開く)」の行を出し、その行の下に画像を出す。<n> は保存できた画像の数である
 - 画像は、主のウィンドウの幅から 2rem を引いた幅と、高さ 16rem に収まるように、縦横比を保って縮める
 - 行で Enter を押すと、`GET /api/conversations/:id/images/:imageId` をブラウザの新しいタブで開く
 - 保存できなかった画像 (形式や大きさが対象外、書き込みの失敗) があれば、画像の行の後に「画像 <m> 件は保存できなかったため表示できません」の行を出す
 - 画像を読み込めない (復元のあとでファイルが無い) ときは、画像の代わりに「画像が見つかりません」を出す
 - 記録に画像の ID を持たないツールの結果は、画像を文字で残した結果も含め、記録の文字のまま出す
+- ツールの結果の画像は、会話を削除するまで残す。issue の会話は削除できないので、issue の会話の画像は消えずに溜まる
+
+決定: ツールの結果の画像を、自動では片づけない
+理由: 画像は会話の記録の一部で、閉じた会話や完了した issue を開き直したときにも見えてほしい。使うのは開発者 1 人で、スクリーンショット 1 枚は多くても数 MB である
+採らなかった案: issue の完了や取り下げのときに消す (後から記録を読み返したときに画像が見えなくなる)
 
 ### AI の実行の設定
 
@@ -476,14 +493,19 @@ DESIGN.md「API 一覧」のうち本機能の分を書く。エラーの形と�
 | 書きかけの保存 → drafts | ユースケース | `src/server/modules/conversation/usecase/save-draft.ts` |
 | 送る前の回答の保存 → pending_answers。回答の送信をランナーへ渡す | ユースケース | `src/server/modules/conversation/usecase/answers.ts` |
 | 画像の保存 | ユースケース | `src/server/modules/conversation/usecase/upload-image.ts` |
-| 画像の読み出し (`GET /api/conversations/:id/images/:imageId`) | ユースケース | `src/server/modules/conversation/usecase/read-image.ts` (新しく作る)。ルートは `adapter/http.ts` に足す |
-| ツールの結果の画像の取り出し (SDK の結果のブロックから) | インフラ | `src/runner/modules/conversation/adapter/sdk-message-mapping.ts`、`AgentOutput` の型は `domain/agent-port.ts` に足す |
-| ツールの結果の画像の保存と記録 → conversation_events (`tool_result`) | ユースケース | `src/runner/modules/conversation/usecase/runtime.ts` から、画像の書き込みを `domain/image-port.ts` の Port に足して呼ぶ。実物は `adapter/image-files.ts` に足す |
+| 画像の読み出し (`GET /api/conversations/:id/images/:imageId`) | ユースケース | `src/server/modules/conversation/usecase/read-image.ts` (新しく作る) |
+| 画像の読み出しのルート | API ハンドラ | `src/server/modules/conversation/adapter/http.ts` |
+| 画像のファイルを読む口 (`ImageStorage` に読み出しを足す) と、その実物 | ドメインの Port とインフラ | `src/server/modules/conversation/domain/ports.ts`、`src/server/modules/conversation/adapter/dependencies.ts` |
+| ツールの結果の画像の取り出し (SDK の結果のブロックから)、`AgentOutput` の型 | インフラとドメイン | `src/runner/modules/conversation/adapter/sdk-message-mapping.ts`、`src/runner/modules/conversation/domain/agent-port.ts` |
+| ツールの結果の画像の保存と記録 → conversation_events (`tool_result`) | ユースケース | `src/runner/modules/conversation/usecase/runtime.ts` |
+| 画像を書く口 (Port に書き込みを足す) と、その実物 | ドメインの Port とインフラ | `src/runner/modules/conversation/domain/image-port.ts`、`src/runner/modules/conversation/adapter/image-files.ts` |
 | `tool_result` の記録の形 | 共有 | `src/shared/events.ts` |
 | 偽物の台本の画像付きの結果 | インフラ | `src/shared/agent-script.ts`、`src/runner/modules/conversation/adapter/scripted-agent.ts` |
-| ツールの結果の画像の行と画像の表示 | UI | `src/front/lib/conversation/lines.ts`、画像の表示は `src/front/pages/conversation/tool-images.ts` (新しく作る。`src/front/pages/issue/pr-images.ts` と同じ作り) |
-| Ctrl+v のクリップボードの読み取り、入力欄の縮小の表示 | UI | `src/front/buffer/PromptEditor.tsx`、`src/front/buffer/clipboard.ts`、`src/front/buffer/controller.ts` |
-| `:images delete` | UI | `src/front/lib/conversation/session.ts` |
+| ツールの結果の画像の行 | UI | `src/front/lib/conversation/lines.ts` |
+| ツールの結果の画像の表示 (`src/front/pages/issue/pr-images.ts` と同じ作り) と、会話の画面への組み込み | UI | `src/front/pages/conversation/tool-images.ts` (新しく作る)、`src/front/pages/conversation/ConversationPage.tsx` |
+| 画像を新しいタブで開く口 (ほかの機能と同じ `openExternal` を会話のセッションに渡す) | UI | `src/front/main.tsx`、`src/front/lib/conversation/session.ts` |
+| Ctrl+v のクリップボードの読み取り、入力欄の縮小の表示 | UI | `src/front/buffer/PromptEditor.tsx`、`src/front/buffer/clipboard.ts`、`src/front/buffer/controller.ts`、`src/front/lib/browser.ts` |
+| `:images delete` と `:images clear` (開いている入力欄の画像に効かせる) | UI | `src/front/lib/conversation/session.ts` |
 | API のハンドラ | API ハンドラ | `src/server/modules/conversation/adapter/http.ts` |
 | テーブルの読み書き | インフラ (Repository) | `src/server/modules/conversation/adapter/repository.ts` |
 | 会話の実行 (開く、届ける、預かった指示を届ける、止める、再開する) → conversations、conversation_events、queued_instructions、stock_items (`sent_seq`) | ユースケース | `features/runtime.md`「実装の配置」の `src/runner/modules/conversation/usecase/*.ts` に足す (ファイルは同書が正本) |
@@ -551,7 +573,7 @@ DESIGN.md「API 一覧」のうち本機能の分を書く。エラーの形と�
 - （US-025）の単体のテストは、アプリが足した動き (Normal の Enter で送る、Normal の Esc で閉じて書きかけが残る) を確かめる。Vim の編集の操作そのものは確かめない
 - （US-032）の自動の再開は、ランナーの時計を偽物に差し替えて、戻る時刻の 1 分後に再開の文が届くことを確かめる
 - （US-040）の結合のテストは、`/dev-spec` で始まる文がそのまま偽物に届き、実行の設定がユーザー設定を読み込む形であることを確かめる
-- Ctrl+v の E2E は、ブラウザにクリップボードの読み取りを許可し、画像をクリップボードに入れておく。入力欄で Ctrl+v を押し、縮小と番号が出て、送ると発言に「画像 1 件」が出るまでを通す。macOS の案内の単体のテストは、クリップボードを読めない状態とプラットフォームの名前を偽物にして確かめる
+- Ctrl+v の E2E は、ページを開く前にプラットフォームの名前を macOS に差し替え、アプリがクリップボードを読む経路を通す。ブラウザにクリップボードの読み取りを許可し、画像をクリップボードに入れておく。入力欄で Ctrl+v を押すと、画像を読み込んだ縮小と番号 1 が出て、送ると発言に「画像 1 件」が出るまでを通す。macOS の案内の単体のテストは、クリップボードを読めない状態とプラットフォームの名前を偽物にして確かめる
 - （US-014）の画像の結合のテストは、偽物の台本で画像付きのツールの結果を流し、画像のファイルが保存され、記録に画像の ID が入り、画像の API でそのバイト列が返ることを確かめる。画像の行と Enter で開く URL は、記録の見本から行を組み立てる単体のテストで確かめる
 - （US-024）の E2E は、偽物の台本で質問を 2 問出させ、キーだけで会話を始め、指示を送り、2 問に答えて送り、AI の続きの発言が出るまでを通す
 
