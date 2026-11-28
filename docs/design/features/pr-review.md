@@ -86,14 +86,16 @@ PR の画面から送った指示も、会話から送った発言も、実装�
 | そのほか (停止中のほかの理由など) | `features/issue-flow.md` に従う |
 
 - 「merge 前の確認で止まる」かどうかは、`issues.confirm_before_merge` で決める。指示で直した後も、この値は変えない
-- 実装中に戻したときの `state_changed` の `cause` は `impl_instruction` とする (`features/issue-flow.md`)
+- 停止中に修正指示を受け付けたときは、実装中への状態変更と同じトランザクションで `implementation_revision_requested` を記録する。`state_changed` の `cause` は `impl_instruction` とする
+- `implementation_revision_requested` の payload は `{ "conversationId": "...", "afterTurnSeq": <数>, "queuedIds": ["..."] }` とする。`afterTurnSeq` は受理時の最後の会話イベントの番号で、`queuedIds` は預かった指示の ID である
+- 実装の報告は、受理時より後の発言で始まり、記録した指示が待ち行列に残っていない番から受け付ける。指示が届く前の番の報告で、merge 前の確認や CI の失敗へ戻るのを防ぐ
 - 質問 (スレッド) は、どの状態でも issue の状態を変えない
 
 ### merge の後に直させる
 
 完了した issue の実装の会話に、開発者が指示を送ったときの動きである (UC-012 B)。
 
-1. `flow` が issue を実装中に戻し、`issue_events` に `reopened_for_fix` (`{ "previousPrUrl": "..." \| null }`。GitHub を使わないプロジェクトでは `null`) と `stage_changed` (`implement`) を記録する。`closed_at` は空にする
+1. `flow` が本文と添付を確認して issue を実装中に戻し、`issue_events` に `reopened_for_fix` (`{ "previousPrUrl": "..." \| null }`。GitHub を使わないプロジェクトでは `null`) と `stage_changed` (`implement`) を記録する。`closed_at` は空にする
 2. 新しい worktree とブランチを、`features/implementation-flow.md`「worktree を作る」の規則で作る。前の worktree は使い直さない。実装の会話の作業ディレクトリを、その worktree に変える
 3. worktree を作れなければ、停止中 (`failed`) にする。扱いは `features/implementation-flow.md`「始めるときの手順」と同じにする
    - 引き金になった開発者の指示は届けず、入力欄の書きかけに残す (`features/conversation.md`)

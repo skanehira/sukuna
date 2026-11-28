@@ -165,7 +165,7 @@
 | `created` / `edited` / `comment` | issue を作った、項目を直した、コメントを書いた | `features/issue.md` の表 | `features/issue.md` |
 | `design_submitted` / `design_approved` / `design_reflected` / `design_reflect_failed` / `design_pr_created` / `design_rejected` | 設計の完了、承認、反映、差し戻し | `features/design-review.md` の表 | `features/design-review.md` |
 | `stage_changed` / `ready_for_merge` / `ci_failed` / `implementation_done` / `worktree_kept` / `worktree_removed` | 実装の段階と結果 | `features/implementation-flow.md` の表 | `features/implementation-flow.md` |
-| `merge_allowed` / `reopened_for_fix` | merge の許可、完了した issue の直し | `features/pr-review.md` | `features/pr-review.md` |
+| `merge_allowed` / `implementation_revision_requested` / `reopened_for_fix` | merge の許可、停止中の修正指示の受理、完了した issue の直し | `features/pr-review.md` | `features/pr-review.md` |
 
 - `ai_started` の `reason`: `start` は段階の最初の指示、`reopen` は再開した issue の精査の最初の指示、`worktree_retry` は worktree を作り直したあとの最初の指示である。ほかの値は、その指示を書いた節にある
 
