@@ -96,6 +96,7 @@ const server = serve(
               receiptWarning: restoreReceiptWarning,
             }
           : undefined,
+        { runner: getRunnerLink, inboxChanged: () => getWsHub().inbox() },
       ),
       workspace,
       inbox: {

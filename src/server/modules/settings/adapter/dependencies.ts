@@ -7,6 +7,7 @@ import type { OpenedDatabase } from "../../../../shared/db/open";
 import { conversations, projects, settings } from "../../../../shared/db/schema";
 import { restoreReceiptSchema } from "../../../../shared/settings/restore-schema";
 import type { BackupItem } from "../../../../shared/settings/settings-schema";
+import type { RunnerLink } from "../../../runner-link";
 import type { SettingsDependencies } from "../domain/ports";
 import { readKeymap } from "../usecase/get-settings";
 import { keymapRevision } from "./keymap-revision";
@@ -28,6 +29,7 @@ export function createSettingsDependencies(
     now: () => number;
     receiptWarning?: (error: unknown) => void;
   },
+  flow?: { runner(): Pick<RunnerLink, "forward">; inboxChanged(): void },
 ): SettingsDependencies {
   const files = createRestoreFiles(home, restore?.receiptWarning);
   return {
@@ -92,6 +94,20 @@ export function createSettingsDependencies(
         { behavior: "immediate" },
       ),
     changed,
+    putFlowPaused: (value) => {
+      database()
+        .insert(settings)
+        .values({ key: "flow_paused", value })
+        .onConflictDoUpdate({ target: settings.key, set: { value } })
+        .run();
+    },
+    async notifyFlow() {
+      await flow
+        ?.runner()
+        .forward("POST", "/flow/notify", {})
+        .catch(() => {});
+    },
+    inboxChanged: () => flow?.inboxChanged(),
   };
 }
 
