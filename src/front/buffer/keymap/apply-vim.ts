@@ -54,12 +54,20 @@ export function applyVim(
   const cm = getCM(view);
   if (!cm) return () => {};
   let prefix = "";
+  let attached = true;
   const syncMode = () => {
     if (controller.snapshot().active === side && view.hasFocus) {
       controller.update({ mode: vimMode(view) });
     }
   };
-  cm.on("vim-mode-change", syncMode);
+  const modeChanged = prompt
+    ? syncMode
+    : () => {
+        queueMicrotask(() => {
+          if (attached) syncMode();
+        });
+      };
+  cm.on("vim-mode-change", modeChanged);
   const copied = (key: string) => {
     syncMode();
     if (key === "y" && controller.options.clipboard) {
@@ -169,8 +177,9 @@ export function applyVim(
   };
   view.dom.addEventListener("keydown", receive, true);
   return () => {
+    attached = false;
     view.dom.removeEventListener("keydown", receive, true);
-    cm.off("vim-mode-change", syncMode);
+    cm.off("vim-mode-change", modeChanged);
     cm.off("vim-keypress", copied);
   };
 }

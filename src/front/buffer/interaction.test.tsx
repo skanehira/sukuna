@@ -417,6 +417,19 @@ describe("画面の復元とコピー", () => {
     await act(async () => {});
     expect(fallback.mock.calls).toEqual([["co"]]);
   });
+  it("改行直前の文字に選択端を戻して y を押すと、行末の文字までコピーする", async () => {
+    const fallback = vi.fn(() => true);
+    const controller = new BufferController({
+      clipboard: { secure: false, fallback, write: vi.fn(), notify: vi.fn() },
+    });
+    const { views } = mount(controller, [
+      { kind: "text", text: "abcde" },
+      { kind: "text", text: "fghij" },
+    ]);
+    for (const input of ["$", "v", "h", "o", "y"]) key(views[1], input);
+    await act(async () => {});
+    expect(fallback.mock.calls).toEqual([["de"]]);
+  });
 });
 
 describe("Vim の移動を保った割り当て", () => {

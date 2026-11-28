@@ -6,14 +6,18 @@ import {
   Compartment,
   EditorSelection,
   EditorState,
+  findClusterBreak,
   type Extension,
   type Text,
 } from "@codemirror/state";
 import {
+  Decoration,
   drawSelection,
   EditorView,
   highlightActiveLine,
   scrollPastEnd as scrollBeyondEnd,
+  ViewPlugin,
+  type ViewUpdate,
 } from "@codemirror/view";
 import { getCM, Vim, vim } from "@replit/codemirror-vim";
 import type { ColumnDef, LineInfo } from "./line";
@@ -55,7 +59,47 @@ import {
 import { bufferGutters } from "./gutters";
 import { messageMarkdown } from "./markdown";
 import { refreshMarks, type BufferMarks } from "./marks";
-import { bufferTheme, type BufferSide } from "./theme";
+import {
+  bufferTheme,
+  STEADY_CURSOR,
+  VISUAL_CHAR,
+  VISUAL_LINE_END_CURSOR,
+  VISUAL_SELECTION,
+  type BufferSide,
+} from "./theme";
+
+const selectedCharacters = Decoration.mark({ class: VISUAL_SELECTION });
+const lineEndCursorMark = Decoration.mark({ class: VISUAL_LINE_END_CURSOR });
+
+function visualLineEndCursor(view: EditorView) {
+  const head = getCM(view)?.state.vim?.sel.head;
+  const { doc } = view.state;
+  if (!head || head.line < 0 || head.line >= doc.lines) return;
+  const line = doc.line(head.line + 1);
+  const lastCharacter = findClusterBreak(line.text, line.length, false);
+  if (head.ch >= lastCharacter && head.ch < line.length)
+    return lineEndCursorMark.range(line.from + lastCharacter, line.to);
+}
+
+const characterSelection = ViewPlugin.define(
+  () => ({
+    decorations: Decoration.none,
+    update(update: ViewUpdate) {
+      if (!update.selectionSet && !update.docChanged) return;
+      if (vimMode(update.view) !== "VISUAL") {
+        this.decorations = Decoration.none;
+        return;
+      }
+      const ranges = update.state.selection.ranges.flatMap(({ from, to }) =>
+        from === to ? [] : [selectedCharacters.range(from, to)],
+      );
+      const cursor = visualLineEndCursor(update.view);
+      if (cursor) ranges.push(cursor);
+      this.decorations = Decoration.set(ranges, true);
+    },
+  }),
+  { decorations: (plugin) => plugin.decorations },
+);
 
 type LinePosition = { line: number; column?: number };
 type LinePositionOptions = { remember?: boolean; topLine?: number; column?: number };
@@ -305,6 +349,7 @@ export function Buffer({
         if (update.selectionSet || update.docChanged) rememberSelection();
       }),
       vim(),
+      characterSelection,
       drawSelection(),
       highlightActiveLine(),
       EditorView.lineWrapping,
@@ -330,6 +375,14 @@ export function Buffer({
       extensions,
     });
     const view = new EditorView({ parent: host, state });
+    const cm = getCM(view);
+    const updateCursorMode = () => {
+      const mode = vimMode(view);
+      view.scrollDOM.classList.toggle(VISUAL_CHAR, mode === "VISUAL");
+      view.scrollDOM.classList.toggle(STEADY_CURSOR, mode === "NORMAL" || mode === "VISUAL");
+    };
+    cm?.on("vim-mode-change", updateCursorMode);
+    updateCursorMode();
     viewRef.current = view;
     if (config.startLine !== undefined)
       view.dispatch({
@@ -583,6 +636,7 @@ export function Buffer({
       if (!temporary) previousAttachment.current = window.position();
       unregister?.();
       unmap?.();
+      cm?.off("vim-mode-change", updateCursorMode);
       view.dom.removeEventListener("focusin", focus);
       view.dom.removeEventListener("dblclick", doubleClick);
       view.dom.removeEventListener("keyup", remember);
