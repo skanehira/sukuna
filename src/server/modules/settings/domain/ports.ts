@@ -10,6 +10,9 @@ export type SettingsDependencies = {
   readVapidPublicKey(): Promise<string | null>;
   putKeymap(keymap: KeymapConfig, revision?: string): boolean;
   changed(): void;
+  putFlowPaused(paused: boolean): void;
+  notifyFlow(): Promise<void>;
+  inboxChanged(): void;
   requestRestore?(
     backupId: string,
   ): Promise<

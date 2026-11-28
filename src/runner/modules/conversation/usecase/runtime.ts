@@ -24,6 +24,7 @@ import type {
   AgentPort,
   AgentSession,
   AgentOutput,
+  OpenParams,
   QuestionRequest,
   PermissionRequest,
   PermissionDecision,
@@ -123,7 +124,7 @@ export class InputRefused extends Error {
 }
 type Reopening = { closedAt: number; until: number };
 const reopenWaitMs = RUNNER_IPC_TIMEOUT_MS + 5_000;
-type Execution = {
+type Execution = Pick<OpenParams, "model" | "permissionMode"> & {
   cwd: string;
   worktreeId: string | null;
   session: AgentSession;
@@ -290,16 +291,19 @@ export class ConversationRuntime {
     const opened = this.executions.get(c.id);
     if (opened) return opened;
     let execution: Execution | undefined;
+    const settings = this.runOptions.build(c);
     const session = this.options.agent.open({
       sessionId: c.sessionId ?? this.options.uuid(),
       resume: c.sessionId !== null,
-      ...this.runOptions.build(c),
+      ...settings,
       context: { conversationId: c.id, projectId: c.projectId, issueId: c.issueId },
       onQuestion: (request) => this.question(c.id, execution, request),
       onPermission: (request) => this.askPermission(c.id, execution, request),
     });
     execution = {
       cwd: c.cwd,
+      model: settings.model,
+      permissionMode: settings.permissionMode,
       worktreeId,
       session,
       consuming: Promise.resolve(),
@@ -446,9 +450,18 @@ export class ConversationRuntime {
         const c = this.store.get(id) ?? newConversation;
         if (!c) throw new Error("会話がありません。");
         const opened = this.executions.get(id);
+        const resuming =
+          c.runState === "stopped" || c.runState === "failed" || c.runState === "usage_limited";
+        const settings =
+          opened && resuming && turnHasEnded(opened)
+            ? this.store.projectOptions(c.projectId)
+            : null;
         if (
           opened &&
           (opened.streamEnded ||
+            (settings !== null &&
+              (opened.model !== settings.model ||
+                opened.permissionMode !== settings.permissionMode)) ||
             opened.cwd !== (acceptance?.workspace?.path ?? c.cwd) ||
             opened.worktreeId !== (acceptance?.workspace?.id ?? worktreeId))
         )

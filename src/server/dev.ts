@@ -38,6 +38,8 @@ export default createApp({
     () => getDatabase().db,
     dirname(getDatabase().sqlite.name),
     () => getWsHub().settingsChanged(),
+    undefined,
+    { runner: getRunnerLink, inboxChanged: () => getWsHub().inbox() },
   ),
   workspace,
   inbox: { repository: createInboxRepository(() => getDatabase().db), resetTime: formatResetTime },

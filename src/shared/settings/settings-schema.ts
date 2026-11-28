@@ -14,6 +14,7 @@ const backupItemSchema = z.object({
   createdAt: z.number(),
   sizeBytes: z.number().int().nonnegative(),
 });
+export const flowPausedSchema = z.strictObject({ paused: z.boolean() });
 export const settingsSchema = z.object({
   keymap: keymapSchema,
   flowPaused: z.boolean(),

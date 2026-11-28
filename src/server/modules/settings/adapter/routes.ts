@@ -1,10 +1,12 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { restoreBackupIdSchema, restoreIdSchema } from "../../../../shared/settings/restore-schema";
+import { flowPausedSchema } from "../../../../shared/settings/settings-schema";
 import { keymapInputSchema } from "../../../../shared/settings/keymap-schema";
 import type { SettingsDependencies } from "../domain/ports";
 import { getSettings } from "../usecase/get-settings";
 import { saveKeymap } from "../usecase/save-keymap";
+import { setFlowPaused } from "../usecase/set-flow-paused";
 import { keymapRevision } from "./keymap-revision";
 
 export function createSettingsRoutes(deps: SettingsDependencies) {
@@ -43,6 +45,24 @@ export function createSettingsRoutes(deps: SettingsDependencies) {
     } catch {
       return c.json(
         { error: { code: "internal", message: "キーの割り当てを保存できませんでした。" } },
+        500,
+      );
+    }
+  });
+  app.put("/settings/flow-paused", async (c) => {
+    const parsed = flowPausedSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success)
+      return c.json(
+        {
+          error: { code: "invalid_input", message: "自動フローの一時停止の値を確認してください。" },
+        },
+        400,
+      );
+    try {
+      return c.json(await setFlowPaused(parsed.data.paused, deps));
+    } catch {
+      return c.json(
+        { error: { code: "internal", message: "自動フローの設定を保存できませんでした。" } },
         500,
       );
     }

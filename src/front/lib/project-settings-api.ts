@@ -6,9 +6,9 @@ import {
   type ProjectPatch,
 } from "../../shared/api/project";
 import { issueRecordSchema } from "../../shared/issue/schema";
+import { flowPausedSchema } from "../../shared/settings/settings-schema";
 
 const errorMessage = z.object({ error: z.object({ message: z.string() }) });
-const flowPaused = z.object({ paused: z.boolean() });
 const issueProject = z.object({
   issue: z.object({ projectId: issueRecordSchema.shape.projectId }),
 });
@@ -75,7 +75,7 @@ export function createProjectSettingsApi(fetcher: typeof fetch) {
     pause: (paused: boolean) =>
       request(
         "/api/settings/flow-paused",
-        flowPaused,
+        flowPausedSchema,
         "自動フローの設定を保存できませんでした",
         json("PUT", { paused }),
       ),
