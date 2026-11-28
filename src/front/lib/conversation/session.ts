@@ -157,9 +157,7 @@ export class ConversationSession {
         ? { replaced: false, notice: null }
         : this.draft.receive(data.draft, readVersion);
     if (result.notice) this.controller.notify(result.notice);
-    if (result.replaced && this.ownsPrompt())
-      this.controller.replacePromptText(this.draft.content().text);
-    this.refreshPrompt();
+    this.syncDraftPrompt({ replaceText: result.replaced });
     this.refreshTail();
     this.emit();
   }
@@ -689,6 +687,9 @@ export class ConversationSession {
       label: this.queueEditing ? "預けた指示" : this.view === "stock-thread" ? "返信" : "指示",
       target: `${this.view === "stock-thread" ? "スレッド" : "会話"}: ${this.state.data!.conversation.title}`,
       scope: this.id,
+      draftBinding: this.queueEditing
+        ? { kind: "queue", itemId: this.queueEditing.id }
+        : { kind: "message" },
       verb: "送る",
       initialText: content.text,
       images: content.images.length,
@@ -778,8 +779,7 @@ export class ConversationSession {
     this.cancelSave = this.env.schedule(() => {
       void this.saveDraft();
     }, 500);
-    this.refreshPrompt();
-    if (!text && !images.length) this.controller.patchPrompt({ unsent: undefined });
+    this.syncDraftPrompt({ clearUnsent: !text && !images.length });
   }
   private movedCancelledDraft(content: DraftContent, edits: ChangeDesc): CancelledDraft | null {
     const undo = this.undo;
@@ -818,9 +818,23 @@ export class ConversationSession {
     return this.controller.snapshot().prompt?.scope === this.id;
   }
 
-  private refreshPrompt(): void {
-    if (this.ownsPrompt() && this.controller.snapshot().prompt?.label !== "確定事項")
-      this.controller.patchPrompt({ images: this.draft.content().images.length });
+  private syncDraftPrompt({
+    replaceText,
+    clearUnsent,
+  }: { replaceText?: boolean; clearUnsent?: boolean } = {}): void {
+    const prompt = this.controller.snapshot().prompt;
+    if (prompt?.scope !== this.id) return;
+    const binding = prompt.draftBinding;
+    const matches = this.queueEditing
+      ? binding?.kind === "queue" && binding.itemId === this.queueEditing.id
+      : binding?.kind === "message";
+    if (!matches) return;
+    const draft = this.draft.content();
+    if (replaceText) this.controller.replacePromptText(draft.text);
+    this.controller.patchPrompt({
+      images: draft.images.length,
+      ...(clearUnsent ? { unsent: undefined } : {}),
+    });
   }
 
   proposeFinish(
@@ -949,7 +963,7 @@ export class ConversationSession {
         undo.draft.version = this.draft.version();
       }
       if (adopted && !stored) {
-        if (this.ownsPrompt()) this.controller.replacePromptText(this.draft.content().text);
+        this.syncDraftPrompt({ replaceText: true });
         this.controller.notify("別の端末で書いた内容に置き換わりました");
       }
       return true;
@@ -976,6 +990,14 @@ export class ConversationSession {
     const anchors = draft.content().timeline_anchors;
     const structured = anchors === undefined ? {} : { timeline_anchors: anchors };
     const promptId = this.controller.snapshot().promptId;
+    const submissionIsOpen = () => {
+      const state = this.controller.snapshot();
+      return (
+        state.promptId === promptId &&
+        state.prompt?.scope === this.id &&
+        state.prompt.draftBinding !== undefined
+      );
+    };
     let sentMessageId: string | null = null;
     if (!text.trim() && !images.length && !this.state.data?.queue.length)
       throw new Error("内容が空です。書いてから送ってください");
@@ -1019,8 +1041,7 @@ export class ConversationSession {
       if (unchanged) this.draft = new DraftSync(this.env.clientId, null);
       else await this.saveDraft();
       if (this.messageId === sentMessageId) this.messageId = null;
-      if (this.controller.snapshot().promptId === promptId)
-        this.controller.patchPrompt({ unsent: undefined });
+      if (submissionIsOpen()) this.controller.patchPrompt({ unsent: undefined });
       void this.refresh().catch((error: unknown) =>
         this.controller.notify(this.reason(error), "error"),
       );
@@ -1029,14 +1050,13 @@ export class ConversationSession {
       if (editing && error instanceof ConversationApiError && error.status === 404) {
         if (this.queueEditing === editing) this.queueEditing = null;
         await this.refresh(true);
-        if (this.controller.snapshot().prompt && this.controller.snapshot().promptId === promptId) {
+        if (submissionIsOpen()) {
           this.controller.openPrompt(this.prompt());
           this.controller.patchPrompt({ unsent: "すでに届きました" });
         }
         throw new Error("すでに届きました");
       }
-      if (this.controller.snapshot().promptId === promptId)
-        this.controller.patchPrompt({ unsent: this.reason(error) });
+      if (submissionIsOpen()) this.controller.patchPrompt({ unsent: this.reason(error) });
       throw error;
     }
   }
@@ -1136,14 +1156,8 @@ export class ConversationSession {
       this.draft.edit(remaining, this.env.now());
       this.deferredDraftSave = { local: this.draft, expected: replacement, conflicted: false };
     }
-    if (
-      this.connected &&
-      this.ownsPrompt() &&
-      this.controller.snapshot().prompt?.label === "指示"
-    ) {
-      this.controller.replacePromptText(this.draft.content().text);
-      this.refreshPrompt();
-    }
+    if (this.connected && this.view === "conversation" && !this.queueEditing)
+      this.syncDraftPrompt({ replaceText: true });
   }
   private async prepareUndoRequest(undo: QueueUndo): Promise<UndoRequest> {
     const { draft: added, item } = undo;

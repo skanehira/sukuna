@@ -30,6 +30,7 @@ export type PromptSpec = {
   initialText?: string;
   allowEmpty?: boolean;
   scope?: string;
+  draftBinding?: { kind: "message" } | { kind: "queue"; itemId: string };
   candidates?: string[];
   commands?: { name: string; description: string }[];
   unsent?: string;
