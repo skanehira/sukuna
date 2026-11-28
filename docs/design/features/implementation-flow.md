@@ -287,7 +287,7 @@ AI が `report_implementation_done` を呼ぶと、`flow` は merge を確かめ
 - 消さないときは、`worktree_kept` (`{ "worktreeId": "...", "path": "...", "uncommittedFiles": <数>, "unpushedCommits": <数> }`) を足し、ランナーの `issue` の知らせを出す (UC-010 E2)。画面のサーバーはそれを受けて `inbox` に `changed` を出す (`features/runtime.md`「配信」)
 - 残したことは、プロジェクトの画面の完了か取り下げの issue の行 (`features/inbox.md`) と、issue の画面の末尾 (`features/issue.md`) に「worktree を残しました: <パス>」と出す
 - 残したことは通知にしない。開発者の対応が要る変化ではなく、issue の画面とプロジェクトの画面で分かるためである
-- 残した worktree は、開発者が worktree の一覧から消す (`features/worktree-terminal.md`)。アプリは、もう一度片付けを試みない
+- 残した worktree は、開発者が worktree の一覧から消す (`features/worktree-terminal.md`)。設計の worktree の端末確認を保留した記録 (`awaitingTerminal: true`) は、接続が戻ったときに再評価する
 - 片付けに失敗したとき (git の失敗) も、残したときと同じに記録する。issue の完了は取り消さない
 
 ### 親の issue を閉じる
@@ -311,7 +311,7 @@ AI が `report_implementation_done` を呼ぶと、`flow` は merge を確かめ
 
 - CI の待ちは AI の会話の中のコマンドで行っているので、再起動で止まる。続きの指示を受けた AI が、「merge の手順」の 1 からやり直す
 - 実装中で、実装の会話に指示がまだ届いていない issue (始めるときの手順の途中で止まった) は、手順の 3 からやり直す。worktree があれば使い直す
-- 片付け途中で止まった処理は、会話の作業場所を読む前に復旧する。保存した同一性と削除の記録を使い、確かめられる worktree だけを戻すか片付ける。完了の issue に未片付けの worktree があり、`worktree_kept` が無ければ、改めて片付ける
+- 片付け途中で止まった処理は、会話の作業場所を読む前に復旧する。保存した同一性と削除の記録を使い、確かめられる worktree だけを戻すか片付ける。完了・取り下げの issue に未片付けの worktree があれば、保持が確定したものを除いて改めて片付ける
 
 ## API
 
@@ -349,7 +349,7 @@ AI が `report_implementation_done` を呼ぶと、`flow` は merge を確かめ
 6. **表示の寿命**: 「worktree を残しました」は、issue が閉じていて、残した worktree を開発者が消すまで、issue の画面の末尾に出す。プロジェクトの画面の行での出し方は `features/inbox.md` に従う。停止中の `detail` は、実装中に戻ると消える。段階 (`stage_changed`) は完了の後も記録として残す
 7. **送る前のデータ**: 該当なし (この機能は開発者の入力を受けない。merge 前の確認への指示は会話とストックが持つ)
 8. **状態の移り変わり**: 実装待ち → 実装中 → (停止中 → 実装中)* → 完了。停止中になるのは、質問・失敗・利用枠切れ・CI の失敗・merge 前の確認・依存先の取り下げのときである。表は `features/issue-flow.md` にある。親は実装待ちから、子がすべて閉じると完了に移る
-9. **自動で進むこと**: 実装の開始、CI の待ち、merge、完了、worktree の片付け、親を閉じることは、開発者の操作なしに進める (P2)。CI の失敗と merge できないときは自動でやり直さない。残した worktree の片付けは自動でやり直さない
+9. **自動で進むこと**: 実装の開始、CI の待ち、merge、完了、worktree の片付け、親を閉じることは、開発者の操作なしに進める (P2)。CI の失敗と merge できないときは自動でやり直さない。保持が確定した worktree の片付けは自動でやり直さない
 10. **端末と画面をまたぐこと**: issue の状態・段階・worktree の記録はサーバーに置き、どの端末でも同じにする (P3)。merge の許可はどの端末からでもよく、先に届いた 1 回だけが効く (`features/pr-review.md`)
 11. **並びと数え方**: 始める順は実効の優先度の高い順、同じなら番号の小さい順とする。件数は、そのプロジェクトの実装中の issue を数える。CI の 60 分は、検査の登録を待ち始めた時刻から数える。`port_slot` は 0 から数える
 

@@ -58,9 +58,11 @@
 - 開発者が再開を選ぶか指示を送ると、`flow` が worktree を作り直す。設計の最初の指示と開発者の指示を 1 通で届ける (`features/issue-flow.md`「停止中から戻る」の `retryStageWorktree`)
 - 設計の会話の作業ディレクトリ (`conversations.cwd`) と `worktree_id` は、この worktree にする
 - 設計の AI への最初の指示に、この worktree で設計書を書き、終えたらコミットしてから `report_design` で報告することを含める (`features/issue-flow.md`「設計の AI」)
-- 設計を承認した後と issue を取り下げた後に、設計の worktree を確認する。取り下げでは結果を先に返し、対象の AI の番を止めてから作業場所を確認する
-- Git 登録もフォルダもすでに無ければ、設計の worktree の記録を片付け済みにする。旧 worktree の ID を持つ会話だけを、プロジェクトのディレクトリへ戻す。`worktree_removed` には残した設計のブランチを `retainedBranch` として記録する
-- Git 登録またはフォルダが残る場合は `worktree_kept` を記録し、設計の worktree とブランチを残す。Git の削除コマンドは、確認した登録と同じかを識別情報で指定できない。別の Git 操作で同じパスに作られた worktree を消さないため、パスだけで削除しない
+- 設計を承認した後は、フォルダか Git 登録が残っていれば `worktree_kept` を記録し、設計の worktree とブランチを残す
+- 取り下げでは結果を先に返し、対象の AI の番が止まってから worktree を確認する。作成時の記録と Git 登録・フォルダが一致するものは、端末の終了も確認して片付ける。判定・削除・復旧は `features/implementation-flow.md`「worktree の片付け」と同じ手順を使う
+- 変更を含むものや、作成時の記録を確認できないものは `worktree_kept` を記録して残す。同じパスに作り直された worktree は片付けの対象から外す。ブランチは保持する
+- 作業場所を一時的に予約できなければ、次の評価で確かめ直す。端末の終了を確かめるための接続が無ければ片付けを保留し、接続が戻ったら取り下げの記録から片付けを再開する。接続待ちで `worktree_kept` を記録した場合は `awaitingTerminal: true` を付ける
+- Git 登録もフォルダもすでに無ければ、片付け済みにする。旧 worktree の ID を持つ会話だけを、プロジェクトのディレクトリへ戻す。`worktree_removed` には保持した設計のブランチを `retainedBranch` として記録する
 - 取り下げ後に Git の一覧、作業場所の状態、未反映のコミット数のいずれかを確認できなければ、作業場所を残し、エラーのお知らせを 1 回出す
 - 承認後の設計の会話は読めるが、指示は送れない (`features/issue.md`「担当の会話」)
 

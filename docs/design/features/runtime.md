@@ -122,7 +122,7 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 | `settings` のキー `restore_generation` | 復元の処理 (`db.lock` の中) | データベースの置き換えを識別する (`features/operations.md`「復元」) |
 | `settings` の `inbox_notification_markers:` で始まるキー | 画面のサーバー | 待機中の通知の契機を再起動後も照合する (`features/inbox.md`「通知を出す条件」) |
 | `settings` のキー `inbox_notification_sequence` | 画面のサーバー | 表示通知の最後の発行番号 (`features/inbox.md`「通知の文面」) |
-| `settings` のキー `implementation-worktree:<worktree の id>` | ランナー | 実装 worktree の登録・フォルダ・片付け先・自前の Git ロックを照合する (`features/implementation-flow.md`「worktree の片付け」) |
+| `settings` のキー `implementation-worktree:<worktree の id>` | ランナー | 実装と設計の worktree の登録・フォルダ・片付け先・自前の Git ロックを照合する (`features/implementation-flow.md`「worktree の片付け」) |
 | `settings` のほかのキー、`projects` | 画面のサーバー | 開発者の操作 |
 | `worktrees` の行の作成 (`origin = user`) | 画面のサーバー | 開発者が作った worktree と、一覧でアプリの外で作ったと分かった worktree (`features/worktree-terminal.md`「書くプロセス」) |
 | `worktrees` の行の作成 (`origin = flow`) | ランナー (自動フロー) | 自動フローが段階の worktree を作る (`features/worktree-terminal.md`「書くプロセス」) |
