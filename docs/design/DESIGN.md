@@ -445,6 +445,7 @@ issue の状態の移り変わりは `features/issue-flow.md` の表が正本で
 - Node.js の ECDH で得た P-256 の秘密鍵が 32 バイトより短いときは、先頭をゼロで埋める。VAPID の鍵は 32 バイトで保存する
 - TypeScript 7 には JS の API が無い。Stryker は既定で `tsconfig.json` をこの API で読み書きするので、`TypeError: ts.parseConfigFileTextToJson is not a function` で起動に失敗する。`stryker.config.json` の `tsconfigFile` に存在しないファイルの名前を指定して、この処理を止める。このリポジトリの tsconfig は Stryker の sandbox の外を参照しないので、書き換えは要らない
 - Vite は `import.meta.glob` の引数を、文字列と object のリテラルとしてしか読めない。Stryker が引数を変異させると、そのモジュールを import するテストが `Parse failed` で落ちる。`import.meta.glob` の呼び出しは `// Stryker disable all: <理由>` と `// Stryker restore all` で囲む
+- Vite+ の `vp` は、自分の Node.js と pnpm の置き場所も `XDG_DATA_HOME` などから決める。テストと E2E が一時の XDG の環境変数で `vp` を起動するときは、`VP_DATA_DIR`・`VP_BIN_DIR`・`VP_CACHE_DIR` を起動元の値に固定する。固定しないと、`vp` が一時ディレクトリに Node.js と pnpm を入れ直し、起動が 10 秒ほど遅れる ([Vite+ の公式ドキュメント](https://viteplus.dev/guide/global-cli))
 - `src/runner/dev.test.ts` は、子のプロセスで開発用ランナーを起動する結合テストである。`src` 全体を変異の対象にすると、Stryker の初回のテスト実行で落ちる。`stryker.config.json` の `ignorePatterns` で、Stryker の sandbox から外す。いつものテストでは流れる
 - 変異テストにかかる時間は、ファイルによって大きく変わる。28 スレッドの Mac では、`notation.ts` (jsdom の project のテストが流れる。変異 189 件) が 2 分 41 秒、`transition.ts` (node の project。変異 273 件) が 10 秒である
 - `node-pty` は、導入のあとに補助の実行ファイルへ実行権限を付けないと動かない。`postinstall` で付ける
