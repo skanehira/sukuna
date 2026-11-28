@@ -14,7 +14,7 @@
 1. 開発者が画面を開くと、左にツリー、中央に主のウィンドウ、下にステータス行が出る
 2. Vim と同じキーでカーソルを動かし、検索し、選ぶ。Enter で行の先を開き、操作の行を実行する
 3. Space を押すと、続けて押せるキーの候補が出る。コロンを押すと、コマンドを打てる
-4. i を押すと入力欄が開き、Vim と同じモードで書く。Normal モードで Enter を押すと送る
+4. i を押すと入力欄が開き、Vim と同じモードで書く。Normal モードの Enter か、Insert でも Normal でも Ctrl+Enter を押すと送る
 5. 再読み込みしても、そのタブで見ていた画面・カーソル・右のウィンドウに戻る
 
 **主な決まり**:
@@ -273,6 +273,8 @@ type KeymapEntry = {
 | `<C-w>h` | Ctrl+w h |
 | `<CR>` | Enter |
 | `<A-CR>` | Alt+Enter |
+| `<C-CR>` | Ctrl+Enter |
+| `<Up>` / `<Down>` | ↑ / ↓ |
 | `<Esc>` | Esc |
 
 - Ctrl を使うキーは macOS のブラウザを前提にする。割り当てたキーでは、ブラウザの既定の動きを止める
@@ -327,7 +329,8 @@ type KeymapEntry = {
 | `Space g` | `terminal.open` | ターミナル | Normal | `worktree-terminal` |
 | `Space h` | `home` | 一覧を開く | Normal | `inbox` |
 | Enter | `prompt.submit` | 送る | 入力欄 (Normal) | `buffer-ui` (呼ぶ)、各機能 (送る) |
-| Alt+Enter | `prompt.interrupt` | AI を止めてすぐ送る | 入力欄 (Normal、AI が作業中) | `conversation` |
+| Ctrl+Enter、Alt+Enter | `prompt.interrupt` | すぐ送る。AI が作業中の会話への指示では、AI を止めてすぐ送る | 入力欄 (Insert、Normal) | `buffer-ui` (呼ぶ)、`conversation` (割り込む) |
+| ↑ / ↓ | `prompt.prev` / `prompt.next` | 開いた機能が持つ前 / 次の項目を入力欄に出す。会話では届く前の指示を選んで直す | 入力欄 (Insert、Normal。↑ はカーソルが先頭の行、↓ は末尾の行にあるとき) | `buffer-ui` (呼ぶ)、`conversation` (項目を出す) |
 | Tab | `prompt.complete` | スキルの候補を入れる | 入力欄 (`/` で始めたとき) | `buffer-ui` (入れる)、`conversation` (候補) |
 | `Ctrl+]` | `terminal.normal` | Normal モードへ戻る。`:tmap` で割り当てを変えられる (BR-061) | ターミナルの入力中 | `worktree-terminal` |
 
@@ -405,7 +408,7 @@ Space を押すと、ステータス行の上に、続けて押せるキーの�
 | --- | --- |
 | 開く・戻る | `open`、`back`、`view.prev`、`view.next`、`jump.back`、`home`、`tree.focus`、`conversation.switch`、`conversation.list`、`conversation.close`、`files.open-path` |
 | ウィンドウ | `win.left`、`win.right`、`win.down`、`win.up`、`right.close` |
-| 会話 | `prompt.open`、`prompt.submit`、`prompt.interrupt`、`prompt.complete`、`agent.stop`、`diff.expand`、`diff.collapse` |
+| 会話 | `prompt.open`、`prompt.submit`、`prompt.interrupt`、`prompt.prev`、`prompt.next`、`prompt.complete`、`agent.stop`、`diff.expand`、`diff.collapse` |
 | 質問と指示 | `stock.question`、`stock.instruct`、`stock.list`、`item.edit`、`item.delete`、`item.undo`、`mark.next`、`mark.prev`、`stock.send.all`、`stock.send.questions`、`stock.send.instructions`、`stock.publish`、`thread.list` |
 | 状況を思い出す | `recap.recent`、`recap.toc`、`recap.decisions`、`recap.search` |
 | そのほか | `cmdline`、`issue.new`、`timeline.open`、`timeline.next`、`timeline.prev`、`files.tree`、`files.folder-open`、`files.folder-close`、`files.grep`、`files.markdown-toggle`、`search.open`、`worktree.list`、`terminal.open`、`terminal.normal` |
@@ -454,7 +457,9 @@ Space を押すと、ステータス行の上に、続けて押せるキーの�
 | Insert | Esc、Ctrl+[ | Normal モードへ移る |
 | Insert | Enter | 改行する |
 | Normal | Enter | 送る (開いた機能の送る処理を呼ぶ) |
-| Normal | Alt+Enter | AI を止めてすぐ送る。AI が作業中の会話への指示のときだけ |
+| Insert、Normal | Ctrl+Enter、Alt+Enter | すぐ送る。開いた機能がすぐ送る処理を渡していれば、それを呼ぶ (例: 会話では AI が作業中なら AI を止めてすぐ送る)。渡していなければ Normal の Enter と同じに送る |
+| Insert、Normal (カーソルが先頭の行) | ↑ | 開いた機能が前の項目を渡せば、それを入力欄に出す。渡さなければ Vim と同じにカーソルを上へ動かす。前の項目に移っても、モードは変えず、カーソルは本文の末尾に置く |
+| Insert、Normal (カーソルが末尾の行) | ↓ | 開いた機能が次の項目を渡せば、それを入力欄に出す。渡さなければ Vim と同じにカーソルを下へ動かす |
 | Normal (ビジュアルモードでない) | Esc、Ctrl+[ | 閉じる。書きかけの文を、開いた機能に渡す |
 | Normal | `Ctrl+w k` | 入力欄を開いたまま、主のウィンドウへ移る |
 | 本文が `/` で始まる 1 語 | Tab | 先頭の候補を入れて空白を足す。続けて Tab を押すと、次の候補に入れ替える |
@@ -467,8 +472,12 @@ Space を押すと、ステータス行の上に、続けて押せるキーの�
 - 入力欄の上の段に、欄の名前 (12px 太字) と送り先 (12px の muted) を出す。引用があれば、引用の行を行番号つきで 5 行まで出し、残りは「…ほか <n> 行」とする
 - 本文は 10rem の高さまで伸ばし、それを超えたら欄の中でスクロールする
 - 入力欄の下の段に、モードに合わせたヒントを出す。動詞は開く機能が渡す
-  - Insert: 「Esc Normal へ (<動詞>のは Normal から)」
-  - Normal: 「Enter <動詞>」、「Alt+Enter AI を止めてすぐ送る」(使えるときだけ)、「Esc 閉じる (書きかけは残る)」
+  - Insert: 「Esc Normal へ」、「Ctrl+Enter <すぐ送る動詞>」
+  - Normal: 「Enter <動詞>」、「Ctrl+Enter <すぐ送る動詞>」(開いた機能がすぐ送る処理を渡したときだけ)、「Esc <Esc の説明>」(既定は「閉じる (書きかけは残る)」)
+  - どちらのモードでも、開いた機能が前の項目の説明を渡したときは「↑ <説明>」を足す (例: 会話の「↑ 届く前の指示を直す」)
+  - <すぐ送る動詞> は、開いた機能がすぐ送る処理と一緒に渡す (例: 会話で AI が作業中なら「AI を止めてすぐ送る」)。渡さなければ <動詞> とする
+  - 前 / 次の項目は、本文と一緒に、欄の名前、動詞、すぐ送る処理と動詞、Esc の説明を持つ。項目を移ると、入力欄はそれらに差し替える
+  - 入力欄を操作しているあいだのステータス行のヒントは「Ctrl+w k 主のウィンドウへ移る (入力欄は開いたまま)」だけにする。送る・閉じるキーの案内は入力欄の下の段だけに出す
 - スキルの候補は、入力欄の上に等幅 13px で横に並べ、先頭を accent、ほかを muted にし、最後に「Tab で選ぶ」を出す
 - 貼り付けた画像があれば、下の段に「画像 <n> 件 (送信時に一緒に送る)」を accent で出す
 - 入力欄が開いて主のウィンドウが縮んでも、主のウィンドウのカーソルの行が見えるようにスクロールする
@@ -597,33 +606,33 @@ Space を押すと、ステータス行の上に、続けて押せるキーの�
 
 ## 実装の配置
 
-| 処理 | 層 | 実装先ファイル |
-| --- | --- | --- |
-| 行の種類と行の情報、桁の定義 | UI (土台) | `src/front/buffer/line.ts` |
-| 行の情報と装飾を持つ `StateField`、追記用の `Annotation`、`changeFilter` | UI (土台) | `src/front/buffer/state.ts` |
-| 装飾の作り直し (帯、桁、メニューの枠、隙間) | UI (土台) | `src/front/buffer/decorate.ts` |
-| カーソルを置けない行 | UI (土台) | `src/front/buffer/no-cursor.ts` |
-| 印の桁と行番号 | UI (土台) | `src/front/buffer/gutters.ts` |
-| メニューの行の番号付けと実行 | UI (土台) | `src/front/buffer/menu.ts` |
-| バッファの部品 (追記・書き換え・末尾について行く・飛ぶ) | UI | `src/front/buffer/Buffer.tsx` |
-| 入力欄 | UI | `src/front/buffer/PromptEditor.tsx` |
-| 見た目 (EditorView のテーマ、色と寸法の値) | UI (土台) | `src/front/buffer/theme.ts` |
-| 既定の割り当て、Vim の組み込みのキー、動作とコマンドの登録、今の割り当ての計算、重なりの判定、記法の変換 | UI (土台) | `src/front/buffer/keymap/defaults.ts`、`src/front/buffer/keymap/vim-builtins.ts`、`src/front/buffer/keymap/registry.ts`、`src/front/buffer/keymap/resolve.ts`、`src/front/buffer/keymap/conflicts.ts`、`src/front/buffer/keymap/notation.ts` |
-| ヘルプの行の生成 | UI (土台) | `src/front/buffer/help-lines.ts` |
-| 今の割り当ての Vim への当て直し | UI (土台) | `src/front/buffer/keymap/apply-vim.ts` |
-| コマンド行と、コマンドの読み取り | UI | `src/front/buffer/CommandLine.tsx`、`src/front/buffer/commands.ts` |
-| ウィンドウと入力欄の操作状態、動作の実行と設定の購読 | UI (土台) | `src/front/buffer/controller.ts` |
-| ターミナルの入力中のキーの受け口 | UI (土台) | `src/front/buffer/terminal.ts` |
-| ウィンドウの並び、見出し、列の見出し、移動 | UI | `src/front/buffer/Layout.tsx`、`src/front/buffer/Frame.tsx`、`src/front/buffer/ColHead.tsx` |
-| 右のウィンドウの表示の順 | UI (土台) | `src/front/buffer/right-window.ts` |
-| Space の候補、確認、ステータス行、ヒント | UI | `src/front/buffer/WhichKey.tsx`、`src/front/buffer/ConfirmBar.tsx`、`src/front/buffer/StatusLine.tsx`、`src/front/buffer/hints.ts` |
-| 位置の記憶 | UI (土台) | `src/front/buffer/position-store.ts` |
-| 末尾の区画の書き換え、`seq` から行を求める | UI (土台) | `src/front/buffer/tail.ts`、`src/front/buffer/seq-index.ts` |
-| ジャンプの履歴 | UI (土台) | `src/front/buffer/jump-history.ts` |
-| 画面の URL と、URL から画面を開く | UI | `src/front/lib/routes.ts` |
-| ブラウザの履歴、タブごとの保存、ページを離れるときの保存をつなぐ | UI | `src/front/lib/browser.ts` |
-| コピー | UI (土台) | `src/front/buffer/clipboard.ts` |
-| 書体の同梱 | UI | `src/front/styles/fonts.css` |
+| 処理 | 層 | 実装先ファイル | 作る / 足す |
+| --- | --- | --- | --- |
+| 行の種類と行の情報、桁の定義 | UI (土台) | `src/front/buffer/line.ts` | 足す |
+| 行の情報と装飾を持つ `StateField`、追記用の `Annotation`、`changeFilter` | UI (土台) | `src/front/buffer/state.ts` | 足す |
+| 装飾の作り直し (帯、桁、メニューの枠、隙間) | UI (土台) | `src/front/buffer/decorate.ts` | 足す |
+| カーソルを置けない行 | UI (土台) | `src/front/buffer/no-cursor.ts` | 足す |
+| 印の桁と行番号 | UI (土台) | `src/front/buffer/gutters.ts` | 足す |
+| メニューの行の番号付けと実行 | UI (土台) | `src/front/buffer/menu.ts` | 足す |
+| バッファの部品 (追記・書き換え・末尾について行く・飛ぶ) | UI | `src/front/buffer/Buffer.tsx` | 足す |
+| 入力欄 | UI | `src/front/buffer/PromptEditor.tsx` | 足す |
+| 見た目 (EditorView のテーマ、色と寸法の値) | UI (土台) | `src/front/buffer/theme.ts` | 足す |
+| 既定の割り当て、Vim の組み込みのキー、動作とコマンドの登録、今の割り当ての計算、重なりの判定、記法の変換 | UI (土台) | `src/front/buffer/keymap/defaults.ts`、`src/front/buffer/keymap/vim-builtins.ts`、`src/front/buffer/keymap/registry.ts`、`src/front/buffer/keymap/resolve.ts`、`src/front/buffer/keymap/conflicts.ts`、`src/front/buffer/keymap/notation.ts` | 足す |
+| ヘルプの行の生成 | UI (土台) | `src/front/buffer/help-lines.ts` | 足す |
+| 今の割り当ての Vim への当て直し | UI (土台) | `src/front/buffer/keymap/apply-vim.ts` | 足す |
+| コマンド行と、コマンドの読み取り | UI | `src/front/buffer/CommandLine.tsx`、`src/front/buffer/commands.ts` | 足す |
+| ウィンドウと入力欄の操作状態、動作の実行と設定の購読 | UI (土台) | `src/front/buffer/controller.ts` | 足す |
+| ターミナルの入力中のキーの受け口 | UI (土台) | `src/front/buffer/terminal.ts` | 足す |
+| ウィンドウの並び、見出し、列の見出し、移動 | UI | `src/front/buffer/Layout.tsx`、`src/front/buffer/Frame.tsx`、`src/front/buffer/ColHead.tsx` | 足す |
+| 右のウィンドウの表示の順 | UI (土台) | `src/front/buffer/right-window.ts` | 足す |
+| Space の候補、確認、ステータス行、ヒント | UI | `src/front/buffer/WhichKey.tsx`、`src/front/buffer/ConfirmBar.tsx`、`src/front/buffer/StatusLine.tsx`、`src/front/buffer/hints.ts` | 足す |
+| 位置の記憶 | UI (土台) | `src/front/buffer/position-store.ts` | 足す |
+| 末尾の区画の書き換え、`seq` から行を求める | UI (土台) | `src/front/buffer/tail.ts`、`src/front/buffer/seq-index.ts` | 足す |
+| ジャンプの履歴 | UI (土台) | `src/front/buffer/jump-history.ts` | 足す |
+| 画面の URL と、URL から画面を開く | UI | `src/front/lib/routes.ts` | 足す |
+| ブラウザの履歴、タブごとの保存、ページを離れるときの保存をつなぐ | UI | `src/front/lib/browser.ts` | 足す |
+| コピー | UI (土台) | `src/front/buffer/clipboard.ts` | 足す |
+| 書体の同梱 | UI | `src/front/styles/fonts.css` | 足す |
 
 ## エッジケースの決定
 
@@ -634,7 +643,7 @@ Space を押すと、ステータス行の上に、続けて押せるキーの�
 5. **再表示時の整合**: 画面に戻ると、覚えたカーソルの位置を `id` で探して置く。行が消えていれば同じ行番号に詰める。キーの割り当てが別の端末で変わったら、配信を受けて読み直し、開いている画面のまま新しいキーで動く
 6. **表示の寿命**: Space の候補は次のキーか Esc まで出す。番号の入力のヒントは次のキーまで出す。確認は答えのキーまで出す。コマンド行は Enter か Esc まで出す。AI の書きかけの発言は、同じ発言の保存か番の終わりで消える。お知らせの寿命は DESIGN.md「横断規約 > アプリシェル」に従う
 7. **送る前のデータ**: 入力欄の本文は、閉じるときと画面を移るときに、開いた機能へ渡す (保存先は `features/conversation.md` など)。コマンド行で打ちかけた文字は、Esc で捨てる。履歴に入るのは実行したコマンドだけにする
-8. **状態の移り変わり**: モードは、Normal から `v` / `V` / `Ctrl+v` でビジュアル、`:` でコマンド、`i` で入力欄の Insert へ移る。入力欄は Insert と Normal を行き来し、Normal の Esc で閉じて Normal に戻る。ターミナルの入力中は、割り当てのキーで Normal に戻り、`i` で戻る。確認は、どのモードの上にも出て、答えると元のモードに戻る
+8. **状態の移り変わり**: モードは、Normal から `v` / `V` / `Ctrl+v` でビジュアル、`:` でコマンド、`i` で入力欄の Insert へ移る。入力欄は Insert と Normal を行き来し、Normal の Esc で閉じて Normal に戻る。Ctrl+Enter で送って閉じたときは、Insert からでも Normal に戻る。ターミナルの入力中は、割り当てのキーで Normal に戻り、`i` で戻る。確認は、どのモードの上にも出て、答えると元のモードに戻る
 9. **自動で進むこと**: 末尾について行く指定のあるバッファだけ、追記と末尾の区画の書き換えでカーソルが動く。設定の変化を受けると、キーの割り当てを自動で当て直す。開発者が書いた文を、操作なしで送ることはしない
 10. **端末と画面をまたぐこと**: キーの割り当ては、サーバーに置いてどの端末でも同じにする (BR-071)。カーソル、開いている画面、右のウィンドウ、操作中のウィンドウ、コマンドの履歴、ジャンプの履歴は、タブごとに持つ
 11. **並びと数え方**: メニューの番号は、ウィンドウの中で上から 1 から振る。Space の候補は既定の割り当ての順に、設定で足したものを後ろに並べる。行番号は絶対行番号で、隠した行は無い。ヘルプの節の並びは「ヘルプの中身」の表の順にする
@@ -660,6 +669,8 @@ Space を押すと、ステータス行の上に、続けて押せるキーの�
 | 読めないキーの書き方か無い動作の名前で :map を打つと、保存されずにお知らせが出る | 単体 |
 | Vim の記法と画面の表記が、表のとおりに変換される | 単体 |
 | 入力欄を開くと Insert モードで、Esc で Normal へ、Normal の Enter で送る処理が呼ばれ、Normal の Esc で閉じて書きかけが渡される | 単体 |
+| 入力欄で Ctrl+Enter を押すと、Insert でも Normal でも、開いた機能が渡したすぐ送る処理が呼ばれ、渡していなければ送る処理が呼ばれる | 単体 |
+| 入力欄で、カーソルが先頭の行にあるときの ↑ と末尾の行にあるときの ↓ は開いた機能の処理を呼び、ほかの行では Vim と同じにカーソルが動く | 単体 |
 | Ctrl+[ を押すと、入力欄でもバッファでも Esc と同じに動く | 単体 |
 | 本文が空のまま送ろうとすると、入力欄は開いたままで、エラーのお知らせが出る | 単体 |
 | 入力欄の本文が / で始まる 1 語のとき、Tab で先頭の候補が入り、続けて Tab で次の候補に替わる | 単体 |

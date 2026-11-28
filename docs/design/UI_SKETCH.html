@@ -260,7 +260,7 @@ const HELP = [
   hk("Ctrl+w h / l", "左 / 右のウィンドウへ"), hk("Ctrl+w j / k", "入力欄へ / 会話へ", "入力欄を開いているとき"), hk("Ctrl+h", "1 つ前の表示へ戻る", "右のウィンドウ"), hk("q", "閉じる", "右のウィンドウ"),
   { k: "head", t: "会話" },
   hk("i", "入力欄を開く (Vim と同じモードで編集する)", "会話"), hk("Enter", "送る", "入力欄 (Normal)"), hk("Esc / Ctrl+[", "Insert から Normal へ。Normal で押すと閉じる", "入力欄"),
-  hk("Alt+Enter", "AI を止めてすぐ送る", "入力欄 (Normal)"), hk("Tab", "スキルの候補を選ぶ", "入力欄 (/ で始めたとき)"), hk("Space x", "AI を止める", "会話"), hk("Enter", "その選択肢で答える", "選択肢の行"),
+  hk("Ctrl+Enter / Alt+Enter", "すぐ送る (AI が作業中なら止めて送る)", "入力欄"), hk("↑ / ↓", "届く前の指示を選んで直す", "入力欄 (先頭 / 末尾の行)"), hk("Tab", "スキルの候補を選ぶ", "入力欄 (/ で始めたとき)"), hk("Space x", "AI を止める", "会話"), hk("Enter", "その選択肢で答える", "選択肢の行"),
   { k: "head", t: "質問と指示" },
   hk("Space q", "選んだ箇所に質問を書いてストックする", "選択中 / カーソルの行"), hk("Space c", "選んだ箇所に指示を書いてストックする", "選択中 / カーソルの行"),
   hk("Space l", "ストックの一覧"), hk("cc / dd", "ストックを直す / 取り消す", "印の行、ストックの一覧"), hk("u", "取り消しを戻す"),
@@ -605,11 +605,11 @@ function Buffer({ lines, marks, side, crash, posKey, startLine, act, onKeys, onM
 }
 const SKILLS = ["/dev-spec", "/dev-impl", "/workflow-review", "/workflow-commit"];
 /* 入力欄。Vim と同じくモードを持ち、Vim の操作で編集できる */
-function PromptEditor({ label, initial, working, stocking, plain, onSubmit, onClose, onMode, onView, onFocus, act }) {
+function PromptEditor({ label, initial, working, stocking, plain, onSubmit, onClose, onMode, onView, onFocus, act, recall, onRecall, nowVerb, verbOverride }) {
   const host = useRef(null), view = useRef(null), latest = useRef({}), imgs = useRef(0);
   const [text, setText] = useState(initial || ""), [images, setImages] = useState(0), [pmode, setPmode] = useState("INSERT");
   imgs.current = images;
-  latest.current = { onSubmit, onClose, onMode, onFocus, act };
+  latest.current = { onSubmit, onClose, onMode, onFocus, act, onRecall };
   const submit = (now) => latest.current.onSubmit(view.current.state.doc.toString(), imgs.current, now);
   useEffect(() => {
     view.current = new EditorView({ parent: host.current, state: EditorState.create({ doc: initial || "", selection: { anchor: (initial || "").length }, extensions: [vim(), drawSelection(), EditorView.lineWrapping,
@@ -627,17 +627,21 @@ function PromptEditor({ label, initial, working, stocking, plain, onSubmit, onCl
   const onKey = (e) => {
     if (e.nativeEvent.isComposing || !view.current) return;
     const vs = getCM(view.current).state.vim, eat = () => { e.preventDefault(); e.stopPropagation(); };
-    if (e.key === "Enter" && e.altKey && working && !vs.insertMode) { eat(); submit(true); }
+    /* Ctrl+Enter と Alt+Enter は Insert でも送る。AI が作業中の会話への指示と、届く前の指示を直しているときは、止めてすぐ届ける */
+    if (e.key === "Enter" && (e.ctrlKey || e.altKey) && !vs.visualMode) { eat(); submit(Boolean(nowVerb) || (working && !stocking)); }
+    /* 先頭の行の ↑ と末尾の行の ↓ は、届く前の指示を選ぶ。ほかの行ではカーソルを動かす */
+    else if ((e.key === "ArrowUp" || e.key === "ArrowDown") && latest.current.onRecall) { const st = view.current.state, ln = st.doc.lineAt(st.selection.main.head).number; if ((e.key === "ArrowUp" ? ln === 1 : ln === st.doc.lines) && latest.current.onRecall(e.key === "ArrowUp" ? -1 : 1, st.doc.toString())) eat(); }
     else if (isEsc(e) && !vs.insertMode && !vs.visualMode) { eat(); latest.current.onClose(view.current.state.doc.toString()); }
     else if (e.key === "Tab" && cands.length) { eat(); view.current.dispatch({ changes: { from: 0, to: view.current.state.doc.length, insert: cands[0] + " " }, selection: { anchor: cands[0].length + 1 } }); }
   };
-  const verb = stocking ? "ストックする" : plain ? "決定する" : working ? "預ける (今の作業が終わると届く)" : "送る";
+  const verb = verbOverride || (stocking ? "ストックする" : plain ? "決定する" : working ? "預ける (今の作業が終わると届く)" : "送る");
+  const now = nowVerb || (working && !stocking ? "AI を止めてすぐ送る" : verb.split(" ")[0]), up = recall ? [["↑", recall]] : [];
   return (
     <div onKeyDownCapture={onKey}>
       {cands.length > 0 && <div className="text-[13px] font-mono mb-1">{cands.map((c, n) => <span key={c} className={`mr-4 ${n === 0 ? "text-accent" : "text-muted"}`}>{c}</span>)}<span className="text-muted">Tab で選ぶ</span></div>}
       <div ref={host} className="rounded-md bg-surface px-1" />
-      <div className="text-[12px] text-muted mt-1 flex flex-wrap gap-x-4 items-center">
-        {pmode === "INSERT" ? <Hint items={[["Esc", "Normal へ (" + verb.split(" ")[0] + "のは Normal から)"]]} /> : <Hint items={[["Enter", verb], ...(working && !stocking ? [["Alt+Enter", "AI を止めてすぐ送る"]] : []), ["Esc", "閉じる (書きかけは残る)"]]} />}
+      <div data-sketch-change={plain && !verbOverride ? undefined : "148:すぐ送る・↑ の案内"} className="text-[12px] text-muted mt-1 flex flex-wrap gap-x-4 items-center">
+        <span className="inline-flex min-w-0">{pmode === "INSERT" ? <Hint items={[["Esc", "Normal へ"], ["Ctrl+Enter", now], ...up]} /> : <Hint items={[["Enter", verb], ...((working && !stocking) || nowVerb ? [["Ctrl+Enter", now]] : []), ["Esc", verbOverride ? "閉じる (直した内容は残る)" : "閉じる (書きかけは残る)"], ...up]} />}</span>
         {!plain && <Hint items={[["/", "スキル"]]} />}
         {images > 0 && <span className="text-accent">画像 {images} 件 (送信時に一緒に送る)</span>}
         {!plain && <button type="button" tabIndex={-1} className="underline" onClick={() => setImages((n) => n + 1)}>画像を貼る (見本)</button>}
@@ -905,7 +909,12 @@ function PC() {
       const t = threads.find((x) => x.id === i.thread);
       setStock((s) => [...s, { id: Date.now(), kind: "指示", text: body, quote: ["スレッドの確定事項"], key: t?.key ?? key, line: t?.line ?? 0, line2: t?.line ?? 0, ckey }]);
       setThreads((ts) => ts.map((x) => (x.id === i.thread ? { ...x, done: true } : x))); setRight("stock"); toast("確定事項を指示としてストックに入れ、スレッドを終えました", "ok");
-    } else if (i.kind === "預けた指示の編集") { setQueue((q) => q.map((x) => (x.id === i.id ? { ...x, text: body } : x))); toast("預けた指示を直しました", "ok"); }
+    } else if (i.kind === "預けた指示の編集") {
+      /* Ctrl+Enter では、直した内容を保存してから、届く前の指示をすべて書いた順に 1 通にしてすぐ届ける。書きかけは残る */
+      const qs = queue.map((x) => (x.id === i.id ? { ...x, text: body } : x));
+      if (now) { setSent((x) => [...x, { key, text: qs.map((q) => q.text).join("\n"), images }]); setQueue([]); toast(working ? `AI を止めて、届く前の指示 ${qs.length} 件をすぐに送りました` : `届く前の指示 ${qs.length} 件を送りました`, "ok"); }
+      else { setQueue(qs); toast("預けた指示を直しました", "ok"); }
+    }
     else if (i.kind === "回答") { setAnswers((a) => ({ ...a, [i.q]: body })); toast("回答を書きました。「回答をまとめて送る」で送ります", "ok"); }
     else if (i.kind === "項目") { (i.store === "conf" ? setConf : setForm)((f) => ({ ...f, [i.field]: body })); toast(`${i.field}を書き換えました`, "ok"); }
     else if (i.kind === "差し戻し") toast("差し戻しました。設計した会話の続きで直します", "ok");
@@ -922,8 +931,22 @@ function PC() {
     if (i.kind === "プロンプト") delete DRAFT[key];
     setInput(null); setFocus(i.kind === "確定事項" ? "right" : i.from || "main"); setMode("NORMAL");
   };
+  /* 入力欄の ↑ / ↓ で届く前の指示を選ぶ。書きかけは脇に置き、いちばん新しい指示の次 (↓) で戻る */
+  const recallQueue = (dir, text) => {
+    const i = input; if (!i || !queue.length) return false;
+    if (i.kind === "プロンプト") { if (dir > 0) return false; if (text.trim()) DRAFT[key] = text; const q = queue[queue.length - 1]; ask("預けた指示の編集", { text: q.text, id: q.id }); return true; }
+    const at = queue.findIndex((x) => x.id === i.id), next = at + dir;
+    /* 本文を空にしたまま移ろうとしたら、保存せずに留まる */
+    if (!text.trim()) { toast("内容が空です。取り消すときは、届く前の指示の行で dd を押してください", "error"); return true; }
+    setQueue((qs) => qs.map((x) => (x.id === i.id ? { ...x, text: text.trim() } : x)));
+    if (next < 0) return true;
+    if (next >= queue.length) ask("プロンプト", { text: DRAFT[key] || "" });
+    else ask("預けた指示の編集", { text: queue[next].text, id: queue[next].id });
+    return true;
+  };
   const closeInput = (text) => {
-    if (input?.kind === "プロンプト") { if (text.trim()) { DRAFT[key] = text; toast("書きかけを残しました。i で続きを書けます"); } else delete DRAFT[key]; }
+    if (input?.kind === "預けた指示の編集") { if (!text.trim()) { toast("内容が空です。取り消すときは、届く前の指示の行で dd を押してください", "error"); return; } setQueue((q) => q.map((x) => (x.id === input.id ? { ...x, text: text.trim() } : x))); }
+    else if (input?.kind === "プロンプト") { if (text.trim()) { DRAFT[key] = text; toast("書きかけを残しました。i で続きを書けます"); } else delete DRAFT[key]; }
     else if (text.trim()) toast(`${KIND[input.kind]}の入力をやめました`);
     setFocus(input?.from || "main"); setInput(null); setMode("NORMAL");
   };
@@ -1121,10 +1144,13 @@ function PC() {
       </div>
       {input && (
         <div className={`mx-2 mb-2 rounded-lg border bg-raised px-3 py-2 shadow-float ${focus === "prompt" ? "border-accent" : "border-line"}`}>
-          <div className="text-[12px] mb-1"><span className="text-ink font-bold">{input.kind === "項目" ? `${input.field}を書く` : input.id && (input.kind === "質問" || input.kind === "指示") ? `${input.kind}を直す` : KIND[input.kind]}</span>
-            <span className="text-muted ml-3">{input.kind === "プロンプト" ? `送り先: ${dest}${working ? " (AI が作業中)" : ""}` : input.kind === "質問" ? `送り先: ${dest}。送るとスレッドが始まる。送るまではストックに置く` : input.kind === "指示" ? `送り先: ${dest}。ほかの指示とまとめて送る。送るまではストックに置く` : input.kind === "確定事項" ? "AI の案です。直してから指示としてストックに入れる" : ""}</span>
+          <div className="text-[12px] mb-1"><span className="text-ink font-bold">{input.kind === "項目" ? `${input.field}を書く` : input.id && (input.kind === "質問" || input.kind === "指示") ? `${input.kind}を直す` : input.kind === "預けた指示の編集" ? <span data-sketch-change="148:直している指示">{`預けた指示を直す (${queue.findIndex((x) => x.id === input.id) + 1} / ${queue.length} 件目)`}</span> : KIND[input.kind]}</span>
+            <span className="text-muted ml-3">{input.kind === "プロンプト" || input.kind === "預けた指示の編集" ? `送り先: ${dest}${working ? " (AI が作業中)" : ""}` : input.kind === "質問" ? `送り先: ${dest}。送るとスレッドが始まる。送るまではストックに置く` : input.kind === "指示" ? `送り先: ${dest}。ほかの指示とまとめて送る。送るまではストックに置く` : input.kind === "確定事項" ? "AI の案です。直してから指示としてストックに入れる" : ""}</span>
             {input.quote && <div className="mt-1 font-mono text-muted border-l-2 border-line pl-2">{input.quote.slice(0, 5).map((q, n) => <div key={n} className="truncate"><span className="inline-block w-6 text-right mr-2">{input.line + 1 + n}</span>{q}</div>)}{input.quote.length > 5 && <div>…ほか {input.quote.length - 5} 行</div>}</div>}</div>
           <PromptEditor key={input.uid} label={KIND[input.kind]} initial={input.text} working={working && input.kind === "プロンプト"} stocking={["質問", "指示", "確定事項"].includes(input.kind)} plain={input.kind !== "プロンプト"}
+            recall={input.kind === "プロンプト" && queue.length ? "届く前の指示を直す" : input.kind === "預けた指示の編集" && queue.findIndex((x) => x.id === input.id) > 0 ? "前の指示へ" : null}
+            onRecall={input.kind === "プロンプト" || input.kind === "預けた指示の編集" ? recallQueue : null}
+            nowVerb={input.kind === "預けた指示の編集" ? (working ? "AI を止めて届く前の指示をすぐ送る" : "届く前の指示をすぐ送る") : null} verbOverride={input.kind === "預けた指示の編集" ? "直す" : null}
             onSubmit={submit} onClose={closeInput} onMode={onMode("prompt")} onView={(w) => { views.current.prompt = w; }} onFocus={() => setFocus("prompt")} act={onAct("prompt")} />
         </div>
       )}
@@ -1492,7 +1518,8 @@ const INTERACTIONS = [
   ["一覧で Enter", "行の会話か issue を開く", "未読があれば未読の先頭を表示し、右に直近を出す"],
   ["i", "入力欄を開く", "Vim と同じモードで編集する。Normal で Enter を押すと送る。AI が作業中なら預かり、終わってから届ける"],
   ["Esc / Ctrl+[", "入力欄: Insert から Normal へ。Normal で押すと閉じる", "書きかけは会話ごとに残り、i で続きを書ける"],
-  ["Alt+Enter (Normal)", "AI を止めて、すぐ送る", "届く前の指示は、新しい指示の前に付けて一緒に届く"],
+  ["Ctrl+Enter (Insert でも)", "すぐ送る。AI が作業中なら止めて送る", "届く前の指示は、新しい指示の前に付けて一緒に届く"],
+  ["↑ (入力欄の先頭の行)", "届く前の指示を新しい順に呼び出して直す", "↓ で書きかけに戻る。直したあと Ctrl+Enter で、届く前の指示をすぐ届ける"],
   ["/ (入力欄の先頭)", "スキルの候補を出す", "Tab で選ぶ"],
   ["Space i / m / d", "直近 / 目次 / 決まったこと を右に開く", "Enter で本文のその場所へ移動し、Ctrl+o で元の位置へ戻る"],
   ["v / V / Ctrl+v → Space q / c", "選んだ箇所に質問 / 指示を書く (引用 1 つごとに 1 件)", "ストックに入り、行の左に ? / ! が付く。印の行でもう一度押すと、その件を直す"],
@@ -1568,6 +1595,7 @@ const SKETCH_VIEWS = {
   "pc-conv-other": pc({ s: "conv", project: "shop-api", conv: 1, tab: 0 }),
   "pc-issue-working": pc(issueV("shop-api", 43, 0)),
   "pc-issue-working--input": pc(issueV("shop-api", 43, 0), null, { keep: { "pc.queue": QUEUE_DEMO }, once: { "pc.input": { uid: 1, kind: "プロンプト", text: "" } } }),
+  "pc-issue-working--queue-edit": pc(issueV("shop-api", 43, 0), null, { keep: { "pc.queue": QUEUE_DEMO }, once: { "pc.input": { uid: 1, kind: "預けた指示の編集", id: 2, text: QUEUE_DEMO[1].text } } }),
   "pc-issue-working--timeline": pc(issueV("shop-api", 43, 0), "timeline"),
   "pc-issue-working--task": pc(issueV("shop-api", 43, 0), "task"),
   "pc-issue-design": pc(issueV("shop-api", 42, 1)),
