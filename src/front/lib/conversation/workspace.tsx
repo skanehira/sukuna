@@ -481,6 +481,7 @@ export function createConversationWorkspace(
   return {
     loadScreen,
     loadConversation,
+    stopConversation: api.stop,
     issueMonitor,
     subscribeIssueConversation,
     connection,

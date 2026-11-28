@@ -161,6 +161,7 @@ const issues = createIssueWorkspace({
   subscribeConversation: conversations.subscribeIssueConversation,
   loadConversation: conversations.loadConversation,
   monitorConversation: conversations.issueMonitor,
+  stopConversation: conversations.stopConversation,
   projectForConversation: conversations.projectForConversation,
   refreshListings: (id) => {
     void inbox.overview(id).refresh();

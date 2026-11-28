@@ -19,12 +19,14 @@ function mount(
   extra: {
     subscribe?: LifecycleFeed;
     loadConversation?: (id: string) => Promise<ConversationSession>;
+    getIssue?: (id: string) => Promise<IssueView>;
+    stopConversation?: (id: string) => Promise<unknown>;
   } = {},
 ) {
   const navigate = vi.fn();
   const notify = vi.fn();
   const controller = new BufferController({ url: "/issues/i", navigate, notify });
-  const api = { ...issueApi(issue), reopen };
+  const api = { ...issueApi(issue), reopen, ...(extra.getIssue ? { get: extra.getIssue } : {}) };
   const view = render(
     <SWRConfig value={{ provider: () => new Map() }}>
       <Layout
@@ -43,6 +45,7 @@ function mount(
                 throw new Error("会話は用意していません");
               })
             }
+            stopConversation={extra.stopConversation ?? (async () => {})}
             positionKey="/issues/i"
             openAtTail={false}
             refreshListings={() => {}}
@@ -123,4 +126,67 @@ it("担当会話の一時取得失敗を再接続で再取得し、見つから�
     [...callbacks].forEach((receive) => receive());
   });
   expect(load.mock.calls).toEqual([["triage"], ["triage"]]);
+});
+
+const stages: IssueView["conversations"] = [
+  { id: "triage", kind: "triage", runState: "idle" },
+  { id: "current-impl", kind: "impl", runState: "working" },
+];
+
+it(":stop は表示中の段階を変えず、最新の担当会話へ止める要求を送る", async () => {
+  const initial = issueView({ state: "triage", conversations: stages });
+  let latest = initial;
+  const stopConversation = vi.fn<(id: string) => Promise<void>>(async () => {});
+  const { controller, notify } = mount(initial, undefined, {
+    getIssue: async () => latest,
+    stopConversation,
+  });
+  await screen.findByText("精査の会話 (表示中)", { exact: true });
+  latest = { ...initial, state: "implementing" };
+  await act(() => controller.command("stop"));
+  expect(stopConversation).toHaveBeenCalledExactlyOnceWith("current-impl");
+  expect(screen.getByText("精査の会話 (表示中)", { exact: true })).toBeVisible();
+  expect(notify).toHaveBeenCalledWith(
+    "#12 予約を確保する の AI を止めました。作業は保存され、指示待ちになります",
+    "info",
+  );
+});
+
+it("担当会話がなければ過去の段階を止めず、停止先がないことを知らせる", async () => {
+  const issue = issueView({ state: "withdrawn", conversations: stages });
+  const stopConversation = vi.fn<(id: string) => Promise<void>>(async () => {});
+  const { controller, notify } = mount(issue, undefined, { stopConversation });
+  await screen.findByText("実装の会話 (表示中)", { exact: true });
+  await act(() => controller.run("agent.stop"));
+  expect(stopConversation).not.toHaveBeenCalled();
+  expect(notify).toHaveBeenCalledExactlyOnceWith("止める AI がありません", "error");
+});
+
+it("停止先を読み直している間に別画面へ移ると、元の issue に停止を送らない", async () => {
+  const issue = issueView({ state: "implementing", conversations: stages });
+  let useGate = false;
+  let finishGet!: (issue: IssueView) => void;
+  const pending = new Promise<IssueView>((resolve) => {
+    finishGet = resolve;
+  });
+  const stopConversation = vi.fn<(id: string) => Promise<void>>(async () => {});
+  const { controller, navigate } = mount(issue, undefined, {
+    getIssue: async () => (useGate ? await pending : issue),
+    stopConversation,
+  });
+  await screen.findByText("実装の会話 (表示中)", { exact: true });
+  useGate = true;
+  let stopped: Promise<void> | undefined;
+  act(() => {
+    stopped = controller.run("agent.stop");
+  });
+  act(() => {
+    void controller.navigate("/projects/p");
+  });
+  await act(async () => {
+    finishGet(issue);
+    await stopped;
+  });
+  expect(navigate).toHaveBeenCalledExactlyOnceWith("/projects/p");
+  expect(stopConversation).not.toHaveBeenCalled();
 });

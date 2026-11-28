@@ -1,4 +1,9 @@
-export type RightView = { view: string; target: string; parent?: string };
+export type RightView = {
+  view: string;
+  target: string;
+  parent?: string;
+  task?: { id: string; conversationId: string };
+};
 export type RightState = { current: RightView | null; stack: RightView[] };
 export const isThreadRight = (view: RightView) =>
   view.view === "thread" || view.view === "stock-thread";

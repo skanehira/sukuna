@@ -4,6 +4,8 @@ import { useEffect } from "react";
 import useSWR from "swr";
 import type { IssueView } from "../../../shared/issue/schema";
 import { type BufferController, ScreenOpeningContext } from "../../buffer/controller";
+import { isTimelineView } from "../../buffer/right-window";
+import { conversationCommands, timelineStopAction } from "../../lib/conversation/keymap";
 import { Frame } from "../../buffer/Frame";
 import type { LineInfo } from "../../buffer/line";
 import type { LifecycleFeed } from "../../components/lifecycle/use-lifecycle";
@@ -16,6 +18,7 @@ import type { IssueApi } from "./issue-api";
 import { issueDataKey, issueFormUrl } from "./issue-form";
 import { issueFormColumns, isClosedIssue } from "./issue-form-lines";
 import {
+  assignedIssueConversation,
   displayLabels,
   firstIssueConversation,
   firstIssueDisplay,
@@ -219,6 +222,7 @@ export function IssuePage({
   subscribeConversation,
   loadConversation,
   monitorConversation,
+  stopConversation,
   positionKey,
   openAtTail,
   refreshListings,
@@ -232,6 +236,7 @@ export function IssuePage({
   subscribeConversation: SubscribeConversation;
   loadConversation: LoadConversation;
   monitorConversation?: MonitorConversation;
+  stopConversation: (id: string) => Promise<unknown>;
   positionKey: string;
   openAtTail: boolean;
   refreshListings: (projectId: string) => void;
@@ -248,6 +253,52 @@ export function IssuePage({
   const selected =
     issue.conversations.find((item) => item.id === conversationId) ?? firstIssueConversation(issue);
   const title = `${projectName} / #${issue.number} ${issue.title} / ${displayLabels[display]}`;
+
+  const stopping = useRef(false);
+  const issueId = initial.id;
+  const selectedId = selected?.id;
+  useEffect(() => {
+    const current = () => opening === controller.screenOpening();
+    const removeStop = controller.registerActionInterceptor(timelineStopAction.name, {
+      views: ["issue", ...timelineStopAction.views],
+      async run({ window }) {
+        if (!current()) return false;
+        if (window !== "main") {
+          const right = controller.right.current;
+          if (window !== "right" || right?.target !== issueId || !isTimelineView(right.view))
+            return true;
+        }
+        if (stopping.current) return true;
+        stopping.current = true;
+        try {
+          const latest = await api.get(issueId);
+          if (!current()) return true;
+          const assigned = assignedIssueConversation(latest);
+          if (!assigned) throw new Error("止める AI がありません");
+          await stopConversation(assigned.id);
+          if (current()) {
+            controller.notify(
+              `#${latest.number} ${latest.title} の AI を止めました。作業は保存され、指示待ちになります`,
+            );
+          }
+        } catch (error) {
+          if (current()) throw error;
+        } finally {
+          stopping.current = false;
+        }
+        return true;
+      },
+    });
+    const removeCommand = controller.commands.register({
+      ...conversationCommands.stop,
+      where: "issue",
+      run: () => controller.run(timelineStopAction.name),
+    });
+    return () => {
+      removeCommand();
+      removeStop();
+    };
+  }, [api, controller, display, issueId, opening, selectedId, stopConversation]);
 
   useEffect(
     () =>

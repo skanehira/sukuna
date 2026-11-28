@@ -56,6 +56,7 @@ export class WorkMonitor {
   private listeners = new Set<() => void>();
   private cancelTimer: (() => void) | undefined;
   private readonly url: string;
+  private readonly positionScope: string;
   readonly target: ProgressTarget;
   private readonly conversation: ConversationSession;
   private readonly options: WorkMonitorOptions;
@@ -69,8 +70,15 @@ export class WorkMonitor {
     this.options = options;
     this.target = target;
     this.url = `/${target.kind === "issue" ? "issues" : "conversations"}/${encodeURIComponent(target.id)}`;
-    this.treeId = this.options.storage.getItem(`sukuna:timeline:tree:${this.url}`);
-    this.taskId = this.options.storage.getItem(`sukuna:timeline:task:${this.url}`);
+    this.positionScope =
+      target.kind === "issue"
+        ? `${this.url}:conversation:${encodeURIComponent(conversation.id)}`
+        : this.url;
+    this.treeId = this.options.storage.getItem(`sukuna:timeline:tree:${this.positionScope}`);
+    this.taskId =
+      target.kind === "conversation"
+        ? this.options.storage.getItem(`sukuna:timeline:task:${this.url}`)
+        : null;
   }
 
   snapshot = () => this.state;
@@ -125,16 +133,25 @@ export class WorkMonitor {
           !this.state.data?.timeline?.tasks.some((task) => task.id === taskId)
         )
           return;
-        this.taskId = taskId;
-        this.options.storage.setItem(`sukuna:timeline:task:${this.url}`, taskId);
-        controller.openRight({ view: "timeline-task", target: this.target.id });
+        if (this.target.kind === "issue") {
+          controller.openRight({
+            view: "timeline-task",
+            target: this.target.id,
+            task: { id: taskId, conversationId: this.conversation.id },
+          });
+        } else {
+          this.taskId = taskId;
+          this.options.storage.setItem(`sukuna:timeline:task:${this.url}`, taskId);
+          controller.openRight({ view: "timeline-task", target: this.target.id });
+        }
       }),
       register("timeline.continue", "続きを依頼する", "timeline", async () => {
         const tree = selectedTree(this.state.data?.timeline ?? null, this.treeId);
         if (tree) await this.conversation.continueTimeline(tree.title);
       }),
       register("timeline.consult", "このタスクについて相談する", "timeline-task", async () => {
-        const task = this.state.data?.timeline?.tasks.find(({ id }) => id === this.taskId);
+        const selected = this.selectedTask();
+        const task = this.state.data?.timeline?.tasks.find(({ id }) => id === selected);
         if (!task) return;
         const opening = controller.right.openingRevision();
         const promptId = controller.snapshot().promptId;
@@ -247,7 +264,7 @@ export class WorkMonitor {
         !data.timeline.trees.some(({ id }) => id === this.treeId)
       ) {
         this.treeId = null;
-        this.options.storage.removeItem(`sukuna:timeline:tree:${this.url}`);
+        this.options.storage.removeItem(`sukuna:timeline:tree:${this.positionScope}`);
       }
       const tree =
         this.visible() && this.treeId === null ? selectedTree(data.timeline, null) : null;
@@ -274,12 +291,22 @@ export class WorkMonitor {
 
   private rememberTree(id: string): void {
     this.treeId = id;
-    this.options.storage.setItem(`sukuna:timeline:tree:${this.url}`, id);
+    this.options.storage.setItem(`sukuna:timeline:tree:${this.positionScope}`, id);
   }
 
   private paint(): void {
     this.state = { ...this.state, version: this.state.version + 1 };
     this.listeners.forEach((listener) => listener());
+  }
+
+  private selectedTask(): string | null {
+    if (this.target.kind === "conversation") return this.taskId;
+    const right = this.conversation.controller.right.current;
+    return right?.view === "timeline-task" &&
+      right.target === this.target.id &&
+      right.task?.conversationId === this.conversation.id
+      ? right.task.id
+      : null;
   }
 
   lines(view: TimelineView, { data, error }: TimelineSnapshot) {
@@ -288,12 +315,12 @@ export class WorkMonitor {
     const rows =
       view === "timeline"
         ? timelineLines(data.timeline, this.treeId, data.readError !== null, now)
-        : taskDetailLines(data.timeline, this.taskId, data.readError !== null, now);
+        : taskDetailLines(data.timeline, this.selectedTask(), data.readError !== null, now);
     return error ? [timelineNote(error), ...rows] : rows;
   }
 
   positionKey(view: string): string {
-    return `${this.url}:${view}${view === "timeline-task" ? `:${encodeURIComponent(this.taskId ?? "")}` : ""}`;
+    return `${this.positionScope}:${view}${view === "timeline-task" ? `:${encodeURIComponent(this.selectedTask() ?? "")}` : ""}`;
   }
 }
 

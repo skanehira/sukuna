@@ -24,6 +24,7 @@ export function createIssueWorkspace({
   subscribeConversation,
   loadConversation,
   monitorConversation,
+  stopConversation,
   projectForConversation,
   refreshListings,
 }: {
@@ -35,6 +36,7 @@ export function createIssueWorkspace({
   schedule: (run: () => void, ms: number) => () => void;
   subscribeConversation: (session: ConversationSession, monitor?: WorkMonitor) => () => void;
   loadConversation: (id: string) => Promise<ConversationSession>;
+  stopConversation: (id: string) => Promise<unknown>;
   monitorConversation?: (session: ConversationSession, issueId: string) => WorkMonitor | undefined;
   projectForConversation: (id: string) => string | undefined;
   refreshListings: (projectId: string) => void;
@@ -97,6 +99,7 @@ export function createIssueWorkspace({
               subscribeConversation={subscribeConversation}
               loadConversation={loadConversation}
               monitorConversation={monitorConversation}
+              stopConversation={stopConversation}
               positionKey={`/issues/${encodeURIComponent(issue.id)}`}
               openAtTail={new URLSearchParams(route.query).get("tail") === "1"}
               refreshListings={refreshListings}

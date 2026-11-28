@@ -42,7 +42,7 @@ export function issueConversations(issue: IssueView): IssueConversation[] {
     .filter((item) => item !== undefined);
 }
 
-export function firstIssueConversation(issue: IssueView): IssueConversation | undefined {
+export function assignedIssueConversation(issue: IssueView): IssueConversation | undefined {
   const active = issue.state === "stopped" ? issue.stoppedFrom : issue.state;
   const kind =
     active === "triage"
@@ -52,7 +52,11 @@ export function firstIssueConversation(issue: IssueView): IssueConversation | un
         : active === "ready" || active === "implementing" || active === "done"
           ? "impl"
           : undefined;
-  return issue.conversations.findLast((item) => item.kind === kind) ?? issue.conversations.at(-1);
+  return issue.conversations.findLast((item) => item.kind === kind);
+}
+
+export function firstIssueConversation(issue: IssueView): IssueConversation | undefined {
+  return assignedIssueConversation(issue) ?? issue.conversations.at(-1);
 }
 
 function issueLink(label: string, item: IssueReference, group: string) {
