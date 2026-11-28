@@ -763,7 +763,7 @@ it("欠番回復後もツールの行先、質問の回答と展開済みの差�
   ]);
   expect(f.shown()).toEqual([
     "● issue_create()",
-    '⎿ {"issue":{"number":42}}',
+    '  ⎿  {"issue":{"number":42}}',
     ...Array.from({ length: 26 }, (_, index) => `${index + 1} +line${index + 1}`),
     "Q1. 続ける?",
     "はい  ✓ 送った回答",
