@@ -4,7 +4,6 @@ import {
   openMigratedDatabase,
   removeTempHome,
 } from "../../../../shared/db/test-helpers";
-import { readEnvironment } from "../../../../shared/env";
 import { startRunnerApp } from "../../../app";
 import { ScriptedAgent, turnEnd } from "./scripted-agent";
 import { createIpcRoutes } from "./ipc-routes";
@@ -64,12 +63,7 @@ it.each(["active", "released", "same-project", "other-project", "latest-init"] a
     const app = await startRunnerApp({
       database,
       agent,
-      environment: readEnvironment(
-        "runner",
-        { SUKUNA_HOME: home },
-        home,
-        () => true,
-      )._unsafeUnwrap(),
+      environment: testEnvironment(home),
       log: () => {},
     });
     const routes = createIpcRoutes(app.runtime, () => {});
@@ -124,12 +118,7 @@ it.each(["developer", "answer_text"] as const)(
     const app = await startRunnerApp({
       database,
       agent,
-      environment: readEnvironment(
-        "runner",
-        { SUKUNA_HOME: home },
-        home,
-        () => true,
-      )._unsafeUnwrap(),
+      environment: testEnvironment(home),
       log: () => {},
     });
     try {
@@ -211,7 +200,7 @@ it("指示を預けた後と届けて削除した後に、変更済みの待ち�
   const app = await startRunnerApp({
     database,
     agent: new ControlledAgent({ rules: [] }),
-    environment: readEnvironment("runner", { SUKUNA_HOME: home }, home, () => true)._unsafeUnwrap(),
+    environment: testEnvironment(home),
     log: () => {},
   });
   try {
@@ -257,12 +246,7 @@ it.each(["waiting", "queued", "delivered"] as const)(
     const app = await startRunnerApp({
       database,
       agent,
-      environment: readEnvironment(
-        "runner",
-        { SUKUNA_HOME: home },
-        home,
-        () => true,
-      )._unsafeUnwrap(),
+      environment: testEnvironment(home),
       log: () => {},
     });
     try {
@@ -332,7 +316,7 @@ it("IPC境界の例外だけをerrorログに残し、本文は公開せず終�
   const app = await startRunnerApp({
     database,
     agent: new ScriptedAgent({ rules: [] }),
-    environment: readEnvironment("runner", { SUKUNA_HOME: home }, home, () => true)._unsafeUnwrap(),
+    environment: testEnvironment(home),
     log,
   });
   const routes = createIpcRoutes(app.runtime, log, undefined, {
@@ -404,7 +388,7 @@ it("会話の操作を振り分け、409と400を返し、指示をログへ出�
   const logs: LogEntry[] = [];
   const app = await startRunnerApp({
     database,
-    environment: readEnvironment("runner", { SUKUNA_HOME: home }, home, () => true)._unsafeUnwrap(),
+    environment: testEnvironment(home),
     agent: new ScriptedAgent({ rules: [], fallback: [{ hold: true }] }),
     log: (entry) => logs.push(entry),
   });
@@ -472,7 +456,7 @@ it("届く前の指示は作業中には届けず、停止後に明示して届�
   const database = openMigratedDatabase(home);
   const app = await startRunnerApp({
     database,
-    environment: readEnvironment("runner", { SUKUNA_HOME: home }, home, () => true)._unsafeUnwrap(),
+    environment: testEnvironment(home),
     agent: new ScriptedAgent({ rules: [], fallback: [{ hold: true }] }),
     log: () => {},
   });
@@ -527,7 +511,7 @@ it("作業場所の振り分けは後続機能のPortへ渡し409を保つ", asy
   const database = openMigratedDatabase(home);
   const app = await startRunnerApp({
     database,
-    environment: readEnvironment("runner", { SUKUNA_HOME: home }, home, () => true)._unsafeUnwrap(),
+    environment: testEnvironment(home),
     agent: new ScriptedAgent({ rules: [] }),
     log: () => {},
   });
@@ -556,3 +540,4 @@ it("作業場所の振り分けは後続機能のPortへ渡し409を保つ", asy
   }
 });
 import { err } from "neverthrow";
+import { testEnvironment } from "../../../../test/directories";

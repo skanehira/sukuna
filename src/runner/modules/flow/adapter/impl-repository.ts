@@ -63,7 +63,7 @@ export function createImplementationTrees(database: OpenedDatabase): Implementat
       .run();
   };
   return {
-    activity: createWorktreeActivity(database.sqlite.name),
+    activity: createWorktreeActivity(database.directories.state),
     list,
     ownedDesignForCleanup: (projectId, issueId) =>
       rows(projectId).filter(

@@ -3,11 +3,12 @@ import { join } from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 import { openDatabase } from "./open";
 import { createTempHome, removeTempHome } from "./test-helpers";
+import { directoriesIn } from "../../test/directories";
 
 describe("データベースを開く", () => {
   it("接続の設定で journal_mode が WAL、busy_timeout が 5000、foreign_keys が ON になる", () => {
     const home = createTempHome();
-    const opened = openDatabase(home);
+    const opened = openDatabase(directoriesIn(home));
 
     try {
       expect(opened.sqlite.pragma("journal_mode", { simple: true })).toBe("wal");

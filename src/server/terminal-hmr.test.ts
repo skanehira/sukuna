@@ -8,6 +8,7 @@ import { WebSocket } from "ws";
 import { terminalOpenedSchema, terminalOutputFrameSchema } from "../shared/api/terminal";
 import { createTempHome, removeTempHome } from "../shared/db/test-helpers";
 import { activeFixtureJob } from "./modules/workspace/adapter/terminal-test-helpers";
+import { xdgVariablesIn } from "../test/directories";
 
 const run = promisify(execFile);
 const root = fileURLToPath(new URL("../..", import.meta.url));
@@ -16,7 +17,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { createServer } from "vite";
 
-const home = process.env.SUKUNA_HOME;
+const home = process.argv[1];
 const loader = await createServer({
   root: process.cwd(),
   cacheDir: join(home, "vite-cache"),
@@ -28,7 +29,7 @@ const loader = await createServer({
 const runtimePath = "/src/server/runtime.ts";
 const devPath = "/src/server/dev.ts";
 const runtime = await loader.ssrLoadModule(runtimePath);
-const started = await runtime.initializeRuntime({ homeDir: home });
+const started = await runtime.initializeRuntime({ directories: { data: home, state: home, runtime: home } });
 if (started.isErr()) throw new Error(started.error.message);
 const database = runtime.getDatabase();
 database.sqlite.prepare("INSERT INTO projects (id, name, path, default_branch) VALUES ('p', 'sample', ?, 'main')").run(home);
@@ -93,7 +94,7 @@ function devEnvironment(home: string) {
     ...process.env,
     NODE_ENV: "development",
     SHELL: "/bin/sh",
-    SUKUNA_HOME: home,
+    ...xdgVariablesIn(home),
     SUKUNA_RUNNER_SOCKET: join(home, "runner.sock"),
   };
   delete env.VITEST;
@@ -106,7 +107,7 @@ it(
   async () => {
     const home = createTempHome();
     try {
-      const { stdout } = await run(process.execPath, ["--input-type=module", "-e", entry], {
+      const { stdout } = await run(process.execPath, ["--input-type=module", "-e", entry, home], {
         cwd: root,
         env: devEnvironment(home),
         timeout: 12000,
@@ -155,7 +156,7 @@ it(
     const home = createTempHome();
     const code =
       devServer + "await loader.listen(); process.send(loader.httpServer.address().port);";
-    const child = spawn(process.execPath, ["--input-type=module", "-e", code], {
+    const child = spawn(process.execPath, ["--input-type=module", "-e", code, home], {
       cwd: root,
       env: devEnvironment(home),
       stdio: ["pipe", "pipe", "pipe", "ipc"],

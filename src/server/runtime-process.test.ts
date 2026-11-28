@@ -10,21 +10,22 @@ import { createTempHome, openMigratedDatabase, removeTempHome } from "../shared/
 import { migrations } from "../shared/db/migrate";
 import { RunnerLink } from "./runner-link";
 import type { ServerMessage } from "../shared/ws";
+import { xdgDirectoriesIn, xdgVariablesIn } from "../test/directories";
 
-const loader = `import {createServer} from 'vite';const loader=await createServer({configFile:false,root:process.cwd(),cacheDir:process.env.SUKUNA_HOME+'/vite-cache-'+process.pid,envDir:false,server:{middlewareMode:true,ws:false,watch:null},optimizeDeps:{entries:[]}});`;
+const loader = `import {createServer} from 'vite';const loader=await createServer({configFile:false,root:process.cwd(),cacheDir:process.env.XDG_STATE_HOME+'/vite-cache-'+process.pid,envDir:false,server:{middlewareMode:true,ws:false,watch:null},optimizeDeps:{entries:[]}});`;
 const root = fileURLToPath(new URL("../..", import.meta.url));
 function startProcess(home: string, role: "runner" | "server") {
   const code =
     loader +
     (role === "runner"
       ? `await loader.ssrLoadModule('/src/runner/main.ts');`
-      : `const {initializeRuntime,attachUpgradeHandler,getRunnerLink}=await loader.ssrLoadModule('/src/server/runtime.ts');const result=await initializeRuntime({homeDir:process.env.SUKUNA_HOME},{socket:process.env.SUKUNA_RUNNER_SOCKET});if(result.isErr())throw Error(result.error.message);const {serve}=await import('@hono/node-server');const {Hono}=await import('hono');const app=new Hono();app.post('/operate',async c=>getRunnerLink().forward('POST','/conversations/'+(await c.req.json()).id+'/stop'));const server=serve({fetch:app.fetch,port:0,hostname:'127.0.0.1'},info=>console.log(JSON.stringify({ready:info.port})));attachUpgradeHandler(server);`);
+      : `const {initializeRuntime,attachUpgradeHandler,getRunnerLink}=await loader.ssrLoadModule('/src/server/runtime.ts');const result=await initializeRuntime({},{socket:process.env.SUKUNA_RUNNER_SOCKET});if(result.isErr())throw Error(result.error.message);const {serve}=await import('@hono/node-server');const {Hono}=await import('hono');const app=new Hono();app.post('/operate',async c=>getRunnerLink().forward('POST','/conversations/'+(await c.req.json()).id+'/stop'));const server=serve({fetch:app.fetch,port:0,hostname:'127.0.0.1'},info=>console.log(JSON.stringify({ready:info.port})));attachUpgradeHandler(server);`);
   const child = spawn(process.execPath, ["--input-type=module", "-e", code], {
     cwd: root,
     env: {
       ...process.env,
       NODE_ENV: "development",
-      SUKUNA_HOME: home,
+      ...xdgVariablesIn(home),
       SUKUNA_RUNNER_SOCKET: join(home, "runner.sock"),
       SUKUNA_AGENT: "fake",
       SUKUNA_AGENT_SCRIPT: join(home, "agent.json"),
@@ -121,8 +122,8 @@ it("別プロセスのIPCから購読へ配信し、両プロセスの片方だ�
   try {
     const [, port] = await Promise.all([runner.ready, server.ready]);
     expect(statSync(join(home, "runner.sock")).mode & 0o777).toBe(0o600);
-    expect(existsSync(join(home, "db.lock"))).toBe(false);
-    const db = openMigratedDatabase(home);
+    expect(existsSync(join(xdgDirectoriesIn(home).state, "db.lock"))).toBe(false);
+    const db = openMigratedDatabase(xdgDirectoriesIn(home).data);
     expect(db.sqlite.prepare("SELECT COUNT(*) AS count FROM __drizzle_migrations").get()).toEqual({
       count: migrations.length,
     });
@@ -173,7 +174,7 @@ it("別プロセスのIPCから購読へ配信し、両プロセスの片方だ�
     expect(
       a.received.filter((m) => m.topic === "inbox" && m.type === "changed").at(-1)?.payload,
     ).toEqual({ conversation_ids: [id], issue_ids: [], project_ids: ["p"] });
-    const saved = openMigratedDatabase(home);
+    const saved = openMigratedDatabase(xdgDirectoriesIn(home).data);
     expect(saved.sqlite.prepare("SELECT run_state FROM conversations WHERE id=?").get(id)).toEqual({
       run_state: "working",
     });

@@ -1,7 +1,6 @@
 import { createGithubImportDependencies } from "./modules/issue/adapter/github-import-routes";
 import { createUsageDependencies } from "./modules/conversation/adapter/usage-routes";
 import { createGhRunner } from "../shared/gh/gh-runner";
-import { dirname } from "node:path";
 import { readRestoreGeneration } from "../shared/db/restore-state";
 import { createSettingsDependencies } from "./modules/settings/adapter/dependencies";
 import { createDesignDependencies } from "./modules/flow/adapter/design-dependencies";
@@ -34,7 +33,7 @@ export default createApp({
   restoreGeneration: readRestoreGeneration(getDatabase().sqlite),
   settings: createSettingsDependencies(
     () => getDatabase().db,
-    dirname(getDatabase().sqlite.name),
+    getDatabase().directories,
     () => getWsHub().settingsChanged(),
     undefined,
     { runner: getRunnerLink, inboxChanged: () => getWsHub().inbox() },

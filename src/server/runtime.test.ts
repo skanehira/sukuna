@@ -8,6 +8,7 @@ import WebSocket from "ws";
 import type { OpenedDatabase } from "../shared/db/open";
 import { createTempHome, removeTempHome } from "../shared/db/test-helpers";
 import { attachUpgradeHandler, getDatabase, initializeRuntime } from "./runtime";
+import { directoriesIn, xdgVariablesIn } from "../test/directories";
 
 function settle(socket: WebSocket): Promise<"open" | "error"> {
   return new Promise((resolve) => {
@@ -70,12 +71,12 @@ describe("initializeRuntime", () => {
     let database: OpenedDatabase | undefined;
 
     try {
-      const first = await initializeRuntime({ homeDir: home });
+      const first = await initializeRuntime({ directories: directoriesIn(home) });
       expect(first.isOk()).toBe(true);
       if (!first.isOk()) throw new Error("初期化に失敗しました");
       database = getDatabase();
 
-      const second = await initializeRuntime({ homeDir: home });
+      const second = await initializeRuntime({ directories: directoriesIn(home) });
       expect(second.isOk()).toBe(true);
       expect(getDatabase()).toBe(database);
     } finally {
@@ -91,7 +92,7 @@ it("設定ルートと共有スキーマを HMR で読み直しても同じ SQLi
     import assert from "node:assert/strict";
     import { join, resolve } from "node:path";
     import { createServer } from "vite";
-    const home = process.env.SUKUNA_HOME;
+    const home = process.argv[1];
     const loader = await createServer({
       configFile:false, root:process.cwd(), envDir:false,
       cacheDir:join(home, "vite-cache"),
@@ -101,7 +102,7 @@ it("設定ルートと共有スキーマを HMR で読み直しても同じ SQLi
     let runtime;
     try {
       runtime = await loader.ssrLoadModule("/src/server/runtime.ts");
-      const started = await runtime.initializeRuntime({homeDir:home}, {log:()=>{}});
+      const started = await runtime.initializeRuntime({directories:{data:home,state:home,runtime:home}}, {log:()=>{}});
       assert.equal(started.isOk(), true);
       const database = runtime.getDatabase();
       const hub = runtime.getWsHub();
@@ -152,11 +153,11 @@ it("設定ルートと共有スキーマを HMR で読み直しても同じ SQLi
     }
   `;
   try {
-    await promisify(execFile)(process.execPath, ["--input-type=module", "-e", probe], {
+    await promisify(execFile)(process.execPath, ["--input-type=module", "-e", probe, home], {
       cwd: fileURLToPath(new URL("../..", import.meta.url)),
       env: {
         ...process.env,
-        SUKUNA_HOME: home,
+        ...xdgVariablesIn(home),
         SUKUNA_RUNNER_SOCKET: home + "/runner.sock",
       },
       timeout: 20_000,

@@ -8,6 +8,7 @@ import {
   worktreeGitDirectory,
   worktreeRegistration,
 } from "../src/shared/workspace/git-registration";
+import { databasePath } from "./database-path";
 
 const projectId = "e2e-pr-review";
 const issueId = "e2e-pr-review-issue";
@@ -37,7 +38,7 @@ const test = base.extend<{ reviewIssue: string }>({
     const registration = admin && worktreeRegistration(admin, fixture.tree)?.id;
     if (!directory || !registration) throw new Error("前提の worktree を確認できません。");
     const provenanceKey = `implementation-worktree:${worktreeId}`;
-    const db = new Database(join(home, "sukuna.db"), { fileMustExist: true });
+    const db = new Database(databasePath(home), { fileMustExist: true });
     db.pragma("foreign_keys = ON");
     let seeded = false;
     try {

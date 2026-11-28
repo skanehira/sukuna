@@ -10,7 +10,6 @@ import {
   type OpenedDatabase,
 } from "../../../shared/db/test-helpers";
 import { projects, issues, issueEvents, issueDependencies } from "../../../shared/db/schema";
-import { readEnvironment } from "../../../shared/env";
 import type { GhScript } from "../../../shared/gh-script";
 import type { AgentScript } from "../../../shared/agent-script";
 import type { RunnerNotice } from "../../../shared/ipc";
@@ -25,6 +24,7 @@ import { supplyDesignPrFields } from "../flow/design-test-support";
 import { incomingWith } from "../identity/test-support";
 import { createIssueDependencies } from "./adapter/dependencies";
 import { createLogger } from "../../../shared/log";
+import { testEnvironment } from "../../../test/directories";
 
 export function issueFixture(
   script: AgentScript = { rules: [], fallback: [{ hold: true }] },
@@ -58,12 +58,10 @@ export function issueFixture(
     runner = await startRunnerApp({
       ...options,
       database: runnerDatabase,
-      environment: readEnvironment(
-        "runner",
-        { SUKUNA_HOME: home, ...(options.ghScript ? { SUKUNA_GH: join(home, "gh.json") } : {}) },
+      environment: testEnvironment(
         home,
-        () => true,
-      )._unsafeUnwrap(),
+        options.ghScript ? { SUKUNA_GH: join(home, "gh.json") } : {},
+      ),
       agent,
       designGit: {
         run: async (args, options) => {

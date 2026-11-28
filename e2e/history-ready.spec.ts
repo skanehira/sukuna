@@ -2,6 +2,7 @@ import { expect, test, type WebSocketRoute } from "@playwright/test";
 import Database from "better-sqlite3";
 import { join } from "node:path";
 import type { Snapshot, Draft, DraftRequest } from "../src/front/lib/conversation/types";
+import { databasePath } from "./database-path";
 
 test.use({ viewport: { width: 1440, height: 900 } });
 const project = "history-e2e-project";
@@ -10,7 +11,7 @@ const first = "history-e2e-first";
 const target = "history-e2e-target";
 test.beforeAll(() => {
   const home = process.env.SUKUNA_E2E_HOME!;
-  const db = new Database(join(home, "sukuna.db"));
+  const db = new Database(databasePath(home));
   db.pragma("foreign_keys = ON");
   db.prepare("INSERT INTO projects(id,name,path,default_branch) VALUES (?,?,?,?)").run(
     project,
@@ -42,7 +43,7 @@ test.beforeAll(() => {
   db.close();
 });
 test.afterAll(() => {
-  const db = new Database(join(process.env.SUKUNA_E2E_HOME!, "sukuna.db"));
+  const db = new Database(databasePath(process.env.SUKUNA_E2E_HOME!));
   db.pragma("foreign_keys = ON");
   db.prepare("DELETE FROM conversations WHERE project_id = ?").run(project);
   db.prepare("DELETE FROM projects WHERE id IN (?,?)").run(project, otherProject);

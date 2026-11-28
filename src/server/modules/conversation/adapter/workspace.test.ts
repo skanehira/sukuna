@@ -11,7 +11,6 @@ import {
   openMigratedDatabase,
   removeTempHome,
 } from "../../../../shared/db/test-helpers";
-import { readEnvironment } from "../../../../shared/env";
 import { createWorktreeActivity } from "../../../../shared/workspace/sqlite-worktree-activity";
 import { createApp } from "../../../app";
 import { RunnerLink } from "../../../runner-link";
@@ -23,6 +22,7 @@ import {
 import { createWorktreeDependencies } from "../../workspace/adapter/worktree-dependencies";
 import { createGitCli, type GitRunner } from "../../workspace/adapter/git-cli";
 import { createConversationDependencies } from "./dependencies";
+import { directoriesIn, testEnvironment } from "../../../../test/directories";
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -101,16 +101,11 @@ async function fixture(
   );
 
   const serverDb = openMigratedDatabase(home);
-  const runnerDb = openDatabase(home);
+  const runnerDb = openDatabase(directoriesIn(home));
   serverDb.sqlite
     .prepare("INSERT INTO projects (id,name,path,default_branch) VALUES ('p','Project',?,'main')")
     .run(project);
-  const environment = readEnvironment(
-    "runner",
-    { SUKUNA_HOME: home },
-    home,
-    () => true,
-  )._unsafeUnwrap();
+  const environment = testEnvironment(home);
   const sdk = createWorkspaceAgent("scripted");
   const clock = new WorkspaceClock();
   const date = new Date(2026, 10, 26, 10, 30);
@@ -487,7 +482,7 @@ it("別 SQLite 接続の削除用排他を、移動元の照合済み ID と移�
     .prepare("UPDATE conversations SET cwd=?,worktree_id=NULL WHERE id=?")
     .run(source.path, id);
   const previous = f.runner.runtime.store.get(id);
-  const activity = createWorktreeActivity(f.serverDb.sqlite.name);
+  const activity = createWorktreeActivity(f.serverDb.directories.state);
 
   for (const blocked of [source.id, target.id]) {
     const lease = activity.acquire([blocked])._unsafeUnwrap();
@@ -772,7 +767,7 @@ it.each([
     });
     f.sdk.delayClose((finish) => didClose(finish));
 
-    const activity = createWorktreeActivity(f.serverDb.sqlite.name);
+    const activity = createWorktreeActivity(f.serverDb.directories.state);
     const writeTimes: number[] = [];
     const locked: string[] = [];
     const startTime = f.clock.time;

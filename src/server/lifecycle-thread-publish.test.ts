@@ -7,7 +7,6 @@ import WebSocket from "ws";
 import { expect, it } from "vite-plus/test";
 import { startRunnerApp } from "../runner/app";
 import { createTempHome, openMigratedDatabase, removeTempHome } from "../shared/db/test-helpers";
-import { readEnvironment } from "../shared/env";
 import { serverMessageSchema, type ServerMessage } from "../shared/ws";
 import { createApp } from "./app";
 import { incomingWith } from "./modules/identity/test-support";
@@ -22,6 +21,7 @@ import {
   getWsHub,
   initializeRuntime,
 } from "./runtime";
+import { directoriesIn, testEnvironment } from "../test/directories";
 
 it("既存スレッドだけの削除で、別タブの元会話に参照が消えたことを伝える", async () => {
   const home = createTempHome();
@@ -29,7 +29,7 @@ it("既存スレッドだけの削除で、別タブの元会話に参照が消�
   mkdirSync(dir);
   const runnerDb = openMigratedDatabase(home);
   const sdk = createWorkspaceAgent("scripted");
-  const env = readEnvironment("runner", { SUKUNA_HOME: home }, home, () => true)._unsafeUnwrap();
+  const env = testEnvironment(home);
   const runner = await startRunnerApp({
     database: runnerDb,
     environment: env,
@@ -40,7 +40,12 @@ it("既存スレッドだけの削除で、別タブの元会話に参照が消�
   let client: WebSocket | undefined;
   try {
     expect(
-      (await initializeRuntime({ homeDir: home }, { socket: env.socket, log: () => {} })).isOk(),
+      (
+        await initializeRuntime(
+          { directories: directoriesIn(home) },
+          { socket: env.socket, log: () => {} },
+        )
+      ).isOk(),
     ).toBe(true);
     const db = getDatabase();
     const link = getRunnerLink();

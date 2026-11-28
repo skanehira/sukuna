@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { expect, it } from "vite-plus/test";
 import { acquireLock } from "../shared/db/startup";
 import { createTempHome, openMigratedDatabase, removeTempHome } from "../shared/db/test-helpers";
+import { xdgDirectoriesIn, xdgVariablesIn } from "../test/directories";
 
 const childCode = `
   import { createServer } from "vite";
@@ -17,7 +18,7 @@ const childCode = `
     at = next;
     process.send({ kind: "clock", at });
   });
-  const lockPath = join(process.env.SUKUNA_HOME, "db.lock.guard");
+  const lockPath = process.argv[2];
   const exec = Database.prototype.exec;
   let waiting = false;
   Database.prototype.exec = function(sql) {
@@ -33,7 +34,7 @@ const childCode = `
   };
   const server = await createServer({
     configFile: false,
-    cacheDir: join(process.env.SUKUNA_HOME, "vite-cache"),
+    cacheDir: process.argv[3],
     server: { middlewareMode: true, ws: false, watch: null },
     optimizeDeps: { entries: [] },
   });
@@ -50,28 +51,39 @@ it.each([
   "ランナーのDBロック待ちを含めて日次バックアップを判定する ($case)",
   async ({ start, open, saved, expected }) => {
     const home = createTempHome();
+    const directories = xdgDirectoriesIn(home);
+    mkdirSync(directories.state, { recursive: true });
     const root = fileURLToPath(new URL("../..", import.meta.url));
     const at = new Date(2026, 10, 21, 3).getTime();
     const yesterday = "sukuna-2026-11-20.db";
     const today = "sukuna-2026-11-21.db";
-    const existing = join(home, "backups", saved ? today : yesterday);
-    const database = openMigratedDatabase(home);
-    mkdirSync(join(home, "backups"));
+    const existing = join(directories.data, "backups", saved ? today : yesterday);
+    const database = openMigratedDatabase(directories.data);
+    mkdirSync(join(directories.data, "backups"));
     await database.sqlite.backup(existing);
     database.close();
     const mtime = new Date(saved ? at + 1 : at - 86_400_000 + 100);
     utimesSync(existing, mtime, mtime);
-    const lock = (await acquireLock({ lockPath: join(home, "db.lock") }))._unsafeUnwrap();
+    const lock = (
+      await acquireLock({ lockPath: join(directories.state, "db.lock") })
+    )._unsafeUnwrap();
     const child = spawn(
       process.execPath,
-      ["--input-type=module", "-e", childCode, String(at + start)],
+      [
+        "--input-type=module",
+        "-e",
+        childCode,
+        String(at + start),
+        join(directories.state, "db.lock.guard"),
+        join(home, "vite-cache"),
+      ],
       {
         cwd: root,
         env: {
           ...process.env,
           HOME: home,
           NODE_ENV: "development",
-          SUKUNA_HOME: home,
+          ...xdgVariablesIn(home),
           SUKUNA_RUNNER_SOCKET: join(home, "runner.sock"),
           SUKUNA_AGENT: "fake",
           SUKUNA_AGENT_SCRIPT: join(root, "e2e", "agent-scripts", "conversation.json"),
@@ -102,10 +114,10 @@ it.each([
       child.kill("SIGTERM");
       expect(await exited).toEqual([0, null]);
 
-      expect(readdirSync(join(home, "backups")).sort()).toEqual(
+      expect(readdirSync(join(directories.data, "backups")).sort()).toEqual(
         saved ? [today] : expected ? [yesterday, today] : [yesterday],
       );
-      const verified = openMigratedDatabase(home);
+      const verified = openMigratedDatabase(directories.data);
       try {
         const result = verified.sqlite
           .prepare("SELECT value FROM settings WHERE key = 'backup_status'")

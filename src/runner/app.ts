@@ -64,7 +64,7 @@ export async function startRunnerApp(options: {
     const clock = options.clock ?? systemClock;
     const changes = new ChangeFeed(clock);
     const terminalCleanup = createImplementationTerminalCleanup(changes, systemClock, randomUUID);
-    const children = options.children ?? new ChildProcesses(env.home);
+    const children = options.children ?? new ChildProcesses(env.directories.state);
     const stoppedChildren = await children.cleanup();
     if (stoppedChildren.length)
       log({
@@ -95,9 +95,9 @@ export async function startRunnerApp(options: {
             conversation.kind === "impl") &&
             allows(conversation.projectId, conversation.kind),
         ),
-      store: new SqliteConversationStore(database.sqlite),
+      store: new SqliteConversationStore(database.sqlite, database.directories.state),
       agent,
-      images: createImageFiles(env.home),
+      images: createImageFiles(env.directories.data),
       clock,
       commands: new CommandCache(),
       id: ulid,
@@ -133,7 +133,7 @@ export async function startRunnerApp(options: {
     const recap = new RecapUpdates({
       repository: recapRepository,
       files,
-      pending: pendingRecapFiles(env.home),
+      pending: pendingRecapFiles(env.directories.state),
       summarizer: options.summarizer ?? createSummarizer(agent),
       clock,
       id: ulid,

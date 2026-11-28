@@ -20,11 +20,11 @@ import { createProgressRepository } from "./progress-repository";
 import { createTimelineFilePort } from "./timeline-file";
 import { progressResponseSchema } from "../../../../shared/progress/schema";
 import { startRunnerApp } from "../../../../runner/app";
-import { readEnvironment } from "../../../../shared/env";
 import { ScriptedAgent } from "../../../../runner/modules/conversation/adapter/scripted-agent";
 import { RunnerLink } from "../../../runner-link";
 import { createMessageRepository } from "./message-repository";
 import type { MessageDependencies } from "../domain/message-port";
+import { testEnvironment } from "../../../../test/directories";
 
 let home: string;
 let database: OpenedDatabase;
@@ -242,12 +242,7 @@ describe("進捗の API と SQLite・タイムラインファイル", () => {
       const runner = await startRunnerApp({
         database,
         agent,
-        environment: readEnvironment(
-          "runner",
-          { SUKUNA_HOME: home },
-          home,
-          () => true,
-        )._unsafeUnwrap(),
+        environment: testEnvironment(home),
         log: () => {},
       });
       try {

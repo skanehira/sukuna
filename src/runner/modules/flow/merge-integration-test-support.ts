@@ -6,7 +6,6 @@ import {
   openMigratedDatabase,
   removeTempHome,
 } from "../../../shared/db/test-helpers";
-import { readEnvironment } from "../../../shared/env";
 import { createWorktreeActivity } from "../../../shared/workspace/sqlite-worktree-activity";
 import { startRunnerApp } from "../../app";
 import { createWorkspaceAgent } from "../../../server/modules/workspace/adapter/worktree-conversation-test-support";
@@ -16,6 +15,7 @@ import { createIssueDependencies } from "../../../server/modules/issue/adapter/d
 import { createPrDependencies } from "../../../server/modules/flow/adapter/pr-dependencies";
 import { incomingWith } from "../../../server/modules/identity/test-support";
 import type { AgentPort } from "../conversation/domain/agent-port";
+import { testEnvironment } from "../../../test/directories";
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
@@ -81,12 +81,10 @@ export async function fixture(options: { failSdkOpen?: boolean } = {}) {
       };
     },
   };
-  const environment = readEnvironment(
-    "runner",
-    { SUKUNA_HOME: home, SUKUNA_AGENT: "fake", SUKUNA_AGENT_SCRIPT: join(home, "unused.json") },
-    home,
-    () => true,
-  )._unsafeUnwrap();
+  const environment = testEnvironment(home, {
+    SUKUNA_AGENT: "fake",
+    SUKUNA_AGENT_SCRIPT: join(home, "unused.json"),
+  });
   const runner = await startRunnerApp({
     database,
     environment,
@@ -200,7 +198,7 @@ export async function fixture(options: { failSdkOpen?: boolean } = {}) {
           "INSERT INTO worktrees(id,project_id,path,branch,origin,issue_id) VALUES ('other','p',?,'other','flow','i')",
         )
         .run(path);
-      return createWorktreeActivity(database.sqlite.name).acquire(["other"])._unsafeUnwrap();
+      return createWorktreeActivity(database.directories.state).acquire(["other"])._unsafeUnwrap();
     },
     change(mode: string) {
       let cwd = home;

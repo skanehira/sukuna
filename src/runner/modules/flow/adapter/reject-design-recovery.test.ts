@@ -293,7 +293,7 @@ it("ランナーの再起動と同じ SQLite の開き直しから、受理し�
   });
   const reopened = openMigratedDatabase(f.home);
   try {
-    const store = new SqliteConversationStore(reopened.sqlite);
+    const store = new SqliteConversationStore(reopened.sqlite, reopened.directories.state);
     expect(store.recoverAccepted()).toBe(true);
     expect(store.recoverAccepted()).toBe(false);
   } finally {

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { applyMigrations, migrations, type Migration } from "./migrate";
 import { openDatabase } from "./open";
 import { createTempHome, openMigratedDatabase, removeTempHome, tableNames } from "./test-helpers";
+import { directoriesIn } from "../../test/directories";
 
 function countMigrations(sqlite: Database.Database): number {
   const row = sqlite.prepare("SELECT COUNT(*) AS count FROM __drizzle_migrations").get() as {
@@ -14,7 +15,7 @@ function countMigrations(sqlite: Database.Database): number {
 describe("マイグレーション", () => {
   it("構造化コメントの列を足しても既存のキューと会話イベントをそのまま読める", () => {
     const home = createTempHome();
-    const opened = openDatabase(home);
+    const opened = openDatabase(directoriesIn(home));
     try {
       expect(applyMigrations(opened.sqlite, migrations.slice(0, 1)).isOk()).toBe(true);
       opened.sqlite.exec(
@@ -57,7 +58,7 @@ describe("マイグレーション", () => {
   });
   it("相談の範囲を保存する列を追加しても、以前の下書きと預けた相談コメントを保つ", () => {
     const home = createTempHome();
-    const opened = openDatabase(home);
+    const opened = openDatabase(directoriesIn(home));
     const comments = JSON.stringify([{ task_id: "task", text: "相談本文" }]);
     try {
       expect(applyMigrations(opened.sqlite, migrations.slice(0, 2)).isOk()).toBe(true);
@@ -101,7 +102,7 @@ describe("マイグレーション", () => {
 
   it("複数のストック対応を追加しても既存の単数の対応を保つ", () => {
     const home = createTempHome();
-    const opened = openDatabase(home);
+    const opened = openDatabase(directoriesIn(home));
     try {
       expect(applyMigrations(opened.sqlite, migrations.slice(0, -1)).isOk()).toBe(true);
       opened.sqlite.exec(
@@ -155,7 +156,7 @@ describe("マイグレーション", () => {
 
   it("わざと失敗するマイグレーションを当てると、ロールバックされる", () => {
     const home = createTempHome();
-    const opened = openDatabase(home);
+    const opened = openDatabase(directoriesIn(home));
     const broken: Migration[] = [
       {
         tag: "0000_broken",

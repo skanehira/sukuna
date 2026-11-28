@@ -1,14 +1,14 @@
 import { err, ok } from "neverthrow";
 import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import {
   WorktreeActivityBusy,
   type WorktreeActivity,
   type WorktreeActivityLease,
 } from "./worktree-activity";
 
-export function createWorktreeActivity(databasePath: string): WorktreeActivity {
+export function createWorktreeActivity(stateDirectory: string): WorktreeActivity {
   const acquire: WorktreeActivity["acquire"] = (ids) => {
     const held = new Map<string, Database.Database>();
     const lease: WorktreeActivityLease = {
@@ -19,7 +19,7 @@ export function createWorktreeActivity(databasePath: string): WorktreeActivity {
       acquire(ids) {
         for (const id of [...new Set(ids)].sort()) {
           if (held.has(id)) continue;
-          const directory = join(dirname(databasePath), "worktree-leases");
+          const directory = join(stateDirectory, "worktree-leases");
           mkdirSync(directory, { recursive: true });
           const guard = new Database(join(directory, `${encodeURIComponent(id)}.db`), {
             timeout: 0,

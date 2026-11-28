@@ -13,7 +13,7 @@ export function createStageRepository(
   now: () => number,
 ): StageRepository {
   const { db } = database;
-  const activity = createWorktreeActivity(database.sqlite.name);
+  const activity = createWorktreeActivity(database.directories.state);
   const data = createIssueDataRepository(db);
   const project = (id: string) => db.select().from(projects).where(eq(projects.id, id)).get();
   const globallyPaused = () =>

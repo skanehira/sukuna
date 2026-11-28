@@ -8,7 +8,6 @@ import {
   openMigratedDatabase,
   removeTempHome,
 } from "../../../../shared/db/test-helpers";
-import { readEnvironment } from "../../../../shared/env";
 import {
   decisionsResponseSchema,
   recapResponseSchema,
@@ -22,6 +21,7 @@ import { startRunnerApp } from "../../../app";
 import { ScriptedAgent } from "../../conversation/adapter/scripted-agent";
 import type { Clock } from "../../conversation/domain/clock";
 import type { RunnerNotice } from "../../../../shared/ipc";
+import { testEnvironment } from "../../../../test/directories";
 
 const chapter = (title: string) => ({
   chapter: { kind: "new", title },
@@ -49,12 +49,7 @@ async function fixture(responses: unknown[], clock?: Clock) {
   database.sqlite
     .prepare("INSERT INTO projects (id,name,path,default_branch) VALUES ('p','test',?,'main')")
     .run(root);
-  const environment = readEnvironment(
-    "runner",
-    { SUKUNA_HOME: home },
-    home,
-    () => true,
-  )._unsafeUnwrap();
+  const environment = testEnvironment(home);
   const agent = new ScriptedAgent({
     rules: [
       {

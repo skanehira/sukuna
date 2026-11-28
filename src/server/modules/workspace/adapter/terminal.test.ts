@@ -556,7 +556,7 @@ describe("ターミナル API と WebSocket", () => {
   });
 
   it("削除中の worktree では開かず、排他が解けたら開ける", async () => {
-    const activity = createWorktreeActivity(database.sqlite.name);
+    const activity = createWorktreeActivity(database.directories.state);
     const lock = activity.acquire(["w"])._unsafeUnwrap();
     try {
       const response = await open();

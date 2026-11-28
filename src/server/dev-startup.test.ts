@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vite-plus/test";
 import { launchDevRunner } from "../../scripts/dev-runner";
 import { createTempHome, removeTempHome } from "../shared/db/test-helpers";
+import { vitePlusVariables, xdgVariablesIn } from "../test/directories";
 
 const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -40,7 +41,8 @@ async function startScreen(home: string, socketPath: string) {
         ...process.env,
         VITEST: undefined,
         NODE_ENV: "development",
-        SUKUNA_HOME: home,
+        ...vitePlusVariables(),
+        ...xdgVariablesIn(home),
         SUKUNA_RUNNER_SOCKET: socketPath,
         SUKUNA_AGENT: undefined,
         SUKUNA_AGENT_SCRIPT: undefined,

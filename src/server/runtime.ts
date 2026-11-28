@@ -9,7 +9,7 @@ import { createPrDependencies } from "./modules/flow/adapter/pr-dependencies";
 import type { PrDependencies } from "./modules/flow/domain/pr-ports";
 import { createGhRunner } from "../shared/gh/gh-runner";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { createProgressRepository } from "./modules/conversation/adapter/progress-repository";
 import { createMessageRepository } from "./modules/conversation/adapter/message-repository";
@@ -29,6 +29,7 @@ import type { Duplex } from "node:stream";
 import { err, ok, type Result } from "neverthrow";
 import type { OpenedDatabase } from "../shared/db/open";
 import { startDatabase, type StartupError, type StartupOptions } from "../shared/db/startup";
+import { resolveDirectories } from "../shared/env";
 import { createPtySessions, type PtySessions } from "./modules/workspace/adapter/pty-session";
 import { connectTerminal } from "./modules/workspace/adapter/terminal-ws";
 
@@ -175,13 +176,14 @@ const heartbeat = setInterval(() => {
 heartbeat.unref();
 
 export async function initializeRuntime(
-  options?: StartupOptions,
+  options?: Partial<StartupOptions>,
   connection?: { socket?: string; log?: Logger; notificationPush?: NotificationPush },
 ): Promise<Result<void, StartupError>> {
   if (database !== undefined) return ok(undefined);
   if (initializing) return initializing;
   initializing = (async () => {
-    const result = await startDatabase(options);
+    const directories = options?.directories ?? resolveDirectories(process.env, homedir());
+    const result = await startDatabase({ ...options, directories });
     if (result.isErr()) return err(result.error);
     database = result.value;
     if (connection?.log) log = connection.log;
@@ -215,10 +217,7 @@ export async function initializeRuntime(
       socket:
         connection?.socket ??
         process.env.SUKUNA_RUNNER_SOCKET ??
-        join(
-          options?.homeDir ?? process.env.SUKUNA_HOME ?? join(homedir(), ".sukuna"),
-          "runner.sock",
-        ),
+        join(directories.runtime, "runner.sock"),
       log,
       now,
       notice: (notice) => hub?.notice(notice),
@@ -267,7 +266,7 @@ export function getWsHub(): WsHub {
 export function getConversationDependencies(): ConversationDependencies {
   return createConversationDependencies({
     sqlite: getDatabase().sqlite,
-    home: dirname(getDatabase().sqlite.name),
+    home: getDatabase().directories.data,
     runner: {
       call: async (...args: Parameters<RunnerLink["call"]>) => {
         const response = await getRunnerLink().forward(...args);
@@ -305,7 +304,7 @@ let lifecycleDependencies: LifecycleDependencies | undefined;
 export function getLifecycleDependencies(): LifecycleDependencies {
   lifecycleDependencies ??= createLifecycleDependencies({
     database: getDatabase,
-    home: dirname(getDatabase().sqlite.name),
+    home: getDatabase().directories.data,
     runner: getRunnerLink(),
     workspace: createWorkspaceDependencies(() => getDatabase().db),
     gh: createGhRunner(process.env.SUKUNA_GH ?? null),

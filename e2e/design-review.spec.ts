@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { capture } from "./evidence";
+import { databasePath } from "./database-path";
 
 const number = 6701;
 const title = "設計レビューの操作";
@@ -39,7 +40,7 @@ const test = base.extend<{ issue: string }>({
     const worktree = `${project}-worktree`;
     const path = join(repository, ".claude/worktrees", `design-${number}`);
     const branch = `sukuna/design-${number}`;
-    const db = new Database(join(home, "sukuna.db"), { fileMustExist: true });
+    const db = new Database(databasePath(home), { fileMustExist: true });
     db.pragma("foreign_keys = ON");
     try {
       git(repository, "init", "-q", "-b", "main");

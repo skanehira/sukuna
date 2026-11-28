@@ -38,6 +38,7 @@ import { createApp } from "../../../app";
 import { incomingWith } from "../../identity/test-support";
 import { createWorktreeDependencies } from "./worktree-dependencies";
 import { createGitCli, type GitRunner } from "./git-cli";
+import { directoriesIn } from "../../../../test/directories";
 
 describe("worktree API", () => {
   let root: string;
@@ -783,9 +784,9 @@ describe("worktree API", () => {
       database.sqlite
         .prepare("UPDATE conversations SET worktree_id='other' WHERE id='other-c'")
         .run();
-      const runnerDb = openDatabase(home);
+      const runnerDb = openDatabase(directoriesIn(home));
       const runtime = new ConversationRuntime({
-        store: new SqliteConversationStore(runnerDb.sqlite),
+        store: new SqliteConversationStore(runnerDb.sqlite, runnerDb.directories.state),
         agent: new ScriptedAgent({ rules: [], fallback: [{ hold: true }] }),
         images: createImageFiles(home),
         clock: systemClock,
@@ -810,7 +811,7 @@ describe("worktree API", () => {
           outcome = result.isErr() ? result.error : result.value;
         } else if (operation === "switch") {
           try {
-            createWorktreeActivity(runnerDb.sqlite.name).run((reservation) => {
+            createWorktreeActivity(runnerDb.directories.state).run((reservation) => {
               reservation.acquire(["w"]);
               runnerDb.sqlite
                 .prepare("UPDATE conversations SET cwd = ? WHERE id='other-c'")
@@ -895,10 +896,10 @@ describe("worktree API", () => {
     }),
     clock: Clock = systemClock,
   ) {
-    const runnerDb = openDatabase(home);
+    const runnerDb = openDatabase(directoriesIn(home));
     let nextId = 0;
     const runtime = new ConversationRuntime({
-      store: new SqliteConversationStore(runnerDb.sqlite),
+      store: new SqliteConversationStore(runnerDb.sqlite, runnerDb.directories.state),
       agent,
       images: createImageFiles(home),
       clock,
@@ -1337,7 +1338,7 @@ describe("worktree API", () => {
       didClose();
     });
     const relocate = (path: string, worktreeId: string) =>
-      createWorktreeActivity(runner.runnerDb.sqlite.name).run((reservation) => {
+      createWorktreeActivity(runner.runnerDb.directories.state).run((reservation) => {
         reservation.acquire([worktreeId]);
         runner.runnerDb.sqlite
           .transaction(() => {
@@ -2153,7 +2154,7 @@ describe("worktree API", () => {
             : deps,
       );
       expect(first.status).toBe(500);
-      const lease = createWorktreeActivity(database.sqlite.name).acquire(["w"]);
+      const lease = createWorktreeActivity(database.directories.state).acquire(["w"]);
       expect(lease.isOk()).toBe(true);
       if (lease.isOk()) lease.value.release();
       if (failure === "database") database.sqlite.exec("DROP TRIGGER reject_remove");

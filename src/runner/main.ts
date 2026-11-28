@@ -29,12 +29,12 @@ if (environment.isErr()) {
   process.exit(1);
 }
 try {
-  rotateLog(join(environment.value.home, "logs", "runner.log"));
+  rotateLog(join(environment.value.directories.state, "logs", "runner.log"));
 } catch (error) {
   log({ level: "warn", component: "runner", message: "ログを整理できませんでした。", error });
 }
 const database = await startDatabase({
-  homeDir: environment.value.home,
+  directories: environment.value.directories,
   restoreReceiptWarning: (error) =>
     log({
       level: "warn",
@@ -59,7 +59,7 @@ export const runnerApp = await startRunnerApp({
   process.exit(1);
 });
 const backup = startBackup(
-  createBackupFiles(environment.value.home, openedDatabase.sqlite),
+  createBackupFiles(environment.value.directories.data, openedDatabase.sqlite),
   systemClock,
   {
     startedAt,

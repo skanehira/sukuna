@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { request } from "node:http";
 import { basename, join } from "node:path";
 import { capture } from "./evidence";
+import { databasePath } from "./database-path";
 
 const title = "設計レビューの一覧確認";
 const number = 6601;
@@ -15,7 +16,7 @@ const test = base.extend<{ confirmedIssue: { id: string; socketPath: string } }>
     const cwd = mkdtempSync(join(home, `flow-chain-${browserName}-`));
     const projectId = basename(cwd);
     const issueId = `${projectId}-issue`;
-    const db = new Database(join(home, "sukuna.db"), { fileMustExist: true });
+    const db = new Database(databasePath(home), { fileMustExist: true });
     db.pragma("foreign_keys = ON");
     try {
       const git = (...args: string[]) =>

@@ -22,7 +22,6 @@ import {
   openMigratedDatabase,
   removeTempHome,
 } from "../../../../shared/db/test-helpers";
-import { readEnvironment } from "../../../../shared/env";
 import type { AgentScript } from "../../../../shared/agent-script";
 import type {
   AgentOutput,
@@ -37,6 +36,7 @@ import { RunnerLink, runnerUnavailable } from "../../../runner-link";
 import { WsHub } from "../../../ws-hub";
 import { incomingWith } from "../../identity/test-support";
 import { createConversationDependencies } from "./dependencies";
+import { testEnvironment } from "../../../../test/directories";
 
 function deferred() {
   let resolve = () => {};
@@ -130,12 +130,10 @@ async function fixture(
     .run(home);
   const scriptPath = join(home, "agent.json");
   writeFileSync(scriptPath, JSON.stringify(script));
-  const environment = readEnvironment(
-    "runner",
-    { SUKUNA_HOME: home, SUKUNA_AGENT: "fake", SUKUNA_AGENT_SCRIPT: scriptPath },
-    home,
-    () => true,
-  )._unsafeUnwrap();
+  const environment = testEnvironment(home, {
+    SUKUNA_AGENT: "fake",
+    SUKUNA_AGENT_SCRIPT: scriptPath,
+  });
   const agent = new RecordingAgent(script);
   const clock = new RunnerClock();
   let runner = await startRunnerApp({ database, agent, environment, clock, log: () => {} });
@@ -3181,7 +3179,7 @@ it.each(["edit", "cancel-all-draft", "cancel-all-stock", "cancel-one"])(
     );
     recordWorktree.run("old-worktree", oldCwd, "old");
     recordWorktree.run("verified-worktree", newCwd, "new");
-    const activity = createWorktreeActivity(f.database.sqlite.name);
+    const activity = createWorktreeActivity(f.database.directories.state);
     activity.run((reservation) => {
       reservation.acquire(["old-worktree"]);
       f.database.sqlite

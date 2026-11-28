@@ -1,18 +1,18 @@
 import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { err, ok, type Result } from "neverthrow";
 
 type ProjectActivityError = { code: "conflict" | "internal"; message: string };
 
 export function reserveProjectActivity(
-  databasePath: string,
+  stateDirectory: string,
   projectId: string,
   mode: "run" | "remove",
 ): Result<{ release(): void }, ProjectActivityError> {
   let guard: Database.Database | undefined;
   try {
-    const directory = join(dirname(databasePath), "project-run-leases");
+    const directory = join(stateDirectory, "project-run-leases");
     mkdirSync(directory, { recursive: true });
     const lease = new Database(join(directory, `${encodeURIComponent(projectId)}.db`), {
       timeout: 0,

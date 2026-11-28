@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type Database from "better-sqlite3";
+import { directoriesIn } from "../../test/directories";
 import { applyMigrations, migrations } from "./migrate";
 import { openDatabase, type OpenedDatabase } from "./open";
 
@@ -16,7 +17,7 @@ export function removeTempHome(homeDir: string): void {
 }
 
 export function openMigratedDatabase(homeDir: string): OpenedDatabase {
-  const opened = openDatabase(homeDir);
+  const opened = openDatabase(directoriesIn(homeDir));
   const result = applyMigrations(opened.sqlite, migrations);
   if (result.isErr()) {
     opened.close();

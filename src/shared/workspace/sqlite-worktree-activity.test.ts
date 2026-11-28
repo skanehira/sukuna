@@ -8,7 +8,6 @@ import { createWorktreeActivity } from "./sqlite-worktree-activity";
 
 it("別プロセスから同じ worktree を拒み、別 worktree・再入・解放後の再取得を許可する", () => {
   const home = realpathSync(mkdtempSync(join(tmpdir(), "sukuna-worktree-lease-")));
-  const databasePath = join(home, "sukuna.db");
   const modulePath = fileURLToPath(new URL("./sqlite-worktree-activity.ts", import.meta.url));
   const child = () =>
     JSON.parse(
@@ -37,13 +36,13 @@ it("別プロセスから同じ worktree を拒み、別 worktree・再入・解
     if (other.isOk()) other.value.release();
   `,
           modulePath,
-          databasePath,
+          home,
         ],
         { encoding: "utf8" },
       ),
     );
   try {
-    const activity = createWorktreeActivity(databasePath);
+    const activity = createWorktreeActivity(home);
     const lease = activity.acquire(["w"])._unsafeUnwrap();
     try {
       lease.acquire(["w"]);

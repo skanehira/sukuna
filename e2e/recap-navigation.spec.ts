@@ -3,6 +3,7 @@ import Database from "better-sqlite3";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { capture } from "./evidence";
+import { databasePath } from "./database-path";
 
 const conversationId = "recap-navigation-conversation";
 const projectId = "recap-navigation-project";
@@ -31,7 +32,7 @@ test.beforeAll(() => {
     `<!-- sukuna-decisions:v2 -->\n# 決まったこと: ${title}\n\n- [決定] D1: ${JSON.stringify(decision)} <!-- seq=3 -->\n`,
   );
 
-  const db = new Database(join(home, "sukuna.db"), { fileMustExist: true });
+  const db = new Database(databasePath(home), { fileMustExist: true });
   try {
     const now = Date.now();
     db.transaction(() => {
@@ -85,7 +86,7 @@ test.afterAll(() => {
   const home = process.env.SUKUNA_E2E_HOME;
   if (!home || !projectPath) return;
 
-  const db = new Database(join(home, "sukuna.db"), { fileMustExist: true });
+  const db = new Database(databasePath(home), { fileMustExist: true });
   try {
     db.pragma("foreign_keys = ON");
     db.transaction(() => {

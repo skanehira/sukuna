@@ -26,7 +26,7 @@ while (!(await runnerReady())) {
 
 const project = join(home, "shop-api");
 mkdirSync(project);
-const db = new Database(join(home, "sukuna.db"), { fileMustExist: true });
+const db = new Database(join(home, "data", "sukuna", "sukuna.db"), { fileMustExist: true });
 try {
   db.prepare("INSERT INTO projects (id, name, path, default_branch) VALUES (?, ?, ?, ?)").run(
     "e2e-shop-api",

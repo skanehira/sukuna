@@ -5,10 +5,11 @@ import type { LaunchdPort } from "../domain/launchd-port";
 const config = {
   repository: "/repo/sukuna",
   node: "/bin/node",
-  home: "/data/sukuna",
+  stateDirectory: "/state/sukuna",
   userHome: "/home/dev",
   port: 4580,
   path: "/bin",
+  terminal: {},
 };
 
 it("同じ導入を二回行うと同じplistが登録され、通常更新はサーバーだけ入れ替える", async () => {

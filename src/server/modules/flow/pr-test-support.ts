@@ -74,7 +74,7 @@ export function prFixture(options: { interruptBusy?: () => Promise<void>; gh?: G
     fallback: [{ end: "success" }],
   });
   const runtime = new ConversationRuntime({
-    store: new SqliteConversationStore(database.sqlite),
+    store: new SqliteConversationStore(database.sqlite, database.directories.state),
     agent: {
       open: (params) => {
         const session = agent.open(params);

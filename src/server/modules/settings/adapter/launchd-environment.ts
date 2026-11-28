@@ -1,14 +1,18 @@
-import { join } from "node:path";
 import { launchdReadiness } from "./launchd-readiness";
 import { homedir } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 import { runCommand } from "../../../../shared/command";
 import { isProcessAlive } from "../../../../shared/db/startup";
+import { runnerSocketIn, type Directories } from "../../../../shared/env";
 import { createInstallFiles } from "./install-files";
 import { createLaunchctl } from "./launchctl";
 
-export function launchdEnvironment(home: string, userHome = homedir(), repository = process.cwd()) {
-  const files = createInstallFiles(home, userHome, repository);
+export function launchdEnvironment(
+  directories: Directories,
+  userHome = homedir(),
+  repository = process.cwd(),
+) {
+  const files = createInstallFiles(directories, userHome, repository);
   const launchd = createLaunchctl({
     uid: process.getuid?.() ?? 0,
     plist: files.plistPath,
@@ -25,7 +29,7 @@ export function launchdEnvironment(home: string, userHome = homedir(), repositor
       launchdReadiness({
         launchd,
         port,
-        socket: join(home, "runner.sock"),
+        socket: runnerSocketIn(directories),
         now: Date.now,
         sleep,
         openFiles: (args) =>

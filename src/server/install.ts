@@ -1,9 +1,10 @@
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { tailscaleDnsName } from "./network-access";
 import { launchdEnvironment } from "./modules/settings/adapter/launchd-environment";
+import { directoriesForCommand } from "./modules/settings/adapter/install-files";
 import { createRestoreFiles } from "./modules/settings/adapter/restore-files";
 import {
   installApplication,
@@ -11,12 +12,12 @@ import {
   updateApplication,
 } from "./modules/settings/usecase/install";
 import { runRestore } from "./modules/settings/usecase/run-restore";
-import { readEnvironment } from "../shared/env";
+import { readEnvironment, resolveDirectories } from "../shared/env";
 import { rotateLog } from "../shared/log/rotate";
 
 const userHome = homedir();
 const repository = process.cwd();
-const home = resolve(process.env.SUKUNA_HOME ?? join(userHome, ".sukuna"));
+let directories = resolveDirectories(process.env, userHome);
 
 async function main() {
   const { positionals, values } = parseArgs({
@@ -38,12 +39,13 @@ async function main() {
     throw new Error("導入、update [--runner]、--uninstall のいずれかを指定してください。");
   if (process.platform !== "darwin") throw new Error("導入のコマンドは macOS で実行してください。");
 
-  const { files, launchd, readiness } = launchdEnvironment(home, userHome, repository);
+  directories = directoriesForCommand(command, process.env, userHome);
+  const { files, launchd, readiness } = launchdEnvironment(directories, userHome, repository);
   if (command === "restore") {
     const result = await runRestore({
-      files: createRestoreFiles(home),
+      files: createRestoreFiles(directories),
       services: launchd,
-      rotate: () => rotateLog(join(home, "logs", "restore.log")),
+      rotate: () => rotateLog(join(directories.state, "logs", "restore.log")),
       ready: (targets) => readiness(files.installedPort())(targets),
       warning(kind, error) {
         const detail = error instanceof Error ? error.message : String(error);
@@ -79,7 +81,9 @@ async function main() {
     {
       NODE_ENV: "production",
       PORT: values.port,
-      SUKUNA_HOME: home,
+      XDG_DATA_HOME: process.env.XDG_DATA_HOME,
+      XDG_STATE_HOME: process.env.XDG_STATE_HOME,
+      XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR,
     },
     userHome,
     () => true,
@@ -90,13 +94,14 @@ async function main() {
     {
       repository,
       node: process.execPath,
-      home,
+      stateDirectory: directories.state,
       userHome,
       port,
       path: process.env.PATH ?? "",
       ...(process.env.CLAUDE_CONFIG_DIR === undefined
         ? {}
         : { claudeConfigDir: process.env.CLAUDE_CONFIG_DIR }),
+      terminal: process.env,
     },
     {
       files,
@@ -112,6 +117,6 @@ try {
   await main();
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
-  console.error(`ログ: ${join(home, "logs")}`);
+  console.error(`ログ: ${join(directories.state, "logs")}`);
   process.exitCode = 1;
 }

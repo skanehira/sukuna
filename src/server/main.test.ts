@@ -3,6 +3,7 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vite-plus/test";
 import { createTempHome, removeTempHome } from "../shared/db/test-helpers";
+import { xdgVariablesIn } from "../test/directories";
 it.each([
   [{ NODE_ENV: "production", SUKUNA_GH: "/unused.json" }, "本番では SUKUNA_GH を指定できません。"],
   [
@@ -22,7 +23,13 @@ it.each([
       ],
       {
         cwd: fileURLToPath(new URL("../..", import.meta.url)),
-        env: { ...process.env, NODE_ENV: "development", PORT: "5180", SUKUNA_HOME: home, ...env },
+        env: {
+          ...process.env,
+          NODE_ENV: "development",
+          PORT: "5180",
+          ...xdgVariablesIn(home),
+          ...env,
+        },
         stdio: ["ignore", "pipe", "pipe"],
       },
     );

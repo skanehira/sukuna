@@ -1,12 +1,13 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { writeFileSync } from "node:fs";
+import { readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
 import { expect, it } from "vite-plus/test";
 import { createTempHome, openMigratedDatabase, removeTempHome } from "../shared/db/test-helpers";
+import { xdgDirectoriesIn, xdgVariablesIn } from "../test/directories";
 import { serverMessageSchema } from "../shared/ws";
 import type { ConversationEventsPage, PublicConversation } from "../shared/conversation/api";
 import type { IssueView } from "../shared/issue/schema";
@@ -43,7 +44,7 @@ function start(home: string, role: "runner" | "server", build = "loaded") {
   const loader = `import {createServer} from 'vite';
     const loader = await createServer({
       configFile:false, root:process.cwd(), envDir:false,
-      cacheDir:process.env.SUKUNA_HOME+'/vite-cache-'+process.pid,
+      cacheDir:${JSON.stringify(join(home, "vite-cache-"))}+process.pid,
       define:{__SUKUNA_BUILD_ID__:${JSON.stringify(JSON.stringify(build))}},
       server:{middlewareMode:true, ws:false, watch:null}, optimizeDeps:{entries:[]}
     });`;
@@ -64,8 +65,9 @@ function start(home: string, role: "runner" | "server", build = "loaded") {
     env: {
       ...process.env,
       NODE_ENV: "development",
-      SUKUNA_HOME: home,
-      SUKUNA_RUNNER_SOCKET: join(home, "runner.sock"),
+      HOME: home,
+      ...xdgVariablesIn(home),
+      SUKUNA_RUNNER_SOCKET: undefined,
       SUKUNA_AGENT: "fake",
       SUKUNA_AGENT_SCRIPT: join(home, "agent.json"),
       SUKUNA_GH: join(home, "gh.json"),
@@ -119,7 +121,8 @@ async function application(onTestFinished: (cleanup: () => Promise<void>) => voi
     join(home, "gh.json"),
     '{"responses":[],"fallback":{"stdout":"","stderr":"unexpected gh","exit_code":1}}',
   );
-  const db = openMigratedDatabase(home);
+  const directories = xdgDirectoriesIn(home);
+  const db = openMigratedDatabase(directories.data);
   try {
     db.sqlite
       .prepare(
@@ -191,6 +194,7 @@ async function application(onTestFinished: (cleanup: () => Promise<void>) => voi
     );
   return {
     home,
+    directories,
     request,
     read,
     events,
@@ -202,10 +206,22 @@ async function application(onTestFinished: (cleanup: () => Promise<void>) => voi
       });
       return result.conversation.id;
     },
-    send: (id: string, text: string) =>
+    async upload(id: string) {
+      const response = await fetch(`http://127.0.0.1:${port}/api/conversations/${id}/images`, {
+        method: "POST",
+        headers: { "Content-Type": "image/png" },
+        body: Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1cAAAAASUVORK5CYII=",
+          "base64",
+        ),
+      });
+      expect(response.status).toBe(201);
+      return ((await response.json()) as { image: { id: string } }).image.id;
+    },
+    send: (id: string, text: string, images: string[] = []) =>
       request<{ result: string }>(`/conversations/${id}/messages`, "POST", {
         text,
-        images: [],
+        images,
         mode: "send",
         clientMessageId: randomUUID(),
       }),
@@ -284,7 +300,7 @@ it("画面のサーバーの停止中に保存されたAIの出力が再接続�
 
   await app.restartServer(async () => {
     writeFileSync(join(app.home, "resume-output"), "");
-    const db = openMigratedDatabase(app.home);
+    const db = openMigratedDatabase(app.directories.data);
     try {
       const find = db.sqlite.prepare(
         "SELECT seq FROM conversation_events WHERE conversation_id = ? AND type = 'assistant_text' AND json_extract(payload, '$.text') = ?",
@@ -333,4 +349,59 @@ it("画面のサーバーを入れ替えても履歴を読み直して同じ会�
         (await app.events(id)).events.filter((event) => event.type === "assistant_text").length,
     )
     .toBe(2);
+}, 30_000);
+
+it("2 つのプロセスを 3 つの別々のディレクトリで起動して指示を届けると、ファイルはデータの置き場所の表のとおりに分かれる", async ({
+  onTestFinished,
+}) => {
+  const app = await application(onTestFinished);
+  const id = await app.chat();
+  const image = await app.upload(id);
+  await app.send(id, "作業を続ける", [image]);
+  await expect.poll(() => app.reply(id, "新しい指示を受け取りました")).toBeDefined();
+
+  const listing = (directory: string) =>
+    readdirSync(directory, { recursive: true, encoding: "utf8" }).sort();
+  await expect
+    .poll(() => ({
+      data: listing(app.directories.data),
+      state: listing(app.directories.state),
+      runtime: listing(app.directories.runtime),
+    }))
+    .toEqual({
+      data: [
+        "backups",
+        expect.stringMatching(/^backups\/sukuna-\d{4}-\d{2}-\d{2}\.db$/),
+        "images",
+        `images/${id}`,
+        `images/${id}/${image}.png`,
+        "sukuna.db",
+        "sukuna.db-shm",
+        "sukuna.db-wal",
+      ],
+      state: [
+        "db.lock.guard",
+        "project-run-leases",
+        "project-run-leases/p.db",
+        "runner",
+        "runner/children",
+      ],
+      runtime: ["runner.sock", "runner.sock.lock.guard"],
+    });
+}, 30_000);
+
+it("画像を送った会話を消すと、データのディレクトリからその会話の画像が消える", async ({
+  onTestFinished,
+}) => {
+  const app = await application(onTestFinished);
+  const id = await app.chat();
+  const image = await app.upload(id);
+  await app.send(id, "作業を続ける", [image]);
+  await expect.poll(() => app.reply(id, "新しい指示を受け取りました")).toBeDefined();
+  const images = join(app.directories.data, "images");
+  expect(readdirSync(images)).toEqual([id]);
+
+  expect(await app.request(`/conversations/${id}`, "DELETE")).toEqual({ deleted: [id] });
+
+  expect(readdirSync(images)).toEqual([]);
 }, 30_000);

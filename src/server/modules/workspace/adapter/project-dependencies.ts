@@ -52,7 +52,7 @@ export function createProjectDependencies(
     github: createProjectGithub(options.gh ?? createGhRunner(process.env.SUKUNA_GH ?? null)),
     id: options.id ?? ulid,
     now: options.now ?? (() => Date.now()),
-    reserve: (id) => reserveProjectActivity(database().sqlite.name, id, "remove"),
+    reserve: (id) => reserveProjectActivity(database().directories.state, id, "remove"),
     async stop(id) {
       const response = await options
         .runner()

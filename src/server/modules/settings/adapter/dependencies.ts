@@ -4,6 +4,7 @@ import { lstat, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import type { OpenedDatabase } from "../../../../shared/db/open";
+import type { Directories } from "../../../../shared/env";
 import { conversations, projects, settings } from "../../../../shared/db/schema";
 import { restoreReceiptSchema } from "../../../../shared/settings/restore-schema";
 import type { BackupItem } from "../../../../shared/settings/settings-schema";
@@ -22,7 +23,7 @@ const publicKeySchema = z.object({ publicKey: z.string().min(1) });
 
 export function createSettingsDependencies(
   database: () => OpenedDatabase["db"],
-  home: string,
+  directories: Directories,
   changed: () => void,
   restore?: {
     launchd: Pick<LaunchdPort, "registered" | "kickstart">;
@@ -31,7 +32,7 @@ export function createSettingsDependencies(
   },
   flow?: { runner(): Pick<RunnerLink, "forward">; inboxChanged(): void },
 ): SettingsDependencies {
-  const files = createRestoreFiles(home, restore?.receiptWarning);
+  const files = createRestoreFiles(directories, restore?.receiptWarning);
   return {
     requestRestore: (backupId) =>
       requestRestore(backupId, {
@@ -72,8 +73,8 @@ export function createSettingsDependencies(
           ),
         )
         .get()?.total ?? 0,
-    listBackups: () => listBackups(join(home, "backups")),
-    readVapidPublicKey: () => readVapidPublicKey(join(home, "vapid.json")),
+    listBackups: () => listBackups(join(directories.data, "backups")),
+    readVapidPublicKey: () => readVapidPublicKey(join(directories.data, "vapid.json")),
     putKeymap: (value, revision) =>
       database().transaction(
         (db) => {
