@@ -60,6 +60,12 @@ test("プロジェクトで issue を作り、精査を開いてから優先度�
 
   await page.keyboard.press("j");
   await writeField(page, "題名", title);
+  await expect(page).toHaveURL(/\/issues\/[^/]+\/edit$/);
+  await expect(form.getByText(title, { exact: true })).toBeVisible();
+  await expect(form.getByRole("textbox", { name: "バッファ" })).toBeFocused();
+  await page.keyboard.press("g");
+  await page.keyboard.press("g");
+  await page.keyboard.press("j");
   await page.keyboard.press("j");
   await writeField(page, "本文", "予約が確定した時刻と予約番号を記録する。");
   await expect(form.getByText(/予約が確定した時刻/)).toBeInViewport();

@@ -142,6 +142,7 @@ it(":stop は表示中の段階を変えず、最新の担当会話へ止める�
     stopConversation,
   });
   await screen.findByText("精査の会話 (表示中)", { exact: true });
+  await act(() => controller.run("issue.conversation.triage"));
   latest = { ...initial, state: "implementing" };
   await act(() => controller.command("stop"));
   expect(stopConversation).toHaveBeenCalledExactlyOnceWith("current-impl");
