@@ -263,7 +263,7 @@ const HELP = [
   hk("Ctrl+w h / l", "左 / 右のウィンドウへ"), hk("Ctrl+w j / k", "入力欄へ / 会話へ", "入力欄を開いているとき"), hk("Ctrl+h", "1 つ前の表示へ戻る", "右のウィンドウ"), hk("q", "閉じる", "右のウィンドウ"),
   { k: "head", t: "会話" },
   hk("i", "入力欄を開く (Vim と同じモードで編集する)", "会話"), hk("Enter", "送る", "入力欄 (Normal)"), hk("Esc / Ctrl+[", "Insert から Normal へ。Normal で押すと閉じる", "入力欄"),
-  hk("Ctrl+Enter / Alt+Enter", "すぐ送る (AI が作業中なら止めて送る)", "入力欄"), hk("↑ / ↓", "届く前の指示を選んで直す", "入力欄 (先頭 / 末尾の行)"), hk("Tab", "スキルの候補を選ぶ", "入力欄 (/ で始めたとき)"), hk("Space x", "AI を止める", "会話"), hk("Enter", "その選択肢で答える", "選択肢の行"),
+  hk("Ctrl+Enter / Alt+Enter", "すぐ送る (AI が作業中なら止めて送る)", "入力欄"), hk("↑ / ↓", "届く前の指示を選んで直す", "入力欄 (先頭 / 末尾の行)"), hk("Tab", "候補を入れる", "入力欄 (開いた機能が候補の出し方を渡したとき)"), hk("Space x", "AI を止める", "会話"), hk("Enter", "その選択肢で答える", "選択肢の行"),
   { k: "head", t: "質問と指示" },
   hk("Space q", "選んだ箇所に質問を書いてストックする", "選択中 / カーソルの行"), hk("Space c", "選んだ箇所に指示を書いてストックする", "選択中 / カーソルの行"),
   hk("Space l", "ストックの一覧"), hk("cc / dd", "ストックを直す / 取り消す", "印の行、ストックの一覧"), hk("u", "取り消しを戻す"),
@@ -612,9 +612,25 @@ function Buffer({ lines, marks, side, crash, posKey, startLine, act, onKeys, onM
   return <div ref={host} className="flex-1 min-h-0 flex flex-col [&>.cm-editor]:flex-1" />;
 }
 const SKILLS = ["/dev-spec", "/dev-impl", "/workflow-review", "/workflow-commit"];
+/* プロジェクトの登録の欄のパスの候補。Mac Studio の上のディレクトリの見本 (名前, Git のリポジトリか) */
+const DIRS = {
+  "~/": [["Documents", false], ["src", false], ["work", false], [".config", false]],
+  "~/src/": [["booking-web", true], ["notes-cli", true], ["shop-api", true], ["shop-notes", false], ["shop-web", true]],
+  "~/src/shop-api/": [["docs", false], ["src", false]],
+};
+const pathQuery = (text) => {
+  const t = !text || text === "~" ? "~/" : text;
+  if (!t.startsWith("/") && !t.startsWith("~/")) return { error: "パスは / または ~/ で始まる形で指定してください。" };
+  const dir = t.slice(0, t.lastIndexOf("/") + 1), head = t.slice(dir.length), xs = DIRS[dir];
+  if (!xs) return { cands: [], note: `ディレクトリがありません: ${dir}` };
+  const cands = xs.filter(([n]) => n.startsWith(head) && (!n.startsWith(".") || head.startsWith("."))).sort(([a], [b]) => (a < b ? -1 : 1)).map(([n, repo]) => ({ name: n, text: dir + n + "/", repo }));
+  return { cands, note: cands.length ? null : "一致するディレクトリはありません" };
+};
+const commonHead = (xs) => xs.reduce((a, b) => { let n = 0; while (n < a.length && a[n] === b[n]) n += 1; return a.slice(0, n); });
 /* 入力欄。Vim と同じくモードを持ち、Vim の操作で編集できる */
-function PromptEditor({ label, initial, initialImages, imageSel, working, stocking, plain, plainVerb, onSubmit, onClose, onMode, onView, onFocus, act, recall, onRecall, nowVerb, verbOverride }) {
+function PromptEditor({ label, initial, initialImages, imageSel, working, stocking, plain, plainVerb, pathComplete, initialPathList, onPathError, onSubmit, onClose, onMode, onView, onFocus, act, recall, onRecall, nowVerb, verbOverride }) {
   const host = useRef(null), view = useRef(null), latest = useRef({}), imgs = useRef(0);
+  const [pathList, setPathList] = useState(() => (initialPathList ? pathQuery(initial) : null)), filling = useRef(false);
   const [text, setText] = useState(initial || ""), [images, setImages] = useState(initialImages || 0), [pmode, setPmode] = useState(imageSel != null ? "IMAGE" : "INSERT");
   imgs.current = images;
   latest.current = { onSubmit, onClose, onMode, onFocus, act, onRecall };
@@ -624,7 +640,7 @@ function PromptEditor({ label, initial, initialImages, imageSel, working, stocki
       EditorView.contentAttributes.of({ "aria-label": label }), THEME("prompt"), EditorView.theme({ "&": { maxHeight: "10rem" } }),
       EditorView.domEventHandlers({ focus: () => { latest.current.onFocus?.(); },
         paste: (e) => { if ([...(e.clipboardData?.items || [])].some((i) => i.type.startsWith("image/"))) { setImages((n) => n + 1); return true; } return false; } }),
-      EditorView.updateListener.of((u) => { if (u.docChanged) setText(u.state.doc.toString()); })] }) });
+      EditorView.updateListener.of((u) => { if (u.docChanged) { setText(u.state.doc.toString()); if (!filling.current) setPathList(null); } })] }) });
     const cm = getCM(view.current);
     cm.on("vim-mode-change", (e) => { const m = modeName(e); setPmode(m); latest.current.onMode?.(m); });
     HANDLERS.set(view.current, (name) => { if (name === "enter") submit(false); else latest.current.act?.(name); });
@@ -641,18 +657,28 @@ function PromptEditor({ label, initial, initialImages, imageSel, working, stocki
     /* 先頭の行の ↑ と末尾の行の ↓ は、届く前の指示を選ぶ。ほかの行ではカーソルを動かす */
     else if ((e.key === "ArrowUp" || e.key === "ArrowDown") && latest.current.onRecall) { const st = view.current.state, ln = st.doc.lineAt(st.selection.main.head).number; if ((e.key === "ArrowUp" ? ln === 1 : ln === st.doc.lines) && latest.current.onRecall(e.key === "ArrowUp" ? -1 : 1, st.doc.toString())) eat(); }
     else if (isEsc(e) && !vs.insertMode && !vs.visualMode) { eat(); latest.current.onClose(view.current.state.doc.toString()); }
+    /* パスの候補: Tab のたびに問い合わせ、1 件なら入れ、複数なら共通する先頭まで伸ばして並べる */
+    else if (e.key === "Tab" && pathComplete) {
+      eat(); const doc = view.current.state.doc.toString(), r = pathQuery(doc);
+      if (r.error) { onPathError?.(r.error); return; }
+      const fill = (t) => { filling.current = true; view.current.dispatch({ changes: { from: 0, to: doc.length, insert: t }, selection: { anchor: t.length } }); filling.current = false; };
+      if (r.cands.length === 1) { fill(r.cands[0].text); setPathList(null); }
+      else { const head = r.cands.length ? commonHead(r.cands.map((c) => c.text)) : doc; if (head.length > doc.length) fill(head); setPathList(r); }
+    }
     else if (e.key === "Tab" && cands.length) { eat(); view.current.dispatch({ changes: { from: 0, to: view.current.state.doc.length, insert: cands[0] + " " }, selection: { anchor: cands[0].length + 1 } }); }
   };
   const verb = verbOverride || (stocking ? "ストックする" : plain ? plainVerb || "決定する" : working ? "預ける (今の作業が終わると届く)" : "送る");
   const now = nowVerb || (working && !stocking ? "AI を止めてすぐ送る" : verb.split(" ")[0]), up = recall ? [["↑", recall]] : [];
   return (
     <div onKeyDownCapture={onKey}>
+      {pathList && <div data-sketch-change="157:パスの候補" className="text-[13px] mb-1 flex flex-wrap gap-x-4">{pathList.cands.length ? <>{pathList.cands.map((c) => <span key={c.text} className={`font-mono ${c.repo ? "text-ink" : "text-muted"}`}>{c.name}/</span>)}<span className="text-muted">濃い字は Git のリポジトリ</span></> : <span className="text-muted">{pathList.note}</span>}</div>}
       {cands.length > 0 && <div className="text-[13px] font-mono mb-1">{cands.map((c, n) => <span key={c} className={`mr-4 ${n === 0 ? "text-accent" : "text-muted"}`}>{c}</span>)}<span className="text-muted">Tab で選ぶ</span></div>}
       <div ref={host} className="rounded-md bg-surface px-1" />
       {images > 0 && <div aria-label="貼った画像" data-sketch-change="154:縮小と番号" className="mt-1 flex flex-wrap gap-2">{Array.from({ length: images }, (_, n) => <div key={n} {...(n === imageSel ? { "data-sketch-change": "154:選んだ画像" } : {})} className={`relative h-[80px] w-[142px] overflow-hidden rounded bg-surface ${n === imageSel ? "border-2 border-accent" : "border border-line"}`}><img src={SHOTS[n % SHOTS.length]} alt={`貼った画像 ${n + 1}`} className="h-full w-full object-cover" /><span className="absolute left-0 top-0 rounded-br bg-raised px-1 font-mono text-[11px]">{n + 1}</span></div>)}</div>}
       <div data-sketch-change={plain && !verbOverride ? undefined : "148:すぐ送る・↑ の案内"} className="text-[12px] text-muted mt-1 flex flex-wrap gap-x-4 items-center">
         <span className="inline-flex min-w-0">{pmode === "IMAGE" ? <Hint items={[["h l", "選ぶ"], ["d", "外す"], ["Enter", "開く"], ["Ctrl+w k", "本文へ"]]} /> : pmode === "INSERT" ? <Hint items={[["Esc", "Normal へ"], ["Ctrl+Enter", now], ...(!plain ? [["Cmd+V", "貼り付け"]] : []), ...up]} /> : <Hint items={[["Enter", verb], ...((working && !stocking) || nowVerb ? [["Ctrl+Enter", now]] : []), ["Esc", verbOverride ? "閉じる (直した内容は残る)" : "閉じる (書きかけは残る)"], ...up]} />}</span>
         {!plain && pmode !== "IMAGE" && <Hint items={[["/", "スキル"]]} />}
+        {pathComplete && <span data-sketch-change="157:Tab の案内" className="inline-flex"><Hint items={[["Tab", "パスを補う"]]} /></span>}
         {images > 0 && <span className="text-accent">画像 {images} 件 (送信時に一緒に送る)</span>}
         {images > 0 && pmode === "NORMAL" && <span>Ctrl+w j 画像を選ぶ</span>}
         {!plain && <button type="button" tabIndex={-1} className="underline" onClick={() => setImages((n) => n + 1)}>画像を貼る (見本)</button>}
@@ -1161,7 +1187,7 @@ function PC() {
           <div className="text-[12px] mb-1"><span className="text-ink font-bold">{input.kind === "項目" ? `${input.field}を書く` : input.id && (input.kind === "質問" || input.kind === "指示") ? `${input.kind}を直す` : input.kind === "預けた指示の編集" ? <span data-sketch-change="148:直している指示">{`預けた指示を直す (${queue.findIndex((x) => x.id === input.id) + 1} / ${queue.length} 件目)`}</span> : KIND[input.kind]}</span>
             <span className="text-muted ml-3">{input.kind === "プロンプト" || input.kind === "預けた指示の編集" ? `送り先: ${dest}${working ? " (AI が作業中)" : ""}` : input.kind === "質問" ? `送り先: ${dest}。送るとスレッドが始まる。送るまではストックに置く` : input.kind === "指示" ? `送り先: ${dest}。ほかの指示とまとめて送る。送るまではストックに置く` : input.kind === "確定事項" ? "AI の案です。直してから指示としてストックに入れる" : input.kind === "パス" ? "Git リポジトリ" : ""}</span>
             {input.quote && <div className="mt-1 font-mono text-muted border-l-2 border-line pl-2">{input.quote.slice(0, 5).map((q, n) => <div key={n} className="truncate"><span className="inline-block w-6 text-right mr-2">{input.line + 1 + n}</span>{q}</div>)}{input.quote.length > 5 && <div>…ほか {input.quote.length - 5} 行</div>}</div>}</div>
-          <PromptEditor key={input.uid} label={KIND[input.kind]} initial={input.text} initialImages={input.images} imageSel={input.sel} working={working && input.kind === "プロンプト"} stocking={["質問", "指示", "確定事項"].includes(input.kind)} plain={input.kind !== "プロンプト"} plainVerb={input.kind === "パス" ? "登録する" : null}
+          <PromptEditor key={input.uid} label={KIND[input.kind]} initial={input.text} initialImages={input.images} imageSel={input.sel} working={working && input.kind === "プロンプト"} stocking={["質問", "指示", "確定事項"].includes(input.kind)} plain={input.kind !== "プロンプト"} plainVerb={input.kind === "パス" ? "登録する" : null} pathComplete={input.kind === "パス"} initialPathList={input.listed} onPathError={(m) => toast(m, "error")}
             recall={input.kind === "プロンプト" && queue.length ? "届く前の指示を直す" : input.kind === "預けた指示の編集" && queue.findIndex((x) => x.id === input.id) > 0 ? "前の指示へ" : null}
             onRecall={input.kind === "プロンプト" || input.kind === "預けた指示の編集" ? recallQueue : null}
             nowVerb={input.kind === "預けた指示の編集" ? (working ? "AI を止めて届く前の指示をすぐ送る" : "届く前の指示をすぐ送る") : null} verbOverride={input.kind === "預けた指示の編集" ? "直す" : null}
@@ -1535,6 +1561,7 @@ const INTERACTIONS = [
   ["Ctrl+Enter (Insert でも)", "すぐ送る。AI が作業中なら止めて送る", "届く前の指示は、新しい指示の前に付けて一緒に届く"],
   ["↑ (入力欄の先頭の行)", "届く前の指示を新しい順に呼び出して直す", "↓ で書きかけに戻る。直したあと Ctrl+Enter で、届く前の指示をすぐ届ける"],
   ["/ (入力欄の先頭)", "スキルの候補を出す", "Tab で選ぶ"],
+  ["Tab (プロジェクトの登録の入力欄)", "書きかけに続くディレクトリの名前を補う", "候補が複数なら共通する先頭まで伸ばし、入力欄の上に並べる"],
   ["Space i / m / d", "直近 / 目次 / 決まったこと を右に開く", "Enter で本文のその場所へ移動し、Ctrl+o で元の位置へ戻る"],
   ["v / V / Ctrl+v → Space q / c", "選んだ箇所に質問 / 指示を書く (引用 1 つごとに 1 件)", "ストックに入り、行の左に ? / ! が付く。印の行でもう一度押すと、その件を直す"],
   ["Space l", "この会話のストックの一覧", "cc で直す、dd で取り消す、u で取り消しを戻す、Enter で引用した箇所へ"],
@@ -1627,6 +1654,8 @@ const SKETCH_VIEWS = {
   "pc-help": pc({ s: "help", tab: 0 }),
   "pc-settings": pc({ s: "settings", tab: 0 }),
   "pc-settings--register": pc({ s: "settings", tab: 0 }, null, { once: { "pc.input": { uid: 1, kind: "パス", text: "~/src/sh" } } }),
+  "pc-settings--register-candidates": pc({ s: "settings", tab: 0 }, null, { once: { "pc.input": { uid: 1, kind: "パス", text: "~/src/shop-", listed: true } } }),
+  "pc-settings--register-nomatch": pc({ s: "settings", tab: 0 }, null, { once: { "pc.input": { uid: 1, kind: "パス", text: "~/src/x", listed: true } } }),
   "pc-404": pc({ s: "404", tab: 0 }),
   "pc-offline": pc({ s: "home" }, null, { keep: { "pc.offline": true } }),
   "pc-loading": pc({ s: "loading", tab: 0 }),

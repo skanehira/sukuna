@@ -11,7 +11,7 @@
 
 **流れ**:
 
-1. 設定の画面で「プロジェクトを登録する」を選び、Mac Studio の上のリポジトリのパスを書く。プロジェクトがツリーに加わる
+1. 設定の画面で「プロジェクトを登録する」を選び、Mac Studio の上のリポジトリのパスを書く。Tab を押すと、書きかけに続くディレクトリの名前が補われる。登録すると、プロジェクトがツリーに加わる
 2. モデル、許可の扱い、自動で処理する段階、実装の同時実行、merge、設計書の反映のしかたなどを設定する。次に始まる AI からその設定で動く
 3. 必要なら、全体かプロジェクトごとに自動フローを一時停止し、後で再開する
 4. GitHub の open の issue から選んで、下書きとして取り込む
@@ -134,6 +134,40 @@
 8. GitHub を使う場合は、`origin/HEAD` が指す実在のブランチを既定にする。その参照先が無い場合と GitHub を使わない場合は、リポジトリ本体で開いているブランチを使う。初回コミット前も `HEAD` の名前で登録できる。既定を決められなければ、リポジトリ本体でブランチを開くよう案内する
 9. 登録したら、ツリーにプロジェクトを加え、設定の画面のそのプロジェクトの節を開く
 
+### 登録のパスの補完
+
+登録の入力欄は、Mac Studio の上のディレクトリを、入力欄の Tab で問い合わせる候補に出す (`features/buffer-ui.md`「入力欄の補完」)。開発者がパスを最後まで覚えて打たなくても、Tab で 1 階層ずつ補いながらリポジトリまで進めるようにするためである。候補は画面のサーバーが `GET /api/path-candidates` で返す。
+
+| 入力欄に渡すもの | 値 |
+| --- | --- |
+| 補完の動詞 (下の段のヒント) | 「パスを補う」 |
+| 候補の後ろの説明 | 「濃い字は Git のリポジトリ」 |
+| 候補の表示名 | ディレクトリの名前と `/` (例: `shop-api/`) |
+| 強調する候補 | Git のリポジトリ (直下に `.git` のディレクトリがあるもの)。`.git` がファイルの worktree は強調しない。「登録」の 5 で断るためである |
+
+書きかけの本文は、空と `~` を `~/` と読み替えてから、最後の `/` までを探すディレクトリ、その後ろを名前の先頭として読む。
+
+| 本文 | 探すディレクトリ | 名前の先頭 | 候補の文の例 |
+| --- | --- | --- | --- |
+| 空、または `~` | `~/` (ホームディレクトリ) | 空 | `~/src/` |
+| `~/src/sh` | `~/src/` | `sh` | `~/src/shop-api/` |
+| `/Users/me/` | `/Users/me/` | 空 | `/Users/me/src/` |
+| `src/sh`、`~me/src` (空・`~`・`/` で始まるもの・`~/` で始まるもののどれでもない) | 探さない | — | 「パスは / または ~/ で始まる形で指定してください。」をエラーのお知らせに出す |
+
+- 候補の文は、読み替えた本文の探すディレクトリの部分を書いたままにして (`~` を展開しない)、名前と `/` を足したものとする。候補を入れた本文で続けて Tab を押すと、そのディレクトリの中が候補になる
+- 候補は、探すディレクトリの直下のディレクトリと、ディレクトリを指すシンボリックリンクだけにする。ファイルは出さない
+- 名前の先頭との前方一致で絞り、大文字と小文字を区別する
+- `.` で始まる名前は、名前の先頭が `.` で始まるときだけ出す (例: `~/.c` なら `~/.config/` が出る)
+- 並びは名前の文字コードの順 (大文字で始まる名前が先) とし、200 件で切る
+- サーバーは、探すディレクトリを 3 秒で読み切れなければ、読む権限がないときと同じ案内を返す。応答しないボリュームを読んで Tab が効かないままになるのを防ぐためである
+- 候補が 0 件のときの案内は、次のとおりにする。`<探すディレクトリ>` には、読み替えた本文に書いたままの形 (例: `~/work/`) を入れる
+  - 探すディレクトリが無いか、ディレクトリでない: 「ディレクトリがありません: <探すディレクトリ>」
+  - 読む権限がないか、3 秒で読み切れない: 「ディレクトリを読めません: <探すディレクトリ>」。macOS のプライバシー保護で、`~/Documents` などは読めないことがある
+  - 一致する名前がない: 「一致するディレクトリはありません」
+- 末尾が `/` のままの本文で登録しても、「登録」の 1 で実際のパスに直すので、`/` の無い本文と同じプロジェクトになる
+
+この API は、登録したプロジェクトの外のディレクトリも読む。返すのはディレクトリの名前と、Git のリポジトリかどうかだけで、ファイルの名前と中身は返さない。接続できる相手は、ターミナルと同じく DESIGN.md「横断規約 > 接続範囲」で絞られる。
+
 ### 解除
 
 停止の対象を決めてから解除を書き込むまで、新しい会話と番の開始を断る。解除が完了したあとに、停止の対象から漏れた AI が動き続けるのを防ぐ。解除に失敗したとき、同じ利用枠待ちの会話は自動再開の対象に残る。
@@ -208,6 +242,25 @@
 - 400 `invalid_input` — 「登録」のパス規則に合わない、パスが無い、worktree を指した、名前が規則に合わない、既定ブランチを決められない
 - 400 `not_a_repository`: Git のリポジトリではない
 - 409 `conflict`: 同じパスが登録中 / 名前が登録中のほかのプロジェクトと重なる
+
+### GET `/api/path-candidates`
+
+登録の入力欄の補完の候補を返す (「登録のパスの補完」)。
+
+- リクエスト: クエリの `text` に書きかけの本文を渡す (例: `/api/path-candidates?text=~/src/sh`)。省略は空と同じに扱う
+- 応答: 200
+
+```json
+{
+  "candidates": [ { "name": "shop-api", "text": "~/src/shop-api/", "repository": true } ],
+  "truncated": false,
+  "note": null
+}
+```
+
+- `candidates` は「登録のパスの補完」の並びで、200 件までとする。`truncated` は、200 件で切ったとき `true` にする。`repository` は、強調する候補 (直下に `.git` のディレクトリがある) のとき `true` にする
+- `note` は、候補が 0 件のときの案内の文とする。候補があるときは `null` にする。探すディレクトリが無いときと読めないときも 200 で返す
+- 400 `invalid_input` — `text` が「登録のパスの補完」の表で探さない形のとき (`message` は「パスは / または ~/ で始まる形で指定してください。」)。`text` が NUL か改行を含むとき (`message` は「パスに改行と NUL は書けません。」)
 
 ### GET `/api/projects/:id`
 
@@ -313,47 +366,52 @@
 
 ## 実装の配置
 
-| 処理 | 層 | 実装先ファイル |
-| --- | --- | --- |
-| 設定の項目の検査と既定値、パスの受け付けの規則 | ドメイン | `src/server/modules/workspace/domain/project-settings.ts` |
-| 登録・戻す → projects | ユースケース | `src/server/modules/workspace/usecase/register-project.ts` |
-| 設定を読む、変える → projects | ユースケース | `src/server/modules/workspace/usecase/get-project.ts`、`src/server/modules/workspace/usecase/update-project.ts` |
-| 解除 → projects (通知の取り下げは `features/inbox.md` の口を呼ぶ) | ユースケース | `src/server/modules/workspace/usecase/unregister-project.ts` |
-| 全体の一時停止 → settings | ユースケース | `src/server/modules/settings/usecase/set-flow-paused.ts` |
-| 取り込みの候補と取り込み → issues | ユースケース | `src/server/modules/issue/usecase/github-import.ts` |
-| git の実行 (最上位のパス、既定ブランチ、ブランチの有無) | インフラ (git の Port) | `src/server/modules/workspace/adapter/git-cli.ts` |
-| `gh` の実行 (リポジトリの確かめ、issue の一覧と取得) | インフラ (GitHub の Port) | `src/server/modules/issue/adapter/gh-cli.ts` |
-| 利用量の集計 (期間、スレッドの付け替え) → conversation_events, conversations, issues, projects, settings | ドメイン / ユースケース | `src/server/modules/conversation/domain/usage.ts`、`src/server/modules/conversation/usecase/get-usage.ts` |
-| API ハンドラ (プロジェクト、取り込み、利用量) | API ハンドラ | `src/server/modules/workspace/adapter/project-routes.ts`、`src/server/modules/issue/adapter/github-import-routes.ts`、`src/server/modules/conversation/adapter/usage-routes.ts` |
-| `PUT /api/settings/flow-paused` のハンドラ | API ハンドラ | `features/operations.md` の設定の API ハンドラ (`src/server/modules/settings/adapter/routes.ts`) に足す |
-| 設定の変化を受けて issue を拾い直す。一時停止と段階の検査 | ユースケース | `src/runner/modules/flow/usecase/flow-gate.ts` |
-| 解除の前に会話を止める (`/flow/projects/:id/stop`) → conversations, conversation_events | ユースケース | `src/runner/modules/flow/usecase/stop-project.ts` |
-| 利用枠の状態を保存する → settings | ユースケース | `src/runner/modules/conversation/usecase/record-rate-limit.ts` (`features/runtime.md` のランナーの会話の実行が作る。本機能は保存した値を読む) |
-| 入出力の Zod のスキーマ | 共有 | `src/shared/api/project.ts`、`src/shared/api/usage.ts` |
-| 設定の画面の「全体」の自動フローの行と、プロジェクトの節 | UI | `src/front/components/settings/project-section.tsx` (`features/operations.md` の設定の画面 `src/front/pages/settings.tsx` が並べる部品) |
-| 取り込みの画面、利用量の画面 | UI | `src/front/pages/github-import.tsx`、`src/front/pages/usage.tsx` |
+| 処理 | 層 | 実装先ファイル | 作る / 足す |
+| --- | --- | --- | --- |
+| 設定の項目の検査と既定値、パスの受け付けの規則 | ドメイン | `src/server/modules/workspace/domain/project-settings.ts` | 足す |
+| 登録のパスの補完の規則 (書きかけの分解、名前の絞り込みと並び、200 件の上限、候補の文の組み立て) | ドメイン | `src/server/modules/workspace/domain/path-candidates.ts` | 作る |
+| 登録・戻す → projects | ユースケース | `src/server/modules/workspace/usecase/register-project.ts` | 足す |
+| 登録のパスの候補を返す (探すディレクトリを読み、規則に当てる) | ユースケース | `src/server/modules/workspace/usecase/list-path-candidates.ts` | 作る |
+| 設定を読む、変える → projects | ユースケース | `src/server/modules/workspace/usecase/get-project.ts`、`src/server/modules/workspace/usecase/update-project.ts` | 足す |
+| 解除 → projects (通知の取り下げは `features/inbox.md` の口を呼ぶ) | ユースケース | `src/server/modules/workspace/usecase/unregister-project.ts` | 足す |
+| 全体の一時停止 → settings | ユースケース | `src/server/modules/settings/usecase/set-flow-paused.ts` | 足す |
+| 取り込みの候補と取り込み → issues | ユースケース | `src/server/modules/issue/usecase/github-import.ts` | 足す |
+| git の実行 (最上位のパス、既定ブランチ、ブランチの有無) | インフラ (git の Port) | `src/server/modules/workspace/adapter/git-cli.ts` | 足す |
+| ディレクトリの直下の名前と種類、`.git` の有無を読む (ホームディレクトリの置き換えは登録のパスと共有する) | インフラ (`ProjectDependencies` の口) | `src/server/modules/workspace/domain/project-settings.ts`、`src/server/modules/workspace/adapter/project-dependencies.ts` | 足す |
+| `gh` の実行 (リポジトリの確かめ、issue の一覧と取得) | インフラ (GitHub の Port) | `src/server/modules/issue/adapter/gh-cli.ts` | 足す |
+| 利用量の集計 (期間、スレッドの付け替え) → conversation_events, conversations, issues, projects, settings | ドメイン / ユースケース | `src/server/modules/conversation/domain/usage.ts`、`src/server/modules/conversation/usecase/get-usage.ts` | 足す |
+| API ハンドラ (プロジェクト、登録のパスの候補、取り込み、利用量) | API ハンドラ | `src/server/modules/workspace/adapter/project-routes.ts`、`src/server/modules/issue/adapter/github-import-routes.ts`、`src/server/modules/conversation/adapter/usage-routes.ts` | 足す |
+| `PUT /api/settings/flow-paused` のハンドラ (`features/operations.md` の設定の API ハンドラに足す) | API ハンドラ | `src/server/modules/settings/adapter/routes.ts` | 足す |
+| 設定の変化を受けて issue を拾い直す。一時停止と段階の検査 | ユースケース | `src/runner/modules/flow/usecase/flow-gate.ts` | 足す |
+| 解除の前に会話を止める (`/flow/projects/:id/stop`) → conversations, conversation_events | ユースケース | `src/runner/modules/flow/usecase/stop-project.ts` | 足す |
+| 利用枠の状態を保存する → settings (`features/runtime.md` のランナーの会話の実行が作る。本機能は保存した値を読む) | ユースケース | `src/runner/modules/conversation/usecase/record-rate-limit.ts` | 足す |
+| 入出力の Zod のスキーマ (登録のパスの候補を含む) | 共有 | `src/shared/api/project.ts`、`src/shared/api/usage.ts` | 足す |
+| 登録のパスの候補を問い合わせる | UI | `src/front/lib/project-settings-api.ts` | 足す |
+| 設定の画面の「全体」の自動フローの行と、プロジェクトの節。登録の入力欄に補完の候補の出し方を渡す (`features/operations.md` の設定の画面が並べる部品) | UI | `src/front/components/settings/project-section.tsx` | 足す |
+| 取り込みの画面、利用量の画面 | UI | `src/front/pages/github-import.tsx`、`src/front/pages/usage.tsx` | 足す |
 
 - 使う列 (`projects` の `model`・`auto_stages`・`confirm_before_merge_default`、`issues` の `github_number`) と一意の制約の定義は DESIGN.md「データスキーマ」参照
 
 ## エッジケースの決定
 
-1. **空・最小データ**: プロジェクトが 0 件のとき、設定の画面はプロジェクトの節の代わりに「プロジェクトはまだありません」とメニュー「プロジェクトを登録する」を出す。GitHub の open の issue が 0 件なら「open の issue はありません」を出す。利用量が 0 なら「直近 7 日に AI は動いていません」を出す。自動で処理する段階を 0 個にしてもよく、そのときは自動フローの AI がそのプロジェクトで始まらない
-2. **上限・境界値**: 名前は 1〜40 字、同時に実装する件数は 1〜20、取り込みの候補は 200 件まで、1 回の取り込みは 100 件までとする。期間の境目は「今の時刻 − 5 時間」「今の時刻 − 7 日」ちょうどを含む
-3. **エラー時に利用者へ見えるもの**: 登録・設定・取り込みの失敗は、`message` をエラーのお知らせに出し、入力欄と書いた値を残す。`gh` にログインしていないときは「gh にログインしていません。ターミナルで gh auth login を実行してください」を出す。接続範囲は DESIGN.md「横断規約 > 接続範囲」参照
-4. **並行操作・二重実行**: 同じパスを 2 つの端末から同時に登録すると、`projects.path` の一意の制約で後の方が `conflict` になる。同じ GitHub の issue を同時に取り込むと、`issues (project_id, github_number)` の一意の制約で後の方を `already_imported` にする。設定を 2 つの端末で同時に変えると、項目ごとに後から書いた値が残る
-5. **再表示時の整合**: 設定の画面は、開くたびと、配信の `inbox` の `changed` の `project_ids` に開いているプロジェクトがあるたびに、GET `/api/projects/:id` を読み直す。全体の一時停止は `app` の `settings_changed` で読み直す。利用量の画面は開くたびに集計し、開いたままでは自動で更新しない。取り込みの画面は、取り込みの後に候補を取り直す
-6. **表示の寿命**: 設定を変えたお知らせ「許可の扱いを書き換えました」は 4 秒で消える。一時停止のあいだは、ステータス行に「自動フロー停止中」を出し続ける。利用枠の状態は、次のイベントを受けるまで同じ表示を残す
+1. **空・最小データ**: プロジェクトが 0 件のとき、設定の画面はプロジェクトの節の代わりに「プロジェクトはまだありません」とメニュー「プロジェクトを登録する」を出す。GitHub の open の issue が 0 件なら「open の issue はありません」を出す。利用量が 0 なら「直近 7 日に AI は動いていません」を出す。登録の入力欄で本文が空のまま Tab を押すと、ホームディレクトリの直下を候補に出す。自動で処理する段階を 0 個にしてもよく、そのときは自動フローの AI がそのプロジェクトで始まらない
+2. **上限・境界値**: 名前は 1〜40 字、同時に実装する件数は 1〜20、取り込みの候補は 200 件まで、1 回の取り込みは 100 件までとする。登録のパスの候補は 200 件まで返し、入力欄に並べるのは 30 件までとする (`features/buffer-ui.md`「入力欄の補完」)。期間の境目は「今の時刻 − 5 時間」「今の時刻 − 7 日」ちょうどを含む
+3. **エラー時に利用者へ見えるもの**: 登録・設定・取り込みの失敗は、`message` をエラーのお知らせに出し、入力欄と書いた値を残す。`gh` にログインしていないときは「gh にログインしていません。ターミナルで gh auth login を実行してください」を出す。登録のパスの補完で、探すディレクトリが無いときと読めないときは、エラーのお知らせではなく、入力欄の候補の段に案内を出す。「登録のパスの補完」の表で探さない形の本文で Tab を押したときは、エラーのお知らせを出す。接続範囲は DESIGN.md「横断規約 > 接続範囲」参照
+4. **並行操作・二重実行**: 同じパスを 2 つの端末から同時に登録すると、`projects.path` の一意の制約で後の方が `conflict` になる。同じ GitHub の issue を同時に取り込むと、`issues (project_id, github_number)` の一意の制約で後の方を `already_imported` にする。設定を 2 つの端末で同時に変えると、項目ごとに後から書いた値が残る。登録のパスの補完は読むだけなので、ほかの操作と重なっても互いに影響しない。応答を待つあいだの Tab と古い応答の扱いは `features/buffer-ui.md`「入力欄の補完」に従う
+5. **再表示時の整合**: 設定の画面は、開くたびと、配信の `inbox` の `changed` の `project_ids` に開いているプロジェクトがあるたびに、GET `/api/projects/:id` を読み直す。全体の一時停止は `app` の `settings_changed` で読み直す。利用量の画面は開くたびに集計し、開いたままでは自動で更新しない。取り込みの画面は、取り込みの後に候補を取り直す。登録のパスの候補は覚えておかず、Tab を押すたびにディレクトリを読み直す
+6. **表示の寿命**: 設定を変えたお知らせ「許可の扱いを書き換えました」は 4 秒で消える。一時停止のあいだは、ステータス行に「自動フロー停止中」を出し続ける。利用枠の状態は、次のイベントを受けるまで同じ表示を残す。登録のパスの候補と案内の寿命は `features/buffer-ui.md`「入力欄の補完」に従う
 7. **送る前のデータ**: 値の行の入力欄は、保存に失敗しても書いた値を残す。この入力は会話の書きかけの入力ではないので、サーバーには置かず、閉じると消える。一時停止は、メニューの行を選んだ時点で保存する
 8. **状態の移り変わり**: プロジェクトは 登録中 → (解除) → 解除済み → (同じパスで登録) → 登録中 と移る。自動フローは 動作中 ⇄ 一時停止 を、全体とプロジェクトのそれぞれで持つ
-9. **自動で進むこと**: 再開と、段階を戻したときと、同時に実装する件数を増やしたときは、待っていた issue の AI を開発者の操作なしに始める (方針 P2)。取り込みも、利用枠の状態の保存も、開発者の操作か AI の実行のイベントだけをきっかけにし、GitHub を定期的には読まない
+9. **自動で進むこと**: 再開と、段階を戻したときと、同時に実装する件数を増やしたときは、待っていた issue の AI を開発者の操作なしに始める (方針 P2)。取り込みも、利用枠の状態の保存も、開発者の操作か AI の実行のイベントだけをきっかけにし、GitHub を定期的には読まない。登録のパスの補完も、Tab を押したときだけディレクトリを読み、打つたびには読まない
 10. **端末と画面をまたぐこと**: 設定と一時停止はサーバーに置き、どの端末でも同じにする。設定の画面でどのプロジェクトの節を開いているか、カーソルの位置は、ブラウザのタブごとに持つ (方針 P3)
-11. **並びと数え方**: 設定の画面は「全体」の節の後に、いまのプロジェクトの節を出す。いまのプロジェクトが決まらない画面から開いたときは、ツリーの先頭のプロジェクトを出し、`:set <名前>` でほかのプロジェクトを開く。利用量は、プロジェクトも issue も直近 7 日のトークンの多い順に並べ、同じなら名前と番号の順とする。issue の無い会話の行は、プロジェクトの中の最後に置く。取り込みの候補は GitHub の番号の大きい順に並べる
+11. **並びと数え方**: 設定の画面は「全体」の節の後に、いまのプロジェクトの節を出す。いまのプロジェクトが決まらない画面から開いたときは、ツリーの先頭のプロジェクトを出し、`:set <名前>` でほかのプロジェクトを開く。利用量は、プロジェクトも issue も直近 7 日のトークンの多い順に並べ、同じなら名前と番号の順とする。issue の無い会話の行は、プロジェクトの中の最後に置く。取り込みの候補は GitHub の番号の大きい順に並べる。登録のパスの候補は名前の文字コードの順に並べる
 
 ## テスト方針
 
 | 受け入れ基準 (docs/design/USECASES.md) | レベル |
 | --- | --- |
 | （US-001）リポジトリのパスを指定して登録すると、プロジェクトがプロジェクトの一覧に加わる | E2E |
+| （US-001）登録するパスを書きかけて Tab を押すと、続くディレクトリの名前が補われ、候補が複数あれば入力欄の上に並ぶ | 単体 |
 | （US-001）Git のリポジトリではないパスを指定すると、リポジトリではないことが表示され、登録されない | 結合 |
 | （US-001）プロジェクトを解除すると、プロジェクトの一覧から外れ、リポジトリのファイルは消えない | 結合 |
 | （US-043）プロジェクトのモデル、許可の扱い、自動で処理する段階を設定すると、次に始まる AI からその設定で動く | 結合 |
@@ -363,12 +421,13 @@
 | （US-035）取り込みで GitHub の issue を選ぶと、選んだ issue が下書きとして登録される | 結合 |
 | （US-061）利用量を開くと、issue とプロジェクトごとの利用量が表示される | 結合 |
 
+- 登録のパスの補完の行は、入力欄の問い合わせを偽物に差し替えて確かめる。サーバーが返す候補は、「登録のパスの補完」の表を 1 行ずつ確かめる
 - 結合: 画面のサーバーとランナーを、本物の SQLite と、一時ディレクトリに作った本物の git のリポジトリで動かす。Agent SDK は台本どおりにイベントを流す偽物、GitHub の Port は決めた issue の一覧を返す偽物に差し替える
 - 設定の行は、偽物の Agent SDK が受け取った実行の設定 (モデルと許可の扱い) の全体を比べる。設定を変える前に始めた会話には、前の値が渡り続けることも確かめる
 - 実装を外す行は、実装待ちの issue に AI が始まらないことを、同じ時点で精査待ちの issue には AI が始まることと対にして確かめる。開発者の会話で `/dev-impl` を送ると、その指示が AI に届き、issue の状態は変わらないことも確かめる
 - 一時停止の行は、動いている会話の実行が止められていないことと、精査待ちに移した issue に AI が始まらないことを確かめる。再開の行は、再開したあとにその issue の AI が始まることを確かめる
 - 利用量の行は、`turn_end` の記録を前提データで入れ、スレッドの分が元の issue に数えられること、5 時間と 7 日の境目の内と外を確かめる。画面の数の書式 (桁の区切り、料金の小数 2 桁) は単体で確かめる
 - 解除の行は、解除の後にプロジェクトの一覧に出ないことと、リポジトリのファイルが残っていることを確かめる。作業中の自動フローの会話が `stopped` (`user`) になり、同じパスを登録し直しても動かないことも確かめる
-- E2E: 画面の設定の画面から「プロジェクトを登録する」を選び、一時ディレクトリに作ったリポジトリのパスを書いて登録し、ツリーにプロジェクトが加わるまでをキーボードで行う
+- E2E: 画面の設定の画面から「プロジェクトを登録する」を選び、一時ディレクトリに作ったリポジトリのパスの途中まで (例: 最後のディレクトリ名の先頭の数文字) を書き、Tab で補って登録し、ツリーにプロジェクトが加わるまでをキーボードで行う
 
 E2E 対象動線: （US-001）リポジトリのパスを指定して登録すると、プロジェクトがプロジェクトの一覧に加わる

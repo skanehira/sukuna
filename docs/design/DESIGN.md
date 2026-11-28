@@ -264,6 +264,7 @@ SQLite のファイルを 1 つ使う。識別子は ULID の文字列、時刻�
 | PUT | `/api/conversations/:id/workspace` | 会話の作業場所を切り替える | `features/worktree-terminal.md` |
 | POST | `/api/terminals` | ターミナルを開く | `features/worktree-terminal.md` |
 | POST | `/api/projects` | プロジェクトを登録する | `features/project-settings.md` |
+| GET | `/api/path-candidates` | 登録するパスの補完の候補 (Mac Studio の上のディレクトリ) | `features/project-settings.md` |
 | GET | `/api/projects/:id` | プロジェクトの設定と、解除すると止まる会話の数 | `features/project-settings.md` |
 | GET | `/api/projects/:id/github-issues` | 取り込める GitHub の issue の一覧 | `features/project-settings.md` |
 | PUT | `/api/settings/flow-paused` | 全プロジェクトの自動フローの一時停止 | `features/project-settings.md` |
