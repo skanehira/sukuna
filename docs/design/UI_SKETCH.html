@@ -98,7 +98,8 @@ const CONV = mk([
   ["ai", "AI"],
   ["text", "開始の 24 時間前までとします。過ぎたら店舗への連絡を案内します。", { id: "d2" }],
   ["tool", "● Read(src/booking/cancel.ts)  84 行", { id: "lastread", go: { s: "file", file: "src/booking/cancel.ts" } }],
-  ["tool", "● take_screenshot()  Took a screenshot of the current page's viewport."],
+  ["tool", "● take_screenshot()"],
+  ["tool", "  ⎿ Took a screenshot of the current page's viewport."],
   ["shot", "    画像 1 / 1 (Enter で元の大きさで開く)"],
   ["you", "あなた", { id: "c3" }],
   ["text", "在庫の引き当ても同じ API でやりたい。", { id: "mine" }],
@@ -362,6 +363,9 @@ const titleOf = (v) => ({
 /* ------------------------------------------------------------------ *
  * 部品
  * ------------------------------------------------------------------ */
+/* 画像の見本。スクリーンショットの代わりに、ブラウザの画面らしい SVG を描く */
+const SHOT = (accent, title) => "data:image/svg+xml;utf8," + encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='320' height='180' viewBox='0 0 320 180'><rect width='320' height='180' fill='#f6f7f9'/><rect width='320' height='18' fill='#e3e5ea'/><circle cx='10' cy='9' r='3' fill='#f87171'/><circle cx='20' cy='9' r='3' fill='#fbbf24'/><circle cx='30' cy='9' r='3' fill='#34d399'/><rect x='44' y='5' width='200' height='8' rx='4' fill='#fff'/><rect x='0' y='18' width='320' height='26' fill='${accent}'/><text x='12' y='36' font-size='12' font-family='sans-serif' fill='#fff'>${title}</text><rect x='12' y='56' width='140' height='10' rx='3' fill='#cfd3da'/><rect x='12' y='74' width='296' height='40' rx='4' fill='#fff' stroke='#d7dbe2'/><rect x='20' y='84' width='180' height='8' rx='3' fill='#e3e5ea'/><rect x='20' y='98' width='120' height='8' rx='3' fill='#e3e5ea'/><rect x='12' y='124' width='296' height='40' rx='4' fill='#fff' stroke='#d7dbe2'/><rect x='20' y='134' width='200' height='8' rx='3' fill='#e3e5ea'/><rect x='236' y='134' width='60' height='18' rx='4' fill='${accent}'/></svg>`);
+const SHOTS = [SHOT("#4f46e5", "予約の一覧"), SHOT("#dc2626", "予約の確認 (エラー)"), SHOT("#059669", "空き枠の検索")];
 /* 行の種類ごとの見た目。上の余白は PAD で持ち、行番号も同じだけ下げて揃える */
 const LINE = {
   head: "text-[13px] font-bold text-ink app-head", you: "!leading-5", ai: "!leading-5", text: "", ask: "font-bold", tool: "font-mono text-[12px] text-muted", note: "text-[13px] text-muted",
@@ -476,7 +480,8 @@ function decorate(lines, doc) {
     if (l.k === "you" || l.k === "ai") mine = l.k; else if (END.has(l.k)) mine = false;
     const body = (x) => x && !END.has(x.k) && x.k !== "you" && x.k !== "ai" && x.k !== "act";
     const own = mine && body(l) ? ` app-${mine}` + (!body(lines[n - 1]) ? " app-turn-a" : "") + (!body(lines[n + 1]) ? " app-turn-z" : "") : "";
-    b.add(line.from, line.from, Decoration.line({ class: (LINE[l.k] || "") + (l.k === "act" ? (l.first ? " app-act-a" : "") + (l.last ? " app-act-z" : "") : "") + own, ...(padTop(lines, n) || padBottom(lines, n) ? { attributes: { style: `padding-top:${PAD[l.k] || 0}px` + gapStyle(lines, n) } } : {}) }));
+    const attrs = { ...(padTop(lines, n) || padBottom(lines, n) ? { style: `padding-top:${PAD[l.k] || 0}px` + gapStyle(lines, n) } : {}), ...(l.k === "shot" ? { "data-sketch-change": "153:ツールの結果の画像" } : {}) };
+    b.add(line.from, line.from, Decoration.line({ class: (LINE[l.k] || "") + (l.k === "act" ? (l.first ? " app-act-a" : "") + (l.last ? " app-act-z" : "") : "") + own, ...(Object.keys(attrs).length ? { attributes: attrs } : {}) }));
     if ((l.k === "you" || l.k === "ai") && line.length) b.add(line.from, line.to, Decoration.mark({ class: "inline-block rounded px-1.5 leading-4 text-[12px] font-bold " + (l.k === "you" ? "bg-accent text-surface" : "bg-raised text-ink") }));
     if (l.k === "bar") { let p = line.from; l.parts.forEach((w, m) => { if (w) b.add(p, p + w, Decoration.mark({ class: BAR[m] })); p += w; }); }
     else if (l.k === "flow") { let p = line.from; l.parts.forEach(([st, t]) => { b.add(p, p + t.length + 2, Decoration.mark({ class: st === "doing" ? "text-ink font-bold" : st === "done" ? "text-ink" : "" })); b.add(p, p + 1, Decoration.mark({ class: ST[st][1] })); p += t.length + 2 + 5; }); }
@@ -519,7 +524,7 @@ const THEME = (side) => EditorView.theme({
   ".cm-line.app-you": { backgroundColor: "var(--raised)", boxShadow: "inset 3px 0 0 var(--accent)", marginRight: "16px" },
   ".cm-line.app-ai": { boxShadow: "inset 3px 0 0 color-mix(in srgb, var(--ink) 28%, transparent)" },
   ".cm-line.app-you.app-turn-a": { borderTopRightRadius: "8px" }, ".cm-line.app-you.app-turn-z": { borderBottomRightRadius: "8px" },
-  ".cm-line.app-shot": { paddingBottom: "calc(8rem + 8px)", backgroundImage: "linear-gradient(var(--raised), var(--raised))", backgroundSize: "14rem 8rem", backgroundRepeat: "no-repeat", backgroundPosition: "16px calc(100% - 4px)" },
+  ".cm-line.app-shot": { paddingBottom: "calc(9rem + 8px)", backgroundImage: `url("${SHOTS[0]}")`, backgroundSize: "16rem 9rem", backgroundRepeat: "no-repeat", backgroundPosition: "16px calc(100% - 4px)" },
   ".cm-line.app-skel": { backgroundImage: "linear-gradient(var(--raised), var(--raised))", backgroundSize: "60% 12px", backgroundRepeat: "no-repeat", backgroundPosition: "8px center", animation: "pulse 2s cubic-bezier(0.4,0,0.6,1) infinite" },
   ".cm-gutters": { backgroundColor: "transparent", border: "none", color: "var(--muted)", fontFamily: MONO, fontSize: "12px" },
   ".app-num .cm-gutterElement": { width: "2.5rem", textAlign: "right", paddingRight: "8px" }, ".app-num .cur": { color: "var(--ink)" },
@@ -608,9 +613,9 @@ function Buffer({ lines, marks, side, crash, posKey, startLine, act, onKeys, onM
 }
 const SKILLS = ["/dev-spec", "/dev-impl", "/workflow-review", "/workflow-commit"];
 /* 入力欄。Vim と同じくモードを持ち、Vim の操作で編集できる */
-function PromptEditor({ label, initial, working, stocking, plain, onSubmit, onClose, onMode, onView, onFocus, act }) {
+function PromptEditor({ label, initial, initialImages, imageSel, working, stocking, plain, onSubmit, onClose, onMode, onView, onFocus, act }) {
   const host = useRef(null), view = useRef(null), latest = useRef({}), imgs = useRef(0);
-  const [text, setText] = useState(initial || ""), [images, setImages] = useState(0), [pmode, setPmode] = useState("INSERT");
+  const [text, setText] = useState(initial || ""), [images, setImages] = useState(initialImages || 0), [pmode, setPmode] = useState(imageSel != null ? "IMAGE" : "INSERT");
   imgs.current = images;
   latest.current = { onSubmit, onClose, onMode, onFocus, act };
   const submit = (now) => latest.current.onSubmit(view.current.state.doc.toString(), imgs.current, now);
@@ -623,7 +628,8 @@ function PromptEditor({ label, initial, working, stocking, plain, onSubmit, onCl
     const cm = getCM(view.current);
     cm.on("vim-mode-change", (e) => { const m = modeName(e); setPmode(m); latest.current.onMode?.(m); });
     HANDLERS.set(view.current, (name) => { if (name === "enter") submit(false); else latest.current.act?.(name); });
-    onView?.(view.current); view.current.focus(); Vim.handleKey(cm, "i"); latest.current.onMode?.("INSERT");
+    onView?.(view.current);
+    if (imageSel != null) latest.current.onMode?.("IMAGE"); else { view.current.focus(); Vim.handleKey(cm, "i"); latest.current.onMode?.("INSERT"); }
     return () => { onView?.(null); view.current.destroy(); view.current = null; };
   }, []);
   const cands = /^\/\S*$/.test(text) ? SKILLS.filter((s) => s.startsWith(text)) : [];
@@ -639,12 +645,12 @@ function PromptEditor({ label, initial, working, stocking, plain, onSubmit, onCl
     <div onKeyDownCapture={onKey}>
       {cands.length > 0 && <div className="text-[13px] font-mono mb-1">{cands.map((c, n) => <span key={c} className={`mr-4 ${n === 0 ? "text-accent" : "text-muted"}`}>{c}</span>)}<span className="text-muted">Tab で選ぶ</span></div>}
       <div ref={host} className="rounded-md bg-surface px-1" />
-      {images > 0 && <div aria-label="貼った画像" className="mt-1 flex flex-wrap gap-2">{Array.from({ length: images }, (_, n) => <div key={n} className="relative h-[80px] w-[142px] overflow-hidden rounded border border-line bg-surface"><span className="absolute left-0 top-0 rounded-br bg-raised px-1 font-mono text-[11px]">{n + 1}</span></div>)}</div>}
+      {images > 0 && <div aria-label="貼った画像" data-sketch-change="154:縮小と番号" className="mt-1 flex flex-wrap gap-2">{Array.from({ length: images }, (_, n) => <div key={n} {...(n === imageSel ? { "data-sketch-change": "154:選んだ画像" } : {})} className={`relative h-[80px] w-[142px] overflow-hidden rounded bg-surface ${n === imageSel ? "border-2 border-accent" : "border border-line"}`}><img src={SHOTS[n % SHOTS.length]} alt={`貼った画像 ${n + 1}`} className="h-full w-full object-cover" /><span className="absolute left-0 top-0 rounded-br bg-raised px-1 font-mono text-[11px]">{n + 1}</span></div>)}</div>}
       <div className="text-[12px] text-muted mt-1 flex flex-wrap gap-x-4 items-center">
-        {pmode === "INSERT" ? <Hint items={[["Esc", "Normal へ (" + verb.split(" ")[0] + "のは Normal から)"], ...(!plain ? [["Cmd+V", "貼り付け"]] : [])]} /> : <Hint items={[["Enter", verb], ...(working && !stocking ? [["Alt+Enter", "AI を止めてすぐ送る"]] : []), ["Esc", "閉じる (書きかけは残る)"]]} />}
+        {pmode === "IMAGE" ? <Hint items={[["h l", "選ぶ"], ["d", "外す"], ["Enter", "開く"], ["Ctrl+w k", "本文へ"]]} /> : pmode === "INSERT" ? <Hint items={[["Esc", "Normal へ (" + verb.split(" ")[0] + "のは Normal から)"], ...(!plain ? [["Cmd+V", "貼り付け"]] : [])]} /> : <Hint items={[["Enter", verb], ...(working && !stocking ? [["Alt+Enter", "AI を止めてすぐ送る"]] : []), ["Esc", "閉じる (書きかけは残る)"]]} />}
         {!plain && <Hint items={[["/", "スキル"]]} />}
         {images > 0 && <span className="text-accent">画像 {images} 件 (送信時に一緒に送る)</span>}
-        {images > 0 && pmode !== "INSERT" && <span>Ctrl+w j 画像を選ぶ</span>}
+        {images > 0 && pmode === "NORMAL" && <span>Ctrl+w j 画像を選ぶ</span>}
         {!plain && <button type="button" tabIndex={-1} className="underline" onClick={() => setImages((n) => n + 1)}>画像を貼る (見本)</button>}
       </div>
     </div>
@@ -1072,6 +1078,7 @@ function PC() {
   const tabHint = v.s === "issue" ? [["Ctrl+l", `${TABS[((v.tab || 0) + 1) % TABS.length]}へ`], ["Ctrl+h", `${TABS[((v.tab || 0) + TABS.length - 1) % TABS.length]}へ`]] : [];
   const hints = confirm ? [["y", "実行する"], ["n", "やめる"]]
     : mode === "TERMINAL" ? [["Ctrl+]", "Normal へ"]]
+    : focus === "prompt" && mode === "IMAGE" ? [["h l", "画像を選ぶ"], ["d", "外す"], ["Ctrl+w k", "本文へ戻る"]]
     : focus === "prompt" ? [["Ctrl+w k", "会話へ移る (入力欄は開いたまま)"]]
     : /^VISUAL/.test(mode) ? [["Space q", "選んだ箇所に質問"], ["Space c", "選んだ箇所に指示"], ["y", "コピー"], ["Esc", "やめる"]]
     : hereStock ? [["cc", `この${hereStock.kind}を直す`], ["dd", "取り消す"], ["Space l", "ストックの一覧"], ["Space s a", "全部送る"]]
@@ -1129,7 +1136,7 @@ function PC() {
           <div className="text-[12px] mb-1"><span className="text-ink font-bold">{input.kind === "項目" ? `${input.field}を書く` : input.id && (input.kind === "質問" || input.kind === "指示") ? `${input.kind}を直す` : KIND[input.kind]}</span>
             <span className="text-muted ml-3">{input.kind === "プロンプト" ? `送り先: ${dest}${working ? " (AI が作業中)" : ""}` : input.kind === "質問" ? `送り先: ${dest}。送るとスレッドが始まる。送るまではストックに置く` : input.kind === "指示" ? `送り先: ${dest}。ほかの指示とまとめて送る。送るまではストックに置く` : input.kind === "確定事項" ? "AI の案です。直してから指示としてストックに入れる" : ""}</span>
             {input.quote && <div className="mt-1 font-mono text-muted border-l-2 border-line pl-2">{input.quote.slice(0, 5).map((q, n) => <div key={n} className="truncate"><span className="inline-block w-6 text-right mr-2">{input.line + 1 + n}</span>{q}</div>)}{input.quote.length > 5 && <div>…ほか {input.quote.length - 5} 行</div>}</div>}</div>
-          <PromptEditor key={input.uid} label={KIND[input.kind]} initial={input.text} working={working && input.kind === "プロンプト"} stocking={["質問", "指示", "確定事項"].includes(input.kind)} plain={input.kind !== "プロンプト"}
+          <PromptEditor key={input.uid} label={KIND[input.kind]} initial={input.text} initialImages={input.images} imageSel={input.sel} working={working && input.kind === "プロンプト"} stocking={["質問", "指示", "確定事項"].includes(input.kind)} plain={input.kind !== "プロンプト"}
             onSubmit={submit} onClose={closeInput} onMode={onMode("prompt")} onView={(w) => { views.current.prompt = w; }} onFocus={() => setFocus("prompt")} act={onAct("prompt")} />
         </div>
       )}
@@ -1145,7 +1152,7 @@ function PC() {
       )}
       {confirm && <div className="border-t border-line bg-ground flex items-center text-[13px] px-3 h-7 font-bold" role="alertdialog" aria-label="確認">{confirm.t}<span className="font-mono font-normal ml-3">(y / n)</span></div>}
       <div className="h-7 shrink-0 text-[12px] flex gap-3 border-t border-line bg-ground items-center px-2 overflow-hidden whitespace-nowrap">
-        <span className={`rounded px-1.5 text-[12px] leading-5 font-mono font-bold text-ground ${/^VISUAL/.test(mode) ? "bg-accent" : { INSERT: "bg-done", REPLACE: "bg-done", TERMINAL: "bg-doing", COMMAND: "bg-ink" }[mode] || "bg-muted"}`}>{mode}</span>
+        <span className={`rounded px-1.5 text-[12px] leading-5 font-mono font-bold text-ground ${/^VISUAL/.test(mode) ? "bg-accent" : { INSERT: "bg-done", REPLACE: "bg-done", TERMINAL: "bg-doing", COMMAND: "bg-ink", IMAGE: "bg-accent" }[mode] || "bg-muted"}`}>{mode}</span>
         {offline && <span className="text-wait font-bold shrink-0" role="status">✕ オフライン (13:42 時点の表示。AI は動き続けています)</span>}
         <span className="text-ink font-medium truncate max-w-[20rem]">{WIN[focus]}</span><Hint items={pick && focus !== "prompt" && (linesFor[focus] || []).some((l) => l.num === pick) ? [[`${pick} Enter`, `「${linesFor[focus].find((l) => l.num === pick).cols[1]}」を実行する`], ["Esc", "やめる"]] : !here?.num && !confirm && focus !== "prompt" && (linesFor[focus] || []).some((l) => l.num) ? [...hints, ["番号 Enter", "操作を実行"]] : hints} />
         <span className="ml-auto text-wait shrink-0">判断待ち {count("判断待ち")}</span><span className="text-muted shrink-0">指示待ち {count("指示待ち")}</span><span className="text-muted shrink-0">作業中 {count("作業中")}</span>
@@ -1569,6 +1576,8 @@ const SKETCH_VIEWS = {
   "pc-conv--stock": pc(CONV_V, "stock", { keep: { "pc.stock": STOCK_DEMO } }),
   "pc-conv--thread": pc(CONV_V, "thread", { keep: { "pc.threads": [{ ...STOCK_DEMO[1], done: false }] } }),
   "pc-conv--input": pc(CONV_V, null, { once: { "pc.input": { uid: 1, kind: "プロンプト", text: "" } } }),
+  "pc-conv--images": pc(CONV_V, null, { once: { "pc.input": { uid: 1, kind: "プロンプト", text: "予約の確認画面でエラーが出る。2 枚目のスクショを見て直して", images: 3 } } }),
+  "pc-conv--images-select": pc(CONV_V, null, { once: { "pc.input": { uid: 1, kind: "プロンプト", text: "予約の確認画面でエラーが出る。2 枚目のスクショを見て直して", images: 3, sel: 1 } } }),
   "pc-conv--worktree": pc(CONV_V, "worktree"),
   "pc-conv--close": pc(CONV_V, "close"),
   "pc-convs": pc({ s: "convs", tab: 0 }),
