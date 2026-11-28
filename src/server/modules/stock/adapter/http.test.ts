@@ -66,7 +66,10 @@ describe("ストックとスレッド API", () => {
     ...changes,
   });
   const request = (path: string, method = "GET", body?: unknown, port = 50000) =>
-    (path.includes("/queue/") || path.includes("/permissions/") ? conversationApp : app).request(
+    (path.includes("/queue/") || path.includes("/permissions/") || path.endsWith("/messages")
+      ? conversationApp
+      : app
+    ).request(
       path,
       {
         method,
@@ -1588,6 +1591,38 @@ describe("ストックとスレッド API", () => {
       )
       .run(`q-${id}`, JSON.stringify(terminal), id);
   }
+  it.each([
+    { parentState: "開いていた元の会話", parentClosedAt: null },
+    { parentState: "閉じていた元の会話", parentClosedAt: 4321 },
+  ])(
+    "（US-021）終えたスレッドに返信するとスレッドと$parentState が開く",
+    async ({ parentClosedAt }) => {
+      thread();
+      expect((await finish("t", { action: "close" })).status).toBe(200);
+      expect(runner.runtime.store.get("t")?.closedAt).toBe(1234);
+      database.sqlite
+        .prepare("UPDATE conversations SET closed_at=? WHERE id='c'")
+        .run(parentClosedAt);
+
+      const reply = "idle 期限についての補足です";
+      const response = await request("/api/conversations/t/messages", "POST", {
+        text: reply,
+        images: [],
+        mode: "send",
+        clientMessageId: "reply-to-ended-thread",
+      });
+      expect(response.status).toBe(202);
+      expect(await response.json()).toEqual({ result: "delivered", queueItem: null });
+      expect(
+        database.sqlite.prepare("SELECT id, closed_at FROM conversations ORDER BY id").all(),
+      ).toEqual([
+        { id: "c", closed_at: null },
+        { id: "t", closed_at: null },
+      ]);
+      expect(agent.sent.map(({ text }) => text)).toEqual([reply]);
+    },
+  );
+
   it("（US-022）作業中のスレッドを閉じるとAIが止まり実行を手放し、ストックと書きかけは保つ", async () => {
     thread();
     database.sqlite

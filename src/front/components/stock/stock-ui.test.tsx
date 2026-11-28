@@ -9,6 +9,7 @@ import { Layout } from "../../buffer/Layout";
 import { BufferController } from "../../buffer/controller";
 import type { LineInfo } from "../../buffer/line";
 import { ConversationApiError, createConversationApi } from "../../lib/conversation/api";
+import type { Snapshot } from "../../lib/conversation/types";
 import { markdownPreview } from "../../lib/files/markdown-decorations";
 import type { StockApi } from "../../lib/stock/api";
 import { conversationSource, fileSource } from "../../lib/stock/quote";
@@ -25,6 +26,7 @@ async function fixture(
   lines = conversationLines,
   view = "conversation",
   initial: StockItem[] = [],
+  conversations = createConversationApi(async () => new Response(null, { status: 404 })),
 ) {
   let items = initial;
   const callbacks = new Set<(message?: ServerMessage) => void>();
@@ -74,7 +76,7 @@ async function fixture(
   const workspace = createStockWorkspace({
     api,
     controller,
-    conversations: createConversationApi(async () => new Response(null, { status: 404 })),
+    conversations,
     env: { clientId: "test", id: () => "entry", now: () => 0, schedule: () => () => {} },
     subscribe: (_topic, callback) => {
       callbacks.add(callback);
@@ -373,6 +375,64 @@ const stockSeed = (id: string, text: string, start: number, end = start): StockI
     start: { seq: 1, line: start, col: 0 },
     end: { seq: 1, line: end, col: 4 },
   },
+});
+
+it("終えたスレッドの ✓ の行で Enter を押すと、右にそのスレッドが開く", async () => {
+  const title = "期限についての質問";
+  const snapshot = {
+    conversation: {
+      id: "thread",
+      projectId: "p",
+      projectName: "予約管理",
+      kind: "thread",
+      issueId: null,
+      parentConversationId: "c",
+      title,
+      cwd: "/tmp/shop",
+      worktree: null,
+      runState: "idle",
+      stopReason: null,
+      resetsAt: null,
+      lastSeq: 0,
+      lastReadSeq: 0,
+      lastPosition: null,
+      closedAt: 100,
+    },
+    draft: null,
+    queue: [],
+    pendingAnswers: null,
+    pendingPermission: null,
+    commands: [],
+  } satisfies Snapshot;
+  const conversations = createConversationApi(async (path) => {
+    if (path === "/api/conversations/thread") return Response.json(snapshot);
+    if (typeof path === "string" && path.startsWith("/api/conversations/thread/events?"))
+      return Response.json({ events: [], lastSeq: 0, hasMore: false });
+    return new Response(null, { status: 404 });
+  });
+  const f = await fixture(
+    conversationLines,
+    "conversation",
+    [
+      {
+        ...stockSeed("question", "abcd", 0),
+        kind: "question",
+        state: "sent",
+        sentAt: 1,
+        thread: { id: "thread", title, runState: "idle", closed: true },
+      },
+    ],
+    conversations,
+  );
+  try {
+    await waitFor(() => expect(within(f.main).getByText("✓", { exact: true })).toBeVisible());
+    f.focus(0, 0);
+    await f.press("Enter");
+    const thread = await screen.findByRole("region", { name: `スレッド: ${title}` });
+    expect(await within(thread).findByText(/再開する/)).toBeVisible();
+  } finally {
+    f.close();
+  }
 });
 
 it("非引用の行で分かれても ]c と [c は同じ件を再び数えない", async () => {
