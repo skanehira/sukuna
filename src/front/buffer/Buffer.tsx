@@ -53,6 +53,7 @@ import {
   type TailPart,
 } from "./tail";
 import { bufferGutters } from "./gutters";
+import { messageMarkdown } from "./markdown";
 import { refreshMarks, type BufferMarks } from "./marks";
 import { bufferTheme, type BufferSide } from "./theme";
 
@@ -317,6 +318,7 @@ export function Buffer({
       bufferField.init((state) => initialBufferView(state, content, config.columns)),
       gutters.of(bufferGutters(config.side)),
       bufferTheme(config.side),
+      messageMarkdown,
       display.of(config.display ?? []),
       EditorView.contentAttributes.of({ tabindex: "0", "aria-label": "バッファ" }),
     ];

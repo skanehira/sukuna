@@ -705,7 +705,9 @@ export class ConversationSession {
       this.reply
         ? [
             { kind: "speaker", text: "AI" },
-            ...this.reply.split("\n").map((text): LineInfo => ({ kind: "text", text })),
+            ...this.reply
+              .split("\n")
+              .map((text): LineInfo => ({ kind: "text", text, markdown: true })),
           ]
         : [],
     );

@@ -44,6 +44,7 @@ export type LineInfo = {
   lineNumber?: number;
   designDiff?: { path: string; newNo?: number; row?: { side: "old" | "new"; line: number } };
   noQuote?: true;
+  markdown?: true;
 };
 
 export type ColumnDef = {

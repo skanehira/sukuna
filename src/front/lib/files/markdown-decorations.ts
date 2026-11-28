@@ -8,6 +8,15 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import { GFM, parser } from "@lezer/markdown";
+import {
+  estimateWidth,
+  imageLabel,
+  TableLayout,
+  tableRanges,
+  tableTheme,
+  type TextWidth,
+} from "./markdown-table";
+import { mermaidPreview, mermaidTheme } from "./markdown-mermaid";
 
 const markdown = parser.configure(GFM);
 type MarkdownTree = ReturnType<typeof markdown.parse>;
@@ -30,7 +39,7 @@ class ImageLabel extends WidgetType {
   }
   toDOM(): HTMLElement {
     const span = document.createElement("span");
-    span.textContent = `[画像: ${this.alt}]`;
+    span.textContent = imageLabel(this.alt);
     span.className = "cm-file-link";
     return span;
   }
@@ -41,7 +50,11 @@ export function markdownRanges(
   active: number,
   from: number,
   to: number,
-  { tree = markdown.parse(doc.sliceString(from, to)) }: { tree?: MarkdownTree } = {},
+  {
+    tree = markdown.parse(doc.sliceString(from, to)),
+    width = estimateWidth,
+    available = Number.POSITIVE_INFINITY,
+  }: { tree?: MarkdownTree; width?: TextWidth; available?: number } = {},
 ): Range<Decoration>[] {
   const ranges: Range<Decoration>[] = [];
   const hide = (from: number, to: number, widget?: WidgetType) => {
@@ -65,7 +78,9 @@ export function markdownRanges(
       const name = ref.name;
       const from = ref.from + offset;
       const to = ref.to + offset;
-      if (name === "Table" || name === "HTMLBlock" || name === "HTMLTag") return false;
+      if (name === "HTMLBlock" || name === "HTMLTag") return false;
+      if (name === "Table")
+        ranges.push(...tableRanges(doc, ref.node, offset, active, width, available));
       if (/^(ATX|Setext)Heading[1-6]$/.test(name)) {
         ranges.push(
           Decoration.line({ class: `cm-file-heading cm-file-heading-${name.at(-1)}` }).range(
@@ -90,11 +105,7 @@ export function markdownRanges(
           .map((marker) => ({ from: marker.from + offset, to: marker.to + offset }));
         if (opening && closing) {
           if (name === "Image") {
-            hide(
-              from,
-              to,
-              new ImageLabel(doc.sliceString(opening.to, closing.from).replace(/\s+/g, " ")),
-            );
+            hide(from, to, new ImageLabel(doc.sliceString(opening.to, closing.from)));
             return false;
           }
           hide(from, opening.to);
@@ -116,10 +127,14 @@ export function markdownRanges(
   return ranges;
 }
 
-function decorations(view: EditorView, tree: MarkdownTree): DecorationSet {
+function decorations(view: EditorView, tree: MarkdownTree, layout: TableLayout): DecorationSet {
   const { doc, selection } = view.state;
   return Decoration.set(
-    markdownRanges(doc, doc.lineAt(selection.main.head).number, 0, doc.length, { tree }),
+    markdownRanges(doc, doc.lineAt(selection.main.head).number, 0, doc.length, {
+      tree,
+      width: layout.width,
+      available: layout.available,
+    }),
     true,
   );
 }
@@ -135,26 +150,34 @@ export const markdownTheme: Extension = EditorView.theme({
     backgroundColor: "var(--color-ground)",
   },
   ".cm-file-link": { color: "var(--color-accent)" },
+  ...tableTheme,
+  ...mermaidTheme,
 });
 
 export const markdownPreview: Extension = [
   ViewPlugin.fromClass(
     class {
       tree: MarkdownTree;
+      layout: TableLayout;
       decorations: DecorationSet;
 
       constructor(view: EditorView) {
         this.tree = markdown.parse(view.state.doc.toString());
-        this.decorations = decorations(view, this.tree);
+        this.layout = new TableLayout(view, "mono");
+        this.decorations = decorations(view, this.tree, this.layout);
       }
       update(update: ViewUpdate) {
         if (update.docChanged) this.tree = markdown.parse(update.state.doc.toString());
-        if (update.docChanged || update.selectionSet) {
-          this.decorations = decorations(update.view, this.tree);
+        if (this.layout.changed(update) || update.docChanged || update.selectionSet) {
+          this.decorations = decorations(update.view, this.tree, this.layout);
         }
+      }
+      destroy() {
+        this.layout.destroy();
       }
     },
     { decorations: (plugin) => plugin.decorations },
   ),
+  mermaidPreview,
   markdownTheme,
 ];

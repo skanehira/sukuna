@@ -1229,6 +1229,11 @@ describe("会話の画面", () => {
     });
     await flush();
     expect(main().state.doc.toString()).toBe("AI\n調べています");
+    act(() => session.delta("\n**太字**\n次"));
+    await flush();
+    expect(
+      [...main().contentDOM.querySelectorAll(".cm-file-strong")].map((el) => el.textContent),
+    ).toEqual(["太字"]);
     act(() =>
       session.receiveEvent({
         seq: 1,
