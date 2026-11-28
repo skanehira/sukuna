@@ -47,9 +47,14 @@ export const STRONG = "cm-strong";
 export const MARK_GUTTER = "cm-mark-gutter";
 export const NUM_GUTTER = "cm-num-gutter";
 export const CURSOR_NUMBER = "cm-cursor-number";
+export const VISUAL_CHAR = "cm-buffer-visual-char";
+export const STEADY_CURSOR = "cm-buffer-steady-cursor";
+export const VISUAL_SELECTION = "cm-buffer-visual-selection";
+export const VISUAL_LINE_END_CURSOR = "cm-buffer-visual-line-end-cursor";
 
 function createBufferTheme(side: BufferSide): Extension {
   const metrics = sideMetrics(side);
+  const activeLine = `&.cm-focused > .cm-scroller:not(.${VISUAL_CHAR}) .cm-line.cm-activeLine`;
   return EditorView.theme({
     "&": {
       flex: "1",
@@ -253,11 +258,31 @@ function createBufferTheme(side: BufferSide): Extension {
       paddingRight: "8px",
     },
     [`.${NUM_GUTTER} .cm-gutterElement .${CURSOR_NUMBER}`]: { color: "var(--color-ink)" },
-    ".cm-line.cm-activeLine": { backgroundColor: "transparent" },
-    "&.cm-focused .cm-line.cm-activeLine": { backgroundColor: "var(--color-raised)" },
+    ".cm-activeLine": { backgroundColor: "transparent" },
+    [activeLine]: { backgroundColor: "var(--color-raised)" },
     "&:not(.cm-focused) .cm-cursorLayer": { display: "none" },
-    [`&.cm-focused .cm-line.${MENU}.cm-activeLine`]: { backgroundColor: "var(--color-sel)" },
-    [`&.cm-focused .cm-line.${BAND_YOU}.cm-activeLine`]: { backgroundColor: "var(--color-line)" },
+    [`${activeLine}.${MENU}`]: { backgroundColor: "var(--color-sel)" },
+    [`${activeLine}.${BAND_YOU}`]: { backgroundColor: "var(--color-line)" },
+    [`&.cm-focused > .cm-scroller.${STEADY_CURSOR} > .cm-vimCursorLayer`]: {
+      animationName: "none !important",
+    },
+    [`.${VISUAL_CHAR} > .cm-selectionLayer`]: { display: "none" },
+    [`.${VISUAL_SELECTION}`]: { backgroundColor: "var(--color-sel)" },
+    [`.${VISUAL_SELECTION} .cm-searchMatch`]: { backgroundColor: "transparent" },
+    [`.${VISUAL_CHAR}:has(.${VISUAL_LINE_END_CURSOR}) > .cm-vimCursorLayer .cm-cursor-primary`]: {
+      visibility: "hidden",
+    },
+    [`&.cm-focused .${VISUAL_LINE_END_CURSOR}`]: {
+      backgroundColor: "var(--color-accent)",
+      color: "var(--color-surface)",
+      borderRadius: "2px",
+    },
+    [`&.cm-focused .${VISUAL_LINE_END_CURSOR} *`]: {
+      color: "inherit !important",
+    },
+    [`&.cm-focused .${VISUAL_LINE_END_CURSOR} .${VISUAL_SELECTION}`]: {
+      backgroundColor: "transparent",
+    },
     ".cm-selectionBackground, .cm-content ::selection": {
       backgroundColor: "var(--color-sel) !important",
     },

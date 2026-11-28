@@ -8,6 +8,7 @@ import { databasePath } from "./database-path";
 
 const title = "在庫の引き当ての相談";
 const firstLine = "export const reservationTimeout = 30;";
+const syntaxLine = "const enabled = true";
 const matchLine = "export const reserve = () => reservationTimeout;";
 
 const test = base.extend<{ fileConversation: string }>({
@@ -24,7 +25,7 @@ const test = base.extend<{ fileConversation: string }>({
       mkdirSync(join(cwd, "src"));
       writeFileSync(
         join(cwd, "src/confirm.ts"),
-        [firstLine, "", "const enabled = true;", "", matchLine, ""].join("\n"),
+        [firstLine, "", syntaxLine, "", matchLine, ""].join("\n"),
       );
       db.transaction(() => {
         db.prepare(
@@ -80,6 +81,34 @@ test("会話からキーだけでツリーと検索を開き、一致したフ�
   await expect(contents).toBeFocused();
   await expect(file.getByText(firstLine, { exact: true })).toBeInViewport();
   await capture(page, "ツリーから開いたファイルの本文");
+
+  const highlightedLine = contents.locator(".cm-line").filter({ hasText: syntaxLine });
+  const boolean = highlightedLine.getByText("true", { exact: true });
+  const syntaxColor = await boolean.evaluate((element) => getComputedStyle(element).color);
+  await page.keyboard.press("3");
+  await page.keyboard.press("Shift+KeyG");
+  await page.keyboard.press("Shift+Digit4");
+  const normalCursor = file.locator(".cm-vimCursorLayer .cm-cursor-primary");
+  await expect(normalCursor).toHaveText("e");
+  await page.keyboard.press("v");
+  const visualCursor = highlightedLine.locator(".cm-buffer-visual-line-end-cursor");
+  const cursorCharacter = visualCursor.getByText("e", { exact: true });
+  await expect(visualCursor).toHaveCSS("background-color", "rgb(71, 83, 214)");
+  await expect(cursorCharacter).toHaveCSS("color", "rgb(255, 255, 255)");
+  await expect(highlightedLine.getByText("tru", { exact: true })).toHaveCSS("color", syntaxColor);
+  await capture(page, "TypeScript の構文強調がある行末で最後の文字を選択");
+
+  const treeBuffer = tree.getByRole("textbox", { name: "バッファ", exact: true });
+  await treeBuffer.focus();
+  await expect(treeBuffer).toBeFocused();
+  await expect(cursorCharacter).toHaveCSS("color", syntaxColor);
+  await expect(visualCursor).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(highlightedLine.locator(".cm-buffer-visual-selection")).toHaveCSS(
+    "background-color",
+    "rgb(221, 225, 255)",
+  );
+  await contents.focus();
+  await page.keyboard.press("Escape");
 
   await page.keyboard.press("Space");
   await page.keyboard.press("/");
