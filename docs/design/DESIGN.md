@@ -109,6 +109,7 @@ flowchart LR
 | テスト (画面とサーバーとランナー) | `CI=1 vp test --run` |
 | 型・lint・フォーマットの検査 | `vp check` |
 | ビルド | `vp build` |
+| ビルド済みサーバーの結合テスト (`scripts/test-built-server.ts`) | `vp build && vp run test:built-server` |
 | マイグレーションの生成 | `vp exec drizzle-kit generate --dialect sqlite --schema ./src/shared/db/schema.ts --out ./src/shared/db/migrations --breakpoints` |
 | E2E | `vp run e2e` |
 | 変異テスト (全体) | `vp run mutation` |
@@ -394,7 +395,7 @@ issue の状態の移り変わりは `features/issue-flow.md` の表が正本で
 - 配置先には `node_modules` が要る。SQLite のドライバと擬似端末の部品は、ビルドの成果物に同梱しない
 - 更新: リポジトリを更新して `vp install` と `vp build` を行い、画面のサーバーだけを入れ替える。ランナーを入れ替えるのは、ランナーのコードが変わったときだけにする
 - バックアップ: SQLite のデータベースを、SQLite のバックアップの機能で写す。貼り付けた画像は含めない。復元は、2 つのプロセスを止めてから行う。手順は `features/operations.md` に書く
-- CI: GitHub Actions で `vp check`、`CI=1 vp test --run`、`vp build` を実行する。変異テストは CI で流さない。PR で変えたファイルを対象にすると、1 つの PR に数時間かかることがあるためである
+- CI では `vp check`、`CI=1 vp test --run`、`vp build`、`vp run test:built-server` を順に実行する。結合テストはビルド成果物を起動し、同じポートで画面、API、WebSocket に接続できることを確かめる。変異テストは CI で流さない。PR で変えたファイルを対象にすると、1 つの PR に数時間かかることがあるためである
 - シークレット: アプリは API キーを持たない。AI の実行は、この Mac の Claude Code のログインを使う (「未解決の論点」)
 
 ## 既知の制約
