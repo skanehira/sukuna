@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { SWRConfig } from "swr";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import { projectPatchSchema, type ProjectSettings } from "../../../shared/api/project";
@@ -46,7 +46,10 @@ const readBody = (init?: RequestInit) =>
   typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
 
 const disposals: (() => void)[] = [];
-afterEach(() => disposals.splice(0).forEach((dispose) => dispose()));
+afterEach(() => {
+  cleanup();
+  disposals.splice(0).forEach((dispose) => dispose());
+});
 
 async function setup(seed = [first], url = "/settings", responseError?: string) {
   const details = new Map(seed.map((project) => [project.id, { ...project }]));
@@ -131,11 +134,13 @@ async function setup(seed = [first], url = "/settings", responseError?: string) 
   disposals.push(stopRealtime, stopCommands);
   const rendered = await loadSettingsScreen(parseRoute(url), controller, store, () => "", projects);
   if (rendered?.kind !== "ready") throw new Error("設定の画面を開けない");
-  render(
-    <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
-      <Layout controller={controller} main={rendered.content} />
-    </SWRConfig>,
-  );
+  await act(async () => {
+    render(
+      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+        <Layout controller={controller} main={rendered.content} />
+      </SWRConfig>,
+    );
+  });
   const buffer = () => screen.getByRole("textbox", { name: "バッファ" });
   const rows = () => [...buffer().querySelectorAll(".cm-line")];
   const row = (name: string) => rows().findIndex((line) => line.textContent?.includes(name));

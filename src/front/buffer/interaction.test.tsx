@@ -251,6 +251,7 @@ describe("メニューと確認", () => {
     expect(save).toHaveBeenCalledTimes(1);
     await act(async () => finish());
     key(view, "Enter");
+    await act(async () => {});
     expect(save).toHaveBeenCalledTimes(2);
   });
 });
