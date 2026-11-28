@@ -38,3 +38,6 @@ jobs:
 
       - name: Build
         run: vp build
+
+      - name: Test built server
+        run: vp run test:built-server
