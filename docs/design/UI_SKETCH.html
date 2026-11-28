@@ -474,7 +474,7 @@ function menuize(lines, sent) {
       cols: [String(n), label, l.d || (l.k === "choice" ? (done ? (sent ? "✓ 送った回答" : "✓ 選んだ (まだ送っていない)") : "この選択肢を選ぶ") : ACT_DESC[name] || (l.go ? "開く" : ""))] };
   });
 }
-function decorate(lines, doc) {
+function decorate(lines, doc, demo) {
   const b = new RangeSetBuilder();
   let mine = false;
   lines.forEach((l, n) => {
@@ -483,8 +483,10 @@ function decorate(lines, doc) {
     if (l.k === "you" || l.k === "ai") mine = l.k; else if (END.has(l.k)) mine = false;
     const body = (x) => x && !END.has(x.k) && x.k !== "you" && x.k !== "ai" && x.k !== "act";
     const own = mine && body(l) ? ` app-${mine}` + (!body(lines[n - 1]) ? " app-turn-a" : "") + (!body(lines[n + 1]) ? " app-turn-z" : "") : "";
-    const attrs = { ...(padTop(lines, n) || padBottom(lines, n) ? { style: `padding-top:${PAD[l.k] || 0}px` + gapStyle(lines, n) } : {}), ...(l.k === "shot" ? { "data-sketch-change": "153:ツールの結果の画像" } : {}) };
+    const attrs = { ...(padTop(lines, n) || padBottom(lines, n) ? { style: `padding-top:${PAD[l.k] || 0}px` + gapStyle(lines, n) } : {}), ...(l.k === "shot" ? { "data-sketch-change": "153:ツールの結果の画像" } : {}),
+      ...(demo === "visual" && l.id === "d1" ? { "data-sketch-change": "165:文字単位の選択" } : {}) };
     b.add(line.from, line.from, Decoration.line({ class: (LINE[l.k] || "") + (l.k === "act" ? (l.first ? " app-act-a" : "") + (l.last ? " app-act-z" : "") : "") + own, ...(Object.keys(attrs).length ? { attributes: attrs } : {}) }));
+    if (demo === "normal" && l.id === "d1") b.add(line.from + 4, line.from + 5, Decoration.mark({ attributes: { "data-sketch-change": "165:カーソル" } }));
     if ((l.k === "you" || l.k === "ai") && line.length) b.add(line.from, line.to, Decoration.mark({ class: "inline-block rounded px-1.5 leading-4 text-[12px] font-bold " + (l.k === "you" ? "bg-accent text-surface" : "bg-raised text-ink") }));
     if (l.k === "bar") { let p = line.from; l.parts.forEach((w, m) => { if (w) b.add(p, p + w, Decoration.mark({ class: BAR[m] })); p += w; }); }
     else if (l.k === "flow") { let p = line.from; l.parts.forEach(([st, t]) => { b.add(p, p + t.length + 2, Decoration.mark({ class: st === "doing" ? "text-ink font-bold" : st === "done" ? "text-ink" : "" })); b.add(p, p + 1, Decoration.mark({ class: ST[st][1] })); p += t.length + 2 + 5; }); }
@@ -518,7 +520,7 @@ const THEME = (side) => EditorView.theme({
   /* 操作の一覧。枠で囲んだメニューの行として描く。番号 + Enter か、行で Enter で実行する */
   ".cm-line.app-act": { marginLeft: "8px", marginRight: "16px", padding: "0 8px", borderLeft: "1px solid var(--line)", borderRight: "1px solid var(--line)", borderTop: "1px solid var(--line)", borderRadius: "0", backgroundColor: "var(--surface)", overflow: "hidden", textOverflow: "ellipsis" },
   ".cm-line.app-act-a": { borderTopLeftRadius: "6px", borderTopRightRadius: "6px" }, ".cm-line.app-act-z": { borderBottom: "1px solid var(--line)", borderBottomLeftRadius: "6px", borderBottomRightRadius: "6px" },
-  "&.cm-focused .cm-activeLine.app-act": { backgroundColor: "var(--sel)" },
+  ":not(.app-buffer-character-visual) > &.cm-focused .cm-activeLine.app-act": { backgroundColor: "var(--sel)" },
   ".app-cap": { border: "1px solid var(--line)", borderRadius: "4px", lineHeight: "16px", backgroundColor: "var(--surface)" }, ".app-cap-main": { borderColor: "var(--accent)", color: "var(--accent)" },
   ".cm-line.app-colhead": { borderBottom: "1px solid var(--line)", borderRadius: "0" },
   /* 項目と値の行が折り返したら、2 行目も値の位置から始める */
@@ -532,12 +534,15 @@ const THEME = (side) => EditorView.theme({
   ".cm-gutters": { backgroundColor: "transparent", border: "none", color: "var(--muted)", fontFamily: MONO, fontSize: "12px" },
   ".app-num .cm-gutterElement": { width: "2.5rem", textAlign: "right", paddingRight: "8px" }, ".app-num .cur": { color: "var(--ink)" },
   ".app-sign .cm-gutterElement": { width: SIGN_W[side] + "px", textAlign: "center", color: "var(--accent)", fontWeight: "700", fontSize: side === "list" ? "8px" : "12px" },
-  ".app-buffer-demo & .cm-fat-cursor": { display: "none !important" },
-  ".cm-activeLine": { backgroundColor: "transparent" }, "&.cm-focused .cm-activeLine": { backgroundColor: "var(--raised)" },
+  ".cm-activeLine": { backgroundColor: "transparent" }, ":not(.app-buffer-character-visual) > &.cm-focused .cm-activeLine": { backgroundColor: "var(--raised)" },
   ".cm-activeLine.bg-add": { backgroundColor: "var(--add)" }, ".cm-activeLine.bg-del": { backgroundColor: "var(--del)" },
-  "&.cm-focused .cm-line.app-you.cm-activeLine": { backgroundColor: "var(--line)" },
-  "&.cm-focused .cm-activeLine.bg-add": { backgroundColor: "var(--add)", boxShadow: "inset 3px 0 0 var(--accent)" }, "&.cm-focused .cm-activeLine.bg-del": { backgroundColor: "var(--del)", boxShadow: "inset 3px 0 0 var(--accent)" },
+  ":not(.app-buffer-character-visual) > &.cm-focused .cm-line.app-you.cm-activeLine": { backgroundColor: "var(--line)" },
+  ":not(.app-buffer-character-visual) > &.cm-focused .cm-activeLine.bg-add": { backgroundColor: "var(--add)", boxShadow: "inset 3px 0 0 var(--accent)" },
+  ":not(.app-buffer-character-visual) > &.cm-focused .cm-activeLine.bg-del": { backgroundColor: "var(--del)", boxShadow: "inset 3px 0 0 var(--accent)" },
   ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": { backgroundColor: "var(--sel) !important" },
+  ".app-buffer-character-visual > &.cm-focused .cm-content .cm-line::selection, .app-buffer-character-visual > &.cm-focused .cm-content .cm-line ::selection": { backgroundColor: "var(--sel) !important" },
+  ".app-buffer-character-visual > &.cm-focused .cm-selectionLayer": { visibility: "hidden" },
+  ".app-buffer-still-cursor > &.cm-focused .cm-vimCursorLayer": { animationName: "none !important" },
   ".cm-fat-cursor": { background: "var(--accent) !important", color: "var(--surface) !important", borderRadius: "2px" },
   "&:not(.cm-focused) .cm-fat-cursor": { background: "none !important", outline: "none !important", color: "inherit !important" },
   ".cm-panels": { backgroundColor: "var(--ground)", color: "var(--ink)", borderTop: "1px solid var(--line)" },
@@ -553,6 +558,7 @@ const modeName = (e) => e.mode === "visual" ? { linewise: "VISUAL LINE", blockwi
 function Buffer({ lines, marks, side, crash, posKey, startLine, demo, act, onKeys, onMode, onView, onFocus, onLine }) {
   if (crash) throw new Error("demo");
   const host = useRef(null), view = useRef(null), latest = useRef({}), lastKey = useRef("");
+  const [bufferMode, setBufferMode] = useState("NORMAL");
   latest.current = { act, onKeys, onMode, onFocus, onLine };
   const sig = JSON.stringify([lines.map((l) => [l.k, textOf(l)]), marks]);
   const make = (head) => {
@@ -562,7 +568,7 @@ function Buffer({ lines, marks, side, crash, posKey, startLine, demo, act, onKey
       extensions: [vim(), ...(NUMS.has(side) ? [numGutter(lines)] : []), signGutter(lines, marks),
         drawSelection(), highlightActiveLine(), EditorView.lineWrapping, EditorState.allowMultipleSelections.of(true),
         EditorState.readOnly.of(true), EditorView.editable.of(false), EditorState.changeFilter.of(() => false),
-        EditorView.contentAttributes.of({ tabindex: "0", "aria-label": "バッファ" }), EditorView.decorations.of(decorate(lines, doc)), THEME(side),
+        EditorView.contentAttributes.of({ tabindex: "0", "aria-label": "バッファ" }), EditorView.decorations.of(decorate(lines, doc, demo)), THEME(side),
         EditorView.domEventHandlers({ focus: () => { latest.current.onFocus?.(); }, dblclick: () => { latest.current.act?.("enter"); } }),
         /* 読み取り専用なので入力モードには入れない。i と a は入力欄を開き、dd と cc はストックの取り消しと編集に使う。Vim より先にキーを見る */
         Prec.highest(EditorView.domEventHandlers({ keydown: (e, w) => {
@@ -590,7 +596,11 @@ function Buffer({ lines, marks, side, crash, posKey, startLine, demo, act, onKey
         EditorView.updateListener.of((u) => { if (u.selectionSet) { POS[posKey] = u.state.selection.main.head; latest.current.onLine?.(u.state.doc.lineAt(u.state.selection.main.head).number - 1); } })],
     });
   };
-  const bind = () => getCM(view.current)?.on("vim-mode-change", (e) => { if (e.mode !== "insert" && e.mode !== "replace") latest.current.onMode?.(modeName(e)); });
+  const bind = () => getCM(view.current)?.on("vim-mode-change", (e) => {
+    const mode = modeName(e);
+    setBufferMode(mode);
+    if (e.mode !== "insert" && e.mode !== "replace") latest.current.onMode?.(mode);
+  });
   useEffect(() => {
     const first = EditorState.create({ doc: lines.map(textOf).join("\n") }).doc;
     /* 開いたときのカーソルは、見出しではなく最初の中身の行に置く */
@@ -615,9 +625,11 @@ function Buffer({ lines, marks, side, crash, posKey, startLine, demo, act, onKey
     const n = Math.min(l.number, lines.length), col = view.current.state.selection.main.head - l.from;
     const st = make(0), line = st.doc.line(n);
     view.current.setState(st); view.current.dispatch({ selection: { anchor: Math.min(line.from + col, line.to) } });
+    setBufferMode("NORMAL");
     HANDLERS.set(view.current, (name, args) => latest.current.act?.(name, args)); bind();
   }, [sig]);
-  return <div ref={host} className={`flex-1 min-h-0 flex flex-col [&>.cm-editor]:flex-1 ${demo ? "app-buffer-demo" : ""}`} />;
+  const modeClass = { NORMAL: "app-buffer-still-cursor", VISUAL: "app-buffer-still-cursor app-buffer-character-visual" }[bufferMode] || "";
+  return <div ref={host} className={`flex-1 min-h-0 flex flex-col [&>.cm-editor]:flex-1 ${modeClass}`} />;
 }
 const SKILLS = ["/dev-spec", "/dev-impl", "/workflow-review", "/workflow-commit"];
 /* プロジェクトの登録の欄のパスの候補。Mac Studio の上のディレクトリの見本 (名前, Git のリポジトリか) */
