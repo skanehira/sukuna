@@ -60,12 +60,14 @@ type LineInfo = {
   strong?: boolean; // 未読の題名など
   seq?: number; // 会話の行の元になったイベントの seq
   seqLine?: number; // 引用の位置に使える行だけ。そのイベントを並べた行のうち何行目か (0 から)
+  markdown?: true; // Markdown として整えて出す行 (AI の発言の本文)
 };
 ```
 
 - 会話の行は、元になったイベントの `seq` を持つ。読んでいた位置 (`features/recap.md`) は、カーソルの行の `seq` で決める
 - `seqLine` は、引用の位置に使える行 (発言・ツールの実行・差分の本文) だけが持つ。畳んだ差分は、開いた状態で数える。引用の形は `features/stock-thread.md`「引用の持ち方」が正本である
 - どの行にどの `seq` と `seqLine` を付けるかは `features/conversation.md`「会話に並べる行」が決める
+- `markdown` の付いた行は、同じ `seq` で続く行を 1 つの Markdown として読み、`features/files.md`「ファイルの表示」の整えた表示と同じ装飾を当てる。文字列は変えないので、カーソルと選んだ範囲の位置はずれない。どの行に付けるかは `features/conversation.md`「会話に並べる行」が決める
 
 | 種類 | 用途 | 見た目 | カーソル |
 | --- | --- | --- | --- |
@@ -611,6 +613,7 @@ Space を押すと、ステータス行の上に、続けて押せるキーの�
 | 行の種類と行の情報、桁の定義 | UI (土台) | `src/front/buffer/line.ts` | 足す |
 | 行の情報と装飾を持つ `StateField`、追記用の `Annotation`、`changeFilter` | UI (土台) | `src/front/buffer/state.ts` | 足す |
 | 装飾の作り直し (帯、桁、メニューの枠、隙間) | UI (土台) | `src/front/buffer/decorate.ts` | 足す |
+| `markdown` の付いた行の装飾と Mermaid の図 (装飾の作りは `src/front/lib/files/markdown-decorations.ts`・`markdown-table.ts`・`markdown-mermaid.ts` と共有する) | UI (土台) | `src/front/buffer/markdown.ts` | 作る |
 | カーソルを置けない行 | UI (土台) | `src/front/buffer/no-cursor.ts` | 足す |
 | 印の桁と行番号 | UI (土台) | `src/front/buffer/gutters.ts` | 足す |
 | メニューの行の番号付けと実行 | UI (土台) | `src/front/buffer/menu.ts` | 足す |

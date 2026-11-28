@@ -71,6 +71,7 @@ flowchart LR
 | ツール | Vite+ (`vp`)、pnpm、lefthook | テンプレートと同じ。開発・テスト・lint・ビルドを `vp` に揃える。1 つのプロジェクトで SPA とサーバーを開発・テスト・ビルドできた (PoC `vite-plus-node-stack`) |
 | 画面 | React 19、React Router、SWR、Tailwind CSS v4 | テンプレートと同じ |
 | 画面のバッファ | CodeMirror 6、`@replit/codemirror-vim` | 1 万行に追記しながら操作しても、描画まで最大 21 ミリ秒だった (PoC `codemirror-vim-buffer`) |
+| 図 | Mermaid (`mermaid`) | 会話と Markdown のファイルの `mermaid` のコードブロックを図にする。図を描くときだけ読み込むので、最初に読む画面のファイルは大きくならない (`features/files.md`「Mermaid の図」) |
 | サーバー | Node.js、Hono (`@hono/node-server`) | テンプレートの Hono を Node.js で動かす。Mac Studio に常駐させるため Cloudflare には依存しない |
 | AI の実行 | Claude Agent SDK (TypeScript) | 会話、skills、選択式の質問、再開、停止、分岐がすべて成立した (PoC `agent-sdk-conversation`、`agent-sdk-resume`、`agent-sdk-interrupt`、`agent-sdk-thread`) |
 | データ | SQLite (`better-sqlite3`)、Drizzle ORM | 1 台で動かすので別のデータベースのサーバーが要らない。Drizzle ORM の安定版には Node.js 組み込みの SQLite のドライバが無い (PoC `vite-plus-node-stack`) |
