@@ -153,6 +153,8 @@ const WORKING_HEAD = [
   ["add", "  41 + const text = decode(buffer, detectEncoding(buffer))"],
 ];
 const WORKING = mk([...WORKING_HEAD, ["tool", "● Bash(npm test -- csv)  実行中"]]);
+/* 開発者が始めた会話で、指示を送った直後の状態 (pc-conv--working) */
+const WORKING_CHAT = mk([["you", "あなた"], ["text", "決済 API のエラーが続く原因を調べて。"]]);
 /* ツールの結果が届き、AI が次を考えている状態 (pc-issue-working--thinking) */
 const WORKING_THINKING = mk([...WORKING_HEAD, ["tool", "● Bash(npm test -- csv)  成功 12 件"]]);
 const LIST = [
@@ -664,15 +666,15 @@ function PromptEditor({ label, initial, initialImages, imageSel, working, stocki
 /* ウィンドウの見出し。sub には、列の見出しや、issue の中の表示の並びを置く (バッファの外なので通常の HTML) */
 /* 作業中の会話のウィンドウの下端に出す作業中の表示 (work-monitor.md「作業中の会話の表示」)。
    印は · ✢ ✳ ✶ ✻ ✽ を往復し、1 つの形を 120 ミリ秒ずつ出す。動きを減らす設定では ✻ で止める */
-const SPIN = ["·", "✢", "✳", "✶", "✻", "✽", "✶", "✳", "✢"];
-function WorkingStrip({ thinking }) {
+const SPIN = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"];
+function WorkingStrip({ thinking, chat }) {
   const still = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const [n, setN] = useState(4);
+  const [n, setN] = useState(0);
   useEffect(() => { if (still) return; const t = setInterval(() => setN((x) => (x + 1) % SPIN.length), 120); return () => clearInterval(t); }, [still]);
   return (
-    <div data-sketch-change={thinking ? "158:考え中の表示" : "158:動く印・動き・秒の経過"} className="shrink-0 border-t border-line px-4 py-2 text-[13px] text-doing" aria-label="作業中の状況">
+    <div data-sketch-change={chat ? "158:考え中と秒の経過だけ" : thinking ? "158:考え中の表示" : "158:動く印と秒の経過"} className="shrink-0 border-t border-line px-4 py-2 text-[13px] text-doing" aria-label="作業中の状況">
       <span aria-hidden="true" className="inline-block w-[1em] text-center">{still ? "✻" : SPIN[n]}</span>{" "}
-      {thinking ? "考え中… 2分31秒" : "ツールを実行中… 2分5秒"} / 実装 11分 / 最後にしたこと: Bash(npm test -- csv)
+      {chat ? "考え中… 8秒" : <>{thinking ? "考え中… 2分31秒" : "ツールを実行中… 2分5秒"} / 実装 11分 / 最後にしたこと: Bash(npm test -- csv)</>}
     </div>
   );
 }
@@ -719,6 +721,7 @@ function PC() {
   const [threads, setThreads] = useKept("pc.threads", []);
   const [queue, setQueue] = useKept("pc.queue", []);
   const [thinking] = useState(() => once("pc.thinking") ?? false);
+  const [chatWorking] = useState(() => once("pc.chatWorking") ?? false);
   const [seen, setSeen] = useState(() => new Set(load("pc.seen", [])));
   /* 「ここから未読」の区切りは、未読のある会話を開いているあいだだけ出す。別の画面へ移ると消え、開き直しても出ない */
   const [fresh, setFresh] = useKept("pc.fresh", null);
@@ -774,7 +777,7 @@ function PC() {
 
   const key = `${v.s}-${v.project ?? ""}-${v.issue ?? ""}-${v.tab ?? 0}-${v.file ?? ""}-${v.conv ?? ""}-${v.agent ?? ""}`;
   const project = v.project || "shop-api";
-  const chat = isChat(v), working = isWorking(v);
+  const chat = isChat(v), working = isWorking(v) || (chatWorking && v.s === "conv");
   /* 見本の会話 (目次や判断することを持つ) を開いているか */
   const stopped = v.s === "issue" && (v.tab || 0) === 0 && issueOf(v)?.why === "利用枠切れで停止";
   const rich = chat && !working && !stopped && (v.s === "issue" || (v.s === "conv" && v.project === "shop-api" && !v.conv));
@@ -798,7 +801,7 @@ function PC() {
   let mainLines = v.s === "home" ? listLines(seen, hidden)
     : v.s === "terminal" ? term.map((t) => ({ k: "code", t }))
     : stopped ? STOPPED
-    : working ? [...(thinking ? WORKING_THINKING : WORKING), ...queue.map((q) => ({ k: "queued", t: `届く前の指示: ${q.text}`, queued: q.id }))]
+    : working ? [...(chatWorking && v.s === "conv" ? WORKING_CHAT : thinking ? WORKING_THINKING : WORKING), ...queue.map((q) => ({ k: "queued", t: `届く前の指示: ${q.text}`, queued: q.id }))]
     : rich ? [...CONV.flatMap((l) => (l.id === "q2" ? [l, ...(answers.q2 ? [{ k: "text", t: `→ あなたの回答${ansSent ? "" : " (まだ送っていない)"}: ${answers.q2}` }] : [])]
         : l.act === "answer" ? (ansSent ? [] : [{ ...l, t: answers.q2 ? "Q2 の回答を書き直す" : l.t }])
         : [l.choice ? { ...l, picked: answers.q1 === l.choice } : l])),
@@ -1164,7 +1167,7 @@ function PC() {
               ? <pre className="flex-1 overflow-auto px-3 py-1 text-[13px] leading-5 font-mono">{term.join("\n")}█</pre>
               : <Buffer key={key} side={side} posKey={key} lines={mainMenu} marks={v.s === "home" ? listMarks(mainLines) : marks} crash={crash} startLine={hasUnread(v) ? at("unread") : working ? WORKING.length - 1 : 0} {...bufProps("main")} />}
           </Boundary>
-          {working && <WorkingStrip thinking={thinking} />}
+          {working && <WorkingStrip thinking={thinking} chat={v.s === "conv"} />}
         </Frame>
         {right && (
           <Frame edge title={right === "stock" || right === "thread" ? `${RIGHT[right]}: ${dest || "送り先なし"}` : RIGHT[right]} focused={focus === "right"} sub={right === "worktree" ? <ColHead kind="wt" side="right" /> : null} right={<span className="flex items-center shrink-0 text-[12px] font-normal">{(rstack.length > 0 || right === "task") && <button tabIndex={-1} onClick={backRight} className="rounded px-1.5 py-0.5 hover:bg-raised"><span className="font-mono text-ink">Ctrl+h</span><span className="text-muted ml-1">戻る</span></button>}<button tabIndex={-1} onClick={closeRight} className="rounded px-1.5 py-0.5 hover:bg-raised"><span className="font-mono text-ink">q</span><span className="text-muted ml-1">閉じる</span></button></span>}>
@@ -1613,6 +1616,7 @@ const SKETCH_VIEWS = {
   "pc-home--whichkey": pc({ s: "home" }, null, { once: { "pc.leader": " " } }),
   "pc-home--switch": pc({ s: "home" }, "switch"),
   "pc-conv--recent": pc(CONV_V, "recent"),
+  "pc-conv--working": pc({ ...CONV_V, conv: 1 }, null, { once: { "pc.chatWorking": true } }),
   "pc-conv--answers": pc(CONV_V, null, { keep: { "pc.answers": { q1: "A", q2: "変えられるようにして。既定は 30 分" } } }),
   "pc-conv--toc": pc(CONV_V, "toc"),
   "pc-conv--decisions": pc(CONV_V, "decisions"),
