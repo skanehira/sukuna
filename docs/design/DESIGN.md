@@ -461,6 +461,7 @@ issue の状態の移り変わりは `features/issue-flow.md` の表が正本で
 - Tailscale のローカル API のポートとトークンは、Tailscale の再起動で変わる。起動時に固定せず、認証か接続に失敗したら読み直す (PoC `tailscale-identity`)
 - 目次などの更新の実行には、題名を必ず渡す。渡さないと、題名を作る別の呼び出しが毎回走る (PoC `summary-ai-cost`)
 - Agent SDK の実行は、端末の Claude Code と同じ設定では、1 回の呼び出しごとに約 4 万 7 千トークンの固定の入力が乗る
+- Agent SDK の `stream_event` のうち、`message_delta` の `delta` は `type` を持たず、出力トークンの数は `delta` ではなく `event.usage.output_tokens` にある。`delta.type` を必須にした検査では、この見本ごと捨ててしまう。写し方は `features/runtime.md`「Agent SDK のメッセージからの写し方」に従い、`event` と `delta` は知らない項目を許す形で読む (型は Agent SDK 0.3.332 が使う `@anthropic-ai/sdk` 1.14.0 の `BetaRawMessageDeltaEvent`)
 
 ## 未解決の論点
 
