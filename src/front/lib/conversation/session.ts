@@ -72,11 +72,14 @@ const undoConflict = "戻した指示を書きかけの中で確認できませ�
 export class ConversationSession {
   recap?: RecapSession;
   monitor?: WorkMonitor;
+  private activeMonitor?: WorkMonitor;
   unreadSeq: number | null = null;
   private tailLines: Record<string, LineInfo[]> = {};
   private state: { data: Snapshot | null; version: number };
   private listeners = new Set<() => void>();
   private handle: BufferHandle | null = null;
+  private head: LineInfo[] = [];
+  private footer: LineInfo[] = [];
   private blocks: Block[] = [];
   private events: Event[] = [];
   private contiguousSeq = 0;
@@ -146,7 +149,7 @@ export class ConversationSession {
     }
     this.refreshTail();
     this.recap?.loaded(this.state.data!, this.events);
-    this.monitor?.loaded();
+    (this.activeMonitor ?? this.monitor)?.loaded();
     this.emit();
     return this.id;
   }
@@ -177,7 +180,7 @@ export class ConversationSession {
       this.draft = new DraftSync(this.env.clientId, data.draft);
     this.adopt(data, preserveDraft || this.draft !== draft, version);
   }
-  connect(): () => void {
+  connect(monitor = this.monitor): () => void {
     this.connected = true;
     let connecting = true;
     const conversation = this.state.data?.conversation;
@@ -193,7 +196,8 @@ export class ConversationSession {
           this.state.data ? this.prompt() : undefined,
         );
     if (main) this.controller.options.prompt = () => this.prompt();
-    const disconnectMonitor = main ? (this.monitor?.connect() ?? this.registerStop()) : undefined;
+    this.activeMonitor = monitor;
+    const disconnectMonitor = main ? (monitor?.connect() ?? this.registerStop()) : undefined;
     if (!main) this.bindAction(conversationActions.stop, () => this.stopAgent());
     this.bindAction(conversationActions.resume, async () => {
       await this.api.resume(this.id);
@@ -243,6 +247,7 @@ export class ConversationSession {
       this.questionRemovers.splice(0).forEach((remove) => remove());
       disconnectRecap?.();
       disconnectMonitor?.();
+      if (this.activeMonitor === monitor) this.activeMonitor = undefined;
       this.cancelSave?.();
       if (
         this.ownsPrompt() ||
@@ -332,6 +337,7 @@ export class ConversationSession {
   }
   bodyLines(): LineInfo[] {
     return [
+      ...this.head,
       ...this.blocks.flatMap((block) => this.withUnread(block.lines)),
       ...["reply", "question", "queue"].flatMap((part) => this.tailLines[part] ?? []),
     ];
@@ -340,20 +346,28 @@ export class ConversationSession {
     this.tailLines[part] = part === "question" ? this.withUnread(lines) : lines;
     this.handle?.setTail(part, this.tailLines[part]);
   }
+  hasQuestion = (): boolean => this.question !== null;
+  surround(head: LineInfo[], footer: LineInfo[]): void {
+    if (head !== this.head) this.handle?.replace(0, this.head.length, head);
+    if (footer !== this.footer) this.handle?.setTail("issue-footer", footer);
+    this.head = head;
+    this.footer = footer;
+  }
   bind = (handle: BufferHandle, openAtTail = false): void => {
     this.handle = handle;
-    handle.replaceAll(
+    const body: LineInfo[] =
       this.blocks.length || this.question || this.state.data?.queue.length
         ? this.blocks.flatMap((block) => this.withUnread(block.lines))
-        : [{ kind: "note", text: "i で指示を書いて送ると、AI が作業を始めます。" }],
-    );
+        : [{ kind: "note", text: "i で指示を書いて送ると、AI が作業を始めます。" }];
+    handle.replaceAll([...this.head, ...body]);
+    if (this.footer.length > 0) handle.setTail("issue-footer", this.footer);
     this.refreshTail();
     if (this.recap) this.recap.bound(handle);
     else if (openAtTail && this.state.data?.conversation.runState === "working")
       handle.jumpTo(Math.max(0, this.bodyLines().length - 1), { remember: false });
   };
   private append(event: Event, lines: LineInfo[], clearReply = false): void {
-    if (this.blocks.length === 0) this.handle?.replaceAll([]);
+    if (this.blocks.length === 0) this.handle?.replaceAll(this.head);
     this.blocks.push({ event, lines });
     this.handle?.append(this.withUnread(lines), clearReply ? ["reply"] : []);
   }
@@ -361,7 +375,7 @@ export class ConversationSession {
     const index = this.blocks.indexOf(block);
     const from = this.blocks
       .slice(0, index)
-      .reduce((sum, block) => sum + this.withUnread(block.lines).length, 0);
+      .reduce((sum, block) => sum + this.withUnread(block.lines).length, this.head.length);
     this.handle?.replace(from, from + this.withUnread(block.lines).length, this.withUnread(lines));
     block.lines = lines;
   }
@@ -446,7 +460,7 @@ export class ConversationSession {
     this.append(question, this.questionLines(question, answers, true));
   }
   delta(text: string): void {
-    if (!this.blocks.length) this.handle?.replaceAll([]);
+    if (!this.blocks.length) this.handle?.replaceAll(this.head);
     this.reply += text;
     this.refreshTail();
     if (this.view === "stock-thread") this.emit();
@@ -1235,7 +1249,7 @@ export class ConversationSession {
   }
   receive(message: ServerMessage): void {
     if (message.topic !== `conversation:${this.id}`) return;
-    this.monitor?.receive(message);
+    (this.activeMonitor ?? this.monitor)?.receive(message);
     if (
       message.type === "changed" &&
       message.payload.parts?.length === 1 &&

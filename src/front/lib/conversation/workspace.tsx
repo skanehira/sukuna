@@ -1,7 +1,7 @@
 import { conversationActionHelp, conversationCommands } from "./keymap";
 import type { ReadyScreen, ScreenLoader } from "../../App";
 import type { ServerMessage } from "../../../shared/ws";
-import type { RightView } from "../../buffer/right-window";
+import { isTimelineView, type RightView } from "../../buffer/right-window";
 import { listDeleteAction } from "../../components/lifecycle/ConversationList";
 import type { LifecycleFeed } from "../../components/lifecycle/use-lifecycle";
 import { createLifecycleWorkspace, type LifecycleOptions } from "../lifecycle/workspace";
@@ -29,13 +29,7 @@ import type { StockApi } from "../stock/api";
 import { conversationSource } from "../stock/quote";
 import { createStockWorkspace } from "../stock/workspace";
 import type { InboxStore } from "../inbox-store";
-import {
-  isTimelineView,
-  MonitorPane,
-  WorkingActivity,
-  WorkMonitor,
-  type ProgressApi,
-} from "./work-monitor";
+import { MonitorPane, WorkingActivity, WorkMonitor, type ProgressApi } from "./work-monitor";
 import { timelineActions } from "../work-actions";
 
 export function createConversationWorkspace(
@@ -75,6 +69,8 @@ export function createConversationWorkspace(
   let connected = true;
   let visible = true;
   let currentSession: ConversationSession | null = null;
+  let currentIssueMonitor: WorkMonitor | undefined;
+  const issueMonitors = new WeakMap<ConversationSession, WorkMonitor>();
   let resolvedFile: { opening: number; id: string; available: boolean } | undefined;
   const releaseUnavailableFileFocus = () => {
     if (resolvedFile?.opening !== controller.screenOpening()) return;
@@ -125,8 +121,7 @@ export function createConversationWorkspace(
         changes.get(message.topic)?.forEach((receive) => receive(message));
     },
   });
-  const projectForConversation = (id: string) =>
-    sessions.get(id)?.snapshot().data?.conversation.projectId;
+  const projectForConversation = (id: string) => storedConversation(id)?.projectId;
   const subscribeChanges: LifecycleFeed = (topic, receive, from) => {
     const receivers = changes.get(topic) ?? new Set();
     receivers.add(receive);
@@ -249,15 +244,58 @@ export function createConversationWorkspace(
     const unshow = showConversation(session.id);
     return () => {
       active.delete(session);
-      const next = parseRoute(controller.options.url ?? "/");
-      if (next.kind !== "conversation" || next.id !== session.id || next.view)
-        session.recap?.leave();
       unsubscribe();
       unshow();
     };
   };
+  const subscribeConversation = (session: ConversationSession) => {
+    const stop = subscribe(session);
+    return () => {
+      stop();
+      const next = parseRoute(controller.options.url ?? "/");
+      if (next.kind !== "conversation" || next.id !== session.id || next.view)
+        session.recap?.leave();
+    };
+  };
+  const loadConversation = async (id: string): Promise<ConversationSession> => {
+    const session = sessionFor(id);
+    session.recap?.visibility(visible);
+    await session.load();
+    return session;
+  };
+  const issueMonitor = (session: ConversationSession, id: string) => {
+    if (!progress) return undefined;
+    const found = issueMonitors.get(session);
+    if (found?.target.id === id) return found;
+    const monitor = new WorkMonitor(
+      session,
+      { ...progress, now: () => env.now(), schedule: (fn, ms) => env.schedule(fn, ms) },
+      { kind: "issue", id },
+    );
+    issueMonitors.set(session, monitor);
+    return monitor;
+  };
+  const subscribeIssueConversation = (session: ConversationSession, monitor?: WorkMonitor) => {
+    currentSession = session;
+    currentIssueMonitor = monitor;
+    stock?.leave();
+    const stop = subscribe(session);
+    controller.update({});
+    return () => {
+      stop();
+      if (monitor && currentIssueMonitor === monitor) {
+        currentIssueMonitor = undefined;
+        controller.update({});
+      }
+      queueMicrotask(() => {
+        if (active.has(session)) return;
+        session.recap?.leave();
+        if (currentSession === session) currentSession = null;
+      });
+    };
+  };
   const subscribeTimeline = (monitor: WorkMonitor) => {
-    const id = monitor.target.id;
+    const id = monitor.conversationId;
     const session = sessions.get(id);
     const disconnect = monitor.connect();
     if (session) {
@@ -318,7 +356,7 @@ export function createConversationWorkspace(
         <ConversationPage
           key={session.id}
           session={session}
-          subscribe={subscribe}
+          subscribe={subscribeConversation}
           openAtTail={openAtTail}
           recordSeq={Number.isSafeInteger(seq) && seq > 0 ? seq : undefined}
           recordLine={nonnegative("quoteLine")}
@@ -409,10 +447,8 @@ export function createConversationWorkspace(
         controller.update({});
         return files.render(route, root, opening, fileResolved(initial));
       }
-      const session = sessionFor(route.id);
-      currentSession = session;
-      session.recap?.visibility(visible);
-      await session.load();
+      const session = await loadConversation(route.id);
+      if (onScreen()) currentSession = session;
       const parent = session.snapshot().data?.conversation.parentConversationId;
       if (files && parent && !storedConversation(parent)) await getConversation(parent);
       if (files) controller.update({});
@@ -444,6 +480,9 @@ export function createConversationWorkspace(
   };
   return {
     loadScreen,
+    loadConversation,
+    issueMonitor,
+    subscribeIssueConversation,
     connection,
     renderRight: (view: RightView) => {
       const stockPanel = stock?.right(view);
@@ -451,6 +490,17 @@ export function createConversationWorkspace(
       if (view.view === "file-tree") return files?.tree(view.target) ?? null;
       if (isTimelineView(view.view)) {
         const route = parseRoute(controller.options.url ?? "/");
+        if (route.kind === "issue") {
+          const monitor = currentIssueMonitor;
+          return monitor && route.id === view.target && monitor.target.id === view.target ? (
+            <MonitorPane
+              key={monitor.conversationId}
+              monitor={monitor}
+              view={view.view}
+              subscribe={subscribeTimeline}
+            />
+          ) : null;
+        }
         if (
           route.kind !== "conversation" ||
           route.id !== view.target ||
@@ -497,6 +547,12 @@ export function createConversationWorkspace(
             run: () => {
               const route = parseRoute(controller.options.url ?? "/");
               if (
+                currentIssueMonitor &&
+                route.kind === "issue" &&
+                route.id === currentIssueMonitor.target.id
+              )
+                currentIssueMonitor.open();
+              else if (
                 currentSession?.monitor &&
                 route.kind === "conversation" &&
                 route.id === currentSession.id &&

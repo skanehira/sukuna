@@ -12,6 +12,7 @@ import { WorkingLine, liveActivity } from "../../components/working-line";
 import { progressResponseSchema, type ProgressResponse } from "../../../shared/progress/schema";
 import type { ServerMessage } from "../../../shared/ws";
 import type { ActionContext } from "../../buffer/keymap/registry";
+import { isTimelineView } from "../../buffer/right-window";
 import { timelineNote } from "../timeline-lines";
 import type { TabStorage } from "../recap/read-tracking";
 import { timelineActions } from "../work-actions";
@@ -35,9 +36,6 @@ export function createProgressApi(fetcher: typeof fetch): ProgressApi {
   };
 }
 
-export function isTimelineView(view: string): view is "timeline" | "timeline-task" {
-  return view === "timeline" || view === "timeline-task";
-}
 type TimelineView = "timeline" | "timeline-task";
 type TimelineSnapshot = { data: ProgressResponse | null; error: string | null; version: number };
 
@@ -83,6 +81,9 @@ export class WorkMonitor {
     };
   };
   now = () => this.options.now();
+  get conversationId(): string {
+    return this.conversation.id;
+  }
 
   connect(): () => void {
     if (this.users++ === 0) this.stop = this.start();
@@ -220,11 +221,15 @@ export class WorkMonitor {
     const request = ++this.request;
     try {
       const conversation = this.conversation.snapshot().data?.conversation;
-      const issueId = conversation?.issueId;
-      const issueProgress =
-        issueId && ["triage", "design", "impl"].includes(conversation.kind)
-          ? await this.options.api({ kind: "issue", id: issueId }).catch(() => null)
-          : null;
+      const issueId =
+        this.target.kind === "issue"
+          ? this.target.id
+          : conversation && ["triage", "design", "impl"].includes(conversation.kind)
+            ? conversation.issueId
+            : undefined;
+      const issueProgress = issueId
+        ? await this.options.api({ kind: "issue", id: issueId }).catch(() => null)
+        : null;
       const result =
         issueProgress?.conversationId === this.conversation.id
           ? issueProgress

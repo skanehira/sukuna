@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { issueStateSchema, issueStopReasonSchema } from "./state";
+import { issueStateSchema, issueStopReasonSchema, stateChangeCauseSchema } from "./state";
 import { runStateSchema } from "../events";
 
 export const issueNumberSchema = z.number().int().positive();
@@ -156,6 +156,9 @@ export const issueReferenceSchema = issueRecordSchema.pick({
 export type IssueReference = z.infer<typeof issueReferenceSchema>;
 export const issueViewSchema = issueRecordSchema.omit({ parentId: true }).extend({
   stopDetail: z.string().nullable(),
+  stoppedFrom: issueStateSchema.optional(),
+  stopCause: stateChangeCauseSchema.optional(),
+  keptWorktreePath: z.string().optional(),
   createdConversation: z
     .strictObject({ id: z.string(), title: z.string().nullable(), deleted: z.boolean() })
     .nullable(),
@@ -181,6 +184,9 @@ export const issueSummarySchema = issueViewSchema.omit({
   dependents: true,
   conversations: true,
   comments: true,
+  stoppedFrom: true,
+  stopCause: true,
+  keptWorktreePath: true,
 });
 export type IssueSummary = z.infer<typeof issueSummarySchema>;
 export const issueResponseSchema = z.strictObject({ issue: issueViewSchema });

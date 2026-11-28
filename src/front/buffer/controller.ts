@@ -94,9 +94,10 @@ export type ControllerOptions = {
   url?: string;
   entry?: string;
   restoringPosition?: boolean;
-  navigate?(url: string, entry?: string): void | Promise<void>;
+  navigate?(url: string, entry?: string, replace?: boolean): void | Promise<void>;
   openTarget?(this: void, target: OpenTarget, context: ActionContext): boolean;
   back?(): boolean;
+  switchMainView?(direction: number): boolean;
   prompt?(): PromptSpec | undefined;
   clipboard?: ClipboardPort;
   openMarked?(this: void, context: ActionContext): boolean;
@@ -163,7 +164,15 @@ export class BufferController {
     const builtins: [string, string, string, () => void][] = [
       ["open", "開く・実行する", "開く・戻る", () => this.open()],
       ["back", "戻る", "開く・戻る", () => this.back()],
-      ["view.prev", "前の表示", "開く・戻る", () => this.previousRight()],
+      [
+        "view.prev",
+        "前の表示",
+        "開く・戻る",
+        () => {
+          if (this.state.active === "main" && this.options.switchMainView?.(-1)) return;
+          this.previousRight();
+        },
+      ],
       [
         "jump.back",
         "ジャンプを戻る",
@@ -846,6 +855,10 @@ export class BufferController {
   navigate(url: string, entry?: string, restoringPosition = false): void | Promise<void> {
     this.changeScreen(url, entry, restoringPosition);
     return entry === undefined ? this.options.navigate?.(url) : this.options.navigate?.(url, entry);
+  }
+  replace(url: string, entry?: string): void | Promise<void> {
+    this.changeScreen(url, entry);
+    return this.options.navigate?.(url, entry, true);
   }
   pushJump(side: string, line: number): void {
     const handle = this.window(side);

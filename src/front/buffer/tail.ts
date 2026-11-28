@@ -1,8 +1,8 @@
 import type { LineInfo } from "./line";
 
-export type TailPart = "reply" | "question" | "queue";
+export type TailPart = "reply" | "question" | "queue" | "issue-footer";
 
-export const TAIL_ORDER: readonly TailPart[] = ["reply", "question", "queue"];
+export const TAIL_ORDER: readonly TailPart[] = ["reply", "question", "queue", "issue-footer"];
 
 export type BufferContent = {
   committed: LineInfo[];
@@ -20,7 +20,7 @@ export type BufferOp = {
 };
 
 function emptyTail(): Record<TailPart, LineInfo[]> {
-  return { reply: [], question: [], queue: [] };
+  return { reply: [], question: [], queue: [], "issue-footer": [] };
 }
 
 export function createContent(lines: LineInfo[]): BufferContent {
