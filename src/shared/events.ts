@@ -168,6 +168,15 @@ export const eventSchema = z.discriminatedUnion("type", [
   event("resumed", z.object({ by: z.enum(["developer", "usage_limit", "flow"]) })),
 ]);
 export type ConversationEvent = z.infer<typeof eventSchema>;
+export const assistantResponseEventTypes: readonly ConversationEvent["type"][] = [
+  "assistant_text",
+  "tool_use",
+  "question",
+  "permission_request",
+];
+export function startsAssistantResponse(type: ConversationEvent["type"]): boolean {
+  return assistantResponseEventTypes.includes(type);
+}
 export type StoredEvent = ConversationEvent & {
   conversationId: string;
   seq: number;

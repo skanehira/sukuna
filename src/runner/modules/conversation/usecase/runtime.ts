@@ -51,7 +51,13 @@ import type {
 } from "../domain/conversation-store";
 import { classifyStop, type RateLimit, type StopIntent } from "../domain/stop-reason";
 import { outputEvents } from "../domain/event-mapping";
-import type { ConversationEvent, StoredEvent, Origin, RunState } from "../../../../shared/events";
+import {
+  startsAssistantResponse,
+  type ConversationEvent,
+  type StoredEvent,
+  type Origin,
+  type RunState,
+} from "../../../../shared/events";
 import { AppToolRegistry } from "./app-tool-registry";
 import { UsageLimitTimer } from "./usage-limit-timer";
 import { recordRateLimit } from "./record-rate-limit";
@@ -157,6 +163,7 @@ type Execution = Pick<OpenParams, "model" | "permissionMode"> & {
   };
   permission?: { request: PermissionRequest; resolve: (answer: PermissionDecision) => void };
   inputOrigin: Origin;
+  responseStarted: boolean;
   reopening: Reopening | null;
   acceptedInputId?: string;
   refusedInterrupt?: { startSeq: number; message: string };
@@ -251,7 +258,7 @@ export class ConversationRuntime {
     events: ConversationEvent[],
     before: () => void = () => {},
     unchanged: () => boolean = () => true,
-    beforeCommit?: () => void,
+    beforeCommit?: (recorded: readonly StoredEvent[]) => void,
   ): StoredEvent[] {
     const previous = this.store.get(id)?.runState;
     const recorded = this.store.transaction(() => {
@@ -261,7 +268,7 @@ export class ConversationRuntime {
         const record = this.store.append(id, e, this.options.clock.now());
         return record ? [record] : [];
       });
-      beforeCommit?.();
+      beforeCommit?.(records);
       return records;
     });
     for (const event of recorded) {
@@ -333,6 +340,7 @@ export class ConversationRuntime {
       assistantError: null,
       startSeq: 0,
       inputOrigin: "developer",
+      responseStarted: false,
       reopening: null,
       streamEnded: false,
       turnActive: false,
@@ -651,6 +659,7 @@ export class ConversationRuntime {
           activeExecution.turnActive = true;
           activeExecution.acceptedInputId = deferred?.id;
           activeExecution.inputOrigin = input.origin;
+          activeExecution.responseStarted = false;
           activeExecution.reopening =
             resumeClosedAt === null
               ? null
@@ -796,10 +805,7 @@ export class ConversationRuntime {
           const records = this.record(id, [event], () => {
             if (!this.store.removeAccepted(instructionId, (this.store.get(id)?.lastSeq ?? 0) + 1))
               throw new Error("受理済みの指示がありません。");
-            if (interrupt)
-              this.store.clearQuestionsBefore(id, (this.store.get(id)?.lastSeq ?? 0) + 1);
           });
-          if (interrupt) this.partsChanged(id, ["answers"]);
           if (queuedStockIds(instruction).length) this.partsChanged(id, ["stock"]);
           const record = records.at(-1);
           if (!record) throw new Error("指示を記録できません。");
@@ -1071,11 +1077,27 @@ export class ConversationRuntime {
         });
       return;
     }
-    if (output.kind === "assistant_text" && execution.inputOrigin !== "answer_text") {
-      this.store.transaction(() => this.store.clearQuestionsBefore(id, execution.startSeq));
-      this.partsChanged(id, ["answers"]);
+    this.recordAssistantOutput(id, execution, outputEvents(output));
+  }
+  private recordAssistantOutput(id: string, execution: Execution, events: ConversationEvent[]) {
+    if (
+      !execution.turnActive ||
+      execution.responseStarted ||
+      execution.inputOrigin === "answer_text" ||
+      !events.some((event) => startsAssistantResponse(event.type))
+    ) {
+      this.record(id, events);
+      return;
     }
-    this.record(id, outputEvents(output));
+
+    let started = false;
+    let answersChanged = false;
+    this.record(id, events, undefined, undefined, (recorded) => {
+      started = recorded.some((event) => startsAssistantResponse(event.type));
+      if (started) answersChanged = this.store.clearQuestionsBefore(id, execution.startSeq);
+    });
+    execution.responseStarted = started;
+    if (answersChanged) this.partsChanged(id, ["answers"]);
   }
   async commands(id: string): Promise<{ name: string; description: string }[]> {
     const execution = this.executions.get(id);
@@ -1100,7 +1122,7 @@ export class ConversationRuntime {
       execution.intent !== null
     )
       return Promise.reject(new Error("この番は終了しました。"));
-    this.record(id, [
+    this.recordAssistantOutput(id, execution, [
       {
         type: "question",
         payload: { request_id: request.requestId, questions: request.questions },
@@ -1122,7 +1144,7 @@ export class ConversationRuntime {
       execution.intent !== null
     )
       return Promise.resolve({ behavior: "deny", message: "この番は終了しました。" });
-    this.record(id, [
+    this.recordAssistantOutput(id, execution, [
       {
         type: "permission_request",
         payload: {

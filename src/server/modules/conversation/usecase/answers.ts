@@ -1,5 +1,5 @@
 import { err, ok } from "neverthrow";
-import type { PendingAnswers } from "../../../../shared/conversation/api";
+import type { PendingAnswers, SendConversationAnswers } from "../../../../shared/conversation/api";
 import type { ConversationDependencies, ConversationError } from "../domain/ports";
 import { missingConversation } from "../domain/ports";
 import { reopen } from "./reopen";
@@ -29,7 +29,7 @@ export function saveAnswers(id: string, pending: PendingAnswers, deps: Conversat
 }
 export async function sendAnswers(
   id: string,
-  confirmUnanswered: boolean,
+  { questionSeq, confirmUnanswered }: SendConversationAnswers,
   deps: ConversationDependencies,
 ) {
   const pending = deps.repository.pendingAnswers(id);
@@ -38,6 +38,9 @@ export async function sendAnswers(
     !pending ||
     !question ||
     question.seq !== pending.questionSeq ||
+    (questionSeq === undefined
+      ? deps.repository.hasQuestionBefore(id, question.seq)
+      : questionSeq !== question.seq) ||
     !Object.values(pending.answers).some((a) => a.choices.length || a.text)
   )
     return err(conflict);

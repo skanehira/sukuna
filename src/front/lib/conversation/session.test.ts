@@ -3,6 +3,7 @@ import type { BufferHandle } from "../../buffer/Buffer";
 import { BufferController } from "../../buffer/controller";
 import type { LineInfo } from "../../buffer/line";
 import { Realtime, type RealtimeSocket } from "../realtime";
+import { ConversationApiError } from "./api";
 import { ConversationSession } from "./session";
 import type { ConversationApi, DraftRequest, Event, Snapshot } from "./types";
 
@@ -12,7 +13,7 @@ const event = (seq: number): Event => ({
   type: "assistant_text",
   payload: { text: `発言${seq}`, parent_tool_use_id: null },
 });
-function fixture() {
+function fixture(view: "conversation" | "stock-thread" = "conversation") {
   const data: Snapshot = {
     conversation: {
       id: "c1",
@@ -102,12 +103,13 @@ function fixture() {
     pushJump: () => {},
     findSeq: () => null,
   };
-  const session = new ConversationSession("c1", api, new BufferController(), {
-    clientId: "tab",
-    id: () => `message-${++nextId}`,
-    now: () => 0,
-    schedule: () => () => {},
-  });
+  const session = new ConversationSession(
+    "c1",
+    api,
+    new BufferController(),
+    { clientId: "tab", id: () => `message-${++nextId}`, now: () => 0, schedule: () => () => {} },
+    { view },
+  );
   session.bind(handle);
   return {
     data,
@@ -772,8 +774,13 @@ it("欠番回復後もツールの行先、質問の回答と展開済みの差�
   ]);
 });
 
-async function answeringFixture() {
-  const f = fixture();
+async function answeringFixture(
+  questions: Extract<Event, { type: "question" }>["payload"]["questions"] = [
+    { question: "どちらですか", header: "確認", options: [], multi_select: false },
+  ],
+  view: "conversation" | "stock-thread" = "conversation",
+) {
+  const f = fixture(view);
   f.data.conversation.lastSeq = 2;
   f.data.conversation.runState = "waiting_answer";
   f.events.push({
@@ -782,16 +789,485 @@ async function answeringFixture() {
     type: "question",
     payload: {
       request_id: "q",
-      questions: [{ question: "どちらですか", header: "確認", options: [], multi_select: false }],
+      questions,
     },
   });
   await f.session.load();
-  const disconnect = f.session.connect();
+  const close = f.session.connect();
   const controller = f.session.controller;
-  const openAnswer = () =>
-    controller.run("conversation.answer.0", { view: "conversation", window: "main", line: 0 });
-  return { f, controller, disconnect, openAnswer };
+  const window = view === "conversation" ? "main" : "right";
+  const unregister = controller.registerWindow(window, {
+    focus() {},
+    lines: f.lines,
+    position: () => ({ line: 0, column: 0, topLine: 0 }),
+    place() {},
+    view,
+    name: "会話",
+    posKey: "c1",
+    url: "/conversations/c1",
+    scrollCursor() {},
+  });
+  controller.focus(window);
+  const disconnect = () => {
+    close();
+    unregister();
+  };
+  const context = { view, window, line: 0 };
+  const openAnswer = () => controller.run("conversation.answer.0", context);
+  return { f, controller, disconnect, openAnswer, context };
 }
+
+it("別の指示を受け付けても回答を残し、ツール実行が届いたら過去の質問として表示する", async () => {
+  const { f, disconnect } = await answeringFixture();
+  const instruction: Event = {
+    seq: 3,
+    createdAt: 3,
+    type: "user_message",
+    payload: { text: "別の指示", images: [], origin: "developer", client_ids: [], queued_ids: [] },
+  };
+  const tool: Event = {
+    seq: 4,
+    createdAt: 4,
+    type: "tool_use",
+    payload: {
+      tool_use_id: "read",
+      name: "Read",
+      input: { file_path: "notes.txt" },
+      parent_tool_use_id: null,
+    },
+  };
+  f.data.pendingAnswers = { questionSeq: 2, answers: { "0": { choices: [], text: "こちらです" } } };
+  await f.session.refresh();
+
+  try {
+    f.session.receiveEvent(instruction);
+    expect(f.shown()).toEqual([
+      "AI",
+      "発言1",
+      "あなた",
+      "別の指示",
+      "Q1. どちらですか",
+      "Q1 に文章で答える",
+      "→ あなたの回答 (まだ送っていない): こちらです",
+      "回答をまとめて送る (1 / 1 件)  1 通にまとめて AI に届く",
+    ]);
+    f.session.receiveEvent(tool);
+    expect(f.shown()).toEqual([
+      "AI",
+      "発言1",
+      "Q1. どちらですか",
+      "あなた",
+      "別の指示",
+      "● Read(notes.txt)",
+    ]);
+  } finally {
+    disconnect();
+  }
+});
+
+it("質問が差し替わったときは前の入力欄から保存せず、新しく開いた入力欄からだけ回答を保存する", async () => {
+  const { f, controller, disconnect, openAnswer } = await answeringFixture();
+  const saves: NonNullable<Snapshot["pendingAnswers"]>[] = [];
+  f.api.saveAnswers = async (_id, questionSeq, answers) => {
+    const pendingAnswers = { questionSeq, answers };
+    saves.push(pendingAnswers);
+    return { pendingAnswers };
+  };
+
+  try {
+    await openAnswer();
+    controller.setPromptDraft("最初の質問への答え");
+    f.session.receiveEvent({
+      seq: 3,
+      createdAt: 3,
+      type: "user_message",
+      payload: {
+        text: "別の指示",
+        images: [],
+        origin: "developer",
+        client_ids: [],
+        queued_ids: [],
+      },
+    });
+    f.session.receiveEvent({
+      seq: 4,
+      createdAt: 4,
+      type: "question",
+      payload: {
+        request_id: "new-question",
+        questions: [
+          { question: "新しい質問です", header: "新しい確認", options: [], multi_select: false },
+        ],
+      },
+    });
+
+    const oldSubmission = await controller.submitPrompt(controller.promptText());
+    controller.closePrompt();
+    await openAnswer();
+    controller.setPromptDraft("新しい質問への答え");
+    await controller.submitPrompt(controller.promptText());
+    expect(saves).toEqual([
+      { questionSeq: 4, answers: { "0": { choices: [], text: "新しい質問への答え" } } },
+    ]);
+    expect(oldSubmission).toBe(false);
+  } finally {
+    disconnect();
+  }
+});
+
+const firstQuestion = {
+  question: "最初の質問",
+  header: "最初の確認",
+  options: [
+    { label: "方式A", description: "方式Aを使う" },
+    { label: "方式B", description: "方式Bを使う" },
+  ],
+  multi_select: false,
+};
+const anotherQuestion = { ...firstQuestion, question: "新しい質問", header: "新しい確認" };
+const answerContext = { view: "conversation", window: "main", line: 0 };
+const nextInstruction: Event = {
+  seq: 3,
+  createdAt: 3,
+  type: "user_message",
+  payload: { text: "別の指示", images: [], origin: "developer", client_ids: [], queued_ids: [] },
+};
+const confirmYes = { key: "y", isComposing: false, ctrlKey: false, altKey: false, metaKey: false };
+
+it("前の質問の送信確認で y を押しても、別端末の新しい回答を送らない", async () => {
+  const { f, controller, disconnect } = await answeringFixture([firstQuestion, anotherQuestion]);
+  const sends: unknown[][] = [];
+  f.api.sendAnswers = async (...args) => {
+    sends.push(args);
+  };
+  f.data.pendingAnswers = { questionSeq: 2, answers: { "0": { choices: ["方式A"], text: null } } };
+  await f.session.refresh();
+
+  try {
+    await controller.run("conversation.answers.send", answerContext);
+    expect(controller.snapshot().confirmation?.text).toBe(
+      "答えていない質問が 1 件あります。このまま送りますか?",
+    );
+    f.session.receiveEvent(nextInstruction);
+    f.session.receiveEvent({
+      seq: 4,
+      createdAt: 4,
+      type: "question",
+      payload: { request_id: "new-q", questions: [anotherQuestion] },
+    });
+    f.data.pendingAnswers = {
+      questionSeq: 4,
+      answers: { "0": { choices: ["方式B"], text: null } },
+    };
+    await f.session.refresh();
+
+    controller.answer(confirmYes);
+    await controller.run("conversation.answers.send", answerContext);
+    expect(sends).toEqual([["c1", false, 4]]);
+  } finally {
+    disconnect();
+  }
+});
+
+it("前の送信確認を n で閉じたあと、割り当て済みの操作で新しい質問に回答する", async () => {
+  const { f, controller, disconnect } = await answeringFixture([firstQuestion, anotherQuestion]);
+  const sends: unknown[][] = [];
+  f.api.sendAnswers = async (...args) => {
+    sends.push(args);
+  };
+  f.data.pendingAnswers = { questionSeq: 2, answers: { "0": { choices: ["方式A"], text: null } } };
+  await f.session.refresh();
+
+  try {
+    await controller.run("conversation.answers.send", answerContext);
+    expect(controller.answer({ ...confirmYes, key: "n" })).toBe(true);
+    f.session.receiveEvent(nextInstruction);
+    f.session.receiveEvent({
+      seq: 4,
+      createdAt: 4,
+      type: "question",
+      payload: { request_id: "new-q", questions: [anotherQuestion] },
+    });
+    f.data.pendingAnswers = {
+      questionSeq: 4,
+      answers: { "0": { choices: ["方式B"], text: null } },
+    };
+    await f.session.refresh();
+    await controller.run("conversation.answers.confirm", answerContext);
+    expect({ sends, confirmation: controller.snapshot().confirmation }).toEqual({
+      sends: [["c1", false, 4]],
+      confirmation: null,
+    });
+  } finally {
+    disconnect();
+  }
+});
+
+it("右のスレッドは未回答の確認を表示し、y を押してからその質問へ送る", async () => {
+  const { f, controller, disconnect, context } = await answeringFixture(
+    [firstQuestion, anotherQuestion],
+    "stock-thread",
+  );
+  const sends: unknown[][] = [];
+  f.api.sendAnswers = async (...args) => {
+    sends.push(args);
+  };
+  f.data.pendingAnswers = { questionSeq: 2, answers: { "0": { choices: ["方式A"], text: null } } };
+  await f.session.refresh();
+
+  try {
+    await controller.run("conversation.answers.send", context);
+    expect({ sends, confirmation: controller.snapshot().confirmation?.context }).toEqual({
+      sends: [],
+      confirmation: context,
+    });
+    expect(controller.answer(confirmYes)).toBe(true);
+    expect(sends).toEqual([["c1", true, 2]]);
+  } finally {
+    disconnect();
+  }
+});
+
+it.each([false, true])(
+  "質問の画面を閉じるとき別操作の確認の有無 %s に応じて自分の確認だけ取り消す",
+  async (otherConfirmation) => {
+    const { f, controller, disconnect, context } = await answeringFixture(
+      [firstQuestion, anotherQuestion],
+      "stock-thread",
+    );
+    const sends: unknown[][] = [];
+    f.api.sendAnswers = async (...args) => {
+      sends.push(args);
+    };
+    f.data.pendingAnswers = {
+      questionSeq: 2,
+      answers: { "0": { choices: ["方式A"], text: null } },
+    };
+    await f.session.refresh();
+
+    await controller.run("conversation.answers.send", context);
+    expect(controller.snapshot().confirmation?.text).toBe(
+      "答えていない質問が 1 件あります。このまま送りますか?",
+    );
+    let confirmed = false;
+    if (otherConfirmation)
+      controller.confirm("別の操作を続けますか?", answerContext, () => {
+        confirmed = true;
+      });
+    disconnect();
+    expect(controller.answer(confirmYes)).toBe(otherConfirmation);
+    expect({ confirmed, sends }).toEqual({ confirmed: otherConfirmation, sends: [] });
+  },
+);
+
+it.each([false, true])(
+  "右のスレッドで開き直し=%s のとき、遅い未回答エラーの後も別操作の確認と正しい回答の送り直しを保つ",
+  async (reopen) => {
+    const { f, controller, disconnect, context } = await answeringFixture(
+      [firstQuestion, anotherQuestion],
+      "stock-thread",
+    );
+    const allAnswered = {
+      questionSeq: 2,
+      answers: { "0": { choices: ["方式A"], text: null }, "1": { choices: ["方式B"], text: null } },
+    };
+    const partial = { questionSeq: 2, answers: { "0": { choices: ["方式A"], text: null } } };
+    f.data.pendingAnswers = allAnswered;
+    await f.session.refresh();
+    const arrived = deferred();
+    const fail = deferred();
+    const sends: Parameters<ConversationApi["sendAnswers"]>[] = [];
+    f.api.sendAnswers = async (...args) => {
+      sends.push(args);
+      if (sends.length !== 1) return;
+      arrived.resolve();
+      await fail.promise;
+      throw new ConversationApiError(
+        409,
+        "unanswered_questions",
+        "答えていない質問があります。確認してから送ってください。",
+      );
+    };
+
+    const original = controller.run("conversation.answers.send", context);
+    await arrived.promise;
+    f.data.pendingAnswers = partial;
+    let close = disconnect;
+    if (reopen) {
+      disconnect();
+      close = f.session.connect();
+      await f.session.refresh();
+    }
+    let otherAccepted = 0;
+    let gets = 0;
+    const get = f.api.get;
+    f.api.get = async (id) => {
+      gets++;
+      return get(id);
+    };
+
+    try {
+      controller.confirm("本体の操作を続けますか?", answerContext, () => {
+        otherAccepted++;
+      });
+      fail.resolve();
+      await original;
+
+      expect({
+        confirmation: controller.snapshot().confirmation?.text,
+        pendingAnswers: f.session.snapshot().data?.pendingAnswers,
+        gets,
+      }).toEqual({
+        confirmation: "本体の操作を続けますか?",
+        pendingAnswers: partial,
+        gets: reopen ? 0 : 1,
+      });
+      if (!reopen)
+        expect(controller.snapshot().notice).toEqual({
+          kind: "error",
+          message: "回答が変わりました。内容を確認してからもう一度送ってください。",
+        });
+      expect(controller.answer(confirmYes)).toBe(true);
+      expect({ otherAccepted, sends }).toEqual({ otherAccepted: 1, sends: [["c1", false, 2]] });
+
+      await controller.run("conversation.answers.send", context);
+      expect(controller.snapshot().confirmation?.text).toBe(
+        "答えていない質問が 1 件あります。このまま送りますか?",
+      );
+      expect(controller.answer(confirmYes)).toBe(true);
+      expect(sends).toEqual([
+        ["c1", false, 2],
+        ["c1", true, 2],
+      ]);
+    } finally {
+      fail.resolve();
+      close();
+    }
+  },
+);
+
+it.each([
+  { name: "右スレッドを閉じた後は別画面の完了通知を保つ", leave: true },
+  { name: "右スレッドを表示中なら再読込の失敗を通知する", leave: false },
+])("回答の再読込に失敗したとき、$name", async ({ leave }) => {
+  const { f, controller, disconnect, context } = await answeringFixture(
+    [firstQuestion],
+    "stock-thread",
+  );
+  f.data.pendingAnswers = { questionSeq: 2, answers: { "0": { choices: ["方式A"], text: null } } };
+  await f.session.refresh();
+  f.api.sendAnswers = async () => {
+    throw new ConversationApiError(
+      409,
+      "unanswered_questions",
+      "答えていない質問があります。確認してから送ってください。",
+    );
+  };
+
+  const getStarted = deferred();
+  const failRead = deferred();
+  f.api.get = async () => {
+    getStarted.resolve();
+    await failRead.promise;
+    throw new Error("会話の読み込みに失敗しました");
+  };
+
+  const submit = controller.run("conversation.answers.send", context);
+  await getStarted.promise;
+  if (leave) {
+    disconnect();
+    controller.notify("別の画面の操作が完了しました");
+  }
+  try {
+    failRead.resolve();
+    await submit;
+    expect(controller.snapshot().notice).toEqual(
+      leave
+        ? { kind: "info", message: "別の画面の操作が完了しました" }
+        : { kind: "error", message: "会話の読み込みに失敗しました" },
+    );
+  } finally {
+    if (!leave) disconnect();
+  }
+});
+
+it("次の番が出力なしで終わった場合、前の質問の送信確認で回答を送れる", async () => {
+  const { f, controller, disconnect } = await answeringFixture([firstQuestion, anotherQuestion]);
+  const sends: unknown[][] = [];
+  f.api.sendAnswers = async (...args) => {
+    sends.push(args);
+  };
+  f.data.pendingAnswers = { questionSeq: 2, answers: { "0": { choices: ["方式A"], text: null } } };
+  await f.session.refresh();
+
+  try {
+    await controller.run("conversation.answers.send", answerContext);
+    f.session.receiveEvent(nextInstruction);
+    f.session.receiveEvent({
+      seq: 4,
+      createdAt: 4,
+      type: "turn_end",
+      payload: {
+        subtype: "success",
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+        },
+        cost_usd: 0,
+        duration_ms: 0,
+        permission_denials: 0,
+      },
+    });
+    expect(controller.answer(confirmYes)).toBe(true);
+    expect(sends).toEqual([["c1", true, 2]]);
+  } finally {
+    disconnect();
+  }
+});
+
+it("履歴では未送信のまま片づけた選択肢を表示だけにし、送信した回答には送信済みの操作を出す", async () => {
+  const { f, disconnect } = await answeringFixture([firstQuestion]);
+  f.data.pendingAnswers = { questionSeq: 2, answers: { "0": { choices: ["方式A"], text: null } } };
+  await f.session.refresh();
+
+  try {
+    f.session.receiveEvent(nextInstruction);
+    f.session.receiveEvent({
+      seq: 4,
+      createdAt: 4,
+      type: "question",
+      payload: { request_id: "new-q", questions: [anotherQuestion] },
+    });
+    f.session.receiveEvent({
+      seq: 5,
+      createdAt: 5,
+      type: "answer",
+      payload: {
+        request_id: "new-q",
+        as_message: false,
+        answers: { "0": { choices: ["方式B"], text: "続けてください" } },
+      },
+    });
+    expect(
+      f
+        .lines()
+        .filter((line) => line.seq === 2 || line.seq === 4)
+        .map(({ kind, text, action }) => ({ kind, text, action })),
+    ).toEqual([
+      { kind: "ask", text: "Q1. 最初の質問", action: undefined },
+      { kind: "text", text: "方式A", action: undefined },
+      { kind: "text", text: "方式B", action: undefined },
+      { kind: "ask", text: "Q1. 新しい質問", action: undefined },
+      { kind: "menu", text: "方式A  この選択肢を選ぶ", action: "conversation.answered" },
+      { kind: "menu", text: "方式B  ✓ 送った回答", action: "conversation.answered" },
+      { kind: "text", text: "→ あなたの回答: 続けてください", action: undefined },
+    ]);
+  } finally {
+    disconnect();
+  }
+});
 
 it("別の端末から届いた指示の下書きは回答欄に反映せず、次の指示入力で使う", async () => {
   const { f, controller, disconnect, openAnswer } = await answeringFixture();

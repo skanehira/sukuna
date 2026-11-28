@@ -19,6 +19,7 @@ import {
   type WorkspaceSwitchAttempt,
 } from "../../../../shared/ipc";
 import { readPublicConversation } from "../../../../shared/conversation/sqlite-public-conversation";
+import { wasQuestionSuperseded } from "../../../../shared/conversation/sqlite-question";
 import {
   readWorkspaceSwitchReceipt,
   writeWorkspaceSwitchReceipt,
@@ -537,7 +538,7 @@ export class SqliteConversationStore implements ConversationStore {
         .prepare(
           "SELECT 1 FROM questions WHERE conversation_id=? AND seq=? AND kind='choice' AND answered=0 LIMIT 1",
         )
-        .get(id, questionSeq) !== undefined
+        .get(id, questionSeq) !== undefined && !wasQuestionSuperseded(this.sqlite, id, questionSeq)
     );
   }
   finishAnswers(id: string, questionSeq: number): void {
@@ -548,15 +549,16 @@ export class SqliteConversationStore implements ConversationStore {
       .prepare("UPDATE questions SET answered = 1 WHERE conversation_id = ? AND seq = ?")
       .run(id, questionSeq);
   }
-  clearQuestionsBefore(id: string, startSeq: number): void {
-    this.sqlite
+  clearQuestionsBefore(id: string, startSeq: number): boolean {
+    const deleted = this.sqlite
       .prepare("DELETE FROM pending_answers WHERE conversation_id = ? AND question_seq < ?")
-      .run(id, startSeq);
-    this.sqlite
+      .run(id, startSeq).changes;
+    const answered = this.sqlite
       .prepare(
         "UPDATE questions SET answered = 1 WHERE conversation_id = ? AND seq < ? AND kind = 'choice' AND answered = 0",
       )
-      .run(id, startSeq);
+      .run(id, startSeq).changes;
+    return deleted > 0 || answered > 0;
   }
   saveRateLimit(value: unknown): void {
     this.sqlite

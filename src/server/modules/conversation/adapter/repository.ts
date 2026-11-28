@@ -2,6 +2,10 @@ import { readDraft, writeDraft } from "../../../../shared/conversation/sqlite-dr
 import type Database from "better-sqlite3";
 import { readPublicConversation } from "../../../../shared/conversation/sqlite-public-conversation";
 import {
+  hasQuestionBefore,
+  wasQuestionSuperseded,
+} from "../../../../shared/conversation/sqlite-question";
+import {
   readWorkspaceSwitchReceipt,
   writeWorkspaceSwitchReceipt,
 } from "../../../../shared/conversation/sqlite-workspace-switch-receipts";
@@ -127,18 +131,22 @@ export function createConversationRepository(sqlite: Database.Database): Convers
           "SELECT MAX(seq) AS seq FROM questions WHERE conversation_id=? AND kind='choice' AND answered=0",
         )
         .get(id) as { seq: number | null };
-      const event = row.seq === null ? null : events(id, row.seq - 1, 1)[0];
+      if (row.seq === null || wasQuestionSuperseded(sqlite, id, row.seq)) return null;
+      const event = events(id, row.seq - 1, 1)[0];
       return event?.type === "question" ? event : null;
     },
+    hasQuestionBefore: (id, beforeSeq) => hasQuestionBefore(sqlite, id, beforeSeq),
     pendingAnswers: (id) => {
       const row = sqlite
         .prepare(
           "SELECT question_seq AS questionSeq,answers FROM pending_answers WHERE conversation_id=? ORDER BY question_seq DESC LIMIT 1",
         )
         .get(id) as { questionSeq: number; answers: string } | undefined;
-      return row
-        ? { questionSeq: row.questionSeq, answers: answersSchema.parse(JSON.parse(row.answers)) }
-        : null;
+      if (!row || wasQuestionSuperseded(sqlite, id, row.questionSeq)) return null;
+      return {
+        questionSeq: row.questionSeq,
+        answers: answersSchema.parse(JSON.parse(row.answers)),
+      };
     },
     saveAnswers: (id, pending: PendingAnswers, now) => {
       sqlite

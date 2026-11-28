@@ -1,4 +1,4 @@
-import type { ActionInfo } from "../../buffer/keymap/registry";
+import type { ActionContext, ActionInfo } from "../../buffer/keymap/registry";
 import {
   conversationAction,
   conversationActions,
@@ -23,8 +23,7 @@ import {
 } from "../../../shared/progress/draft";
 import { consultationContent, mapTimelineAnchors, replaceRange } from "./timeline-draft";
 import { consultationPrefix, continueWork } from "../work-actions";
-import type { Answers } from "../../../shared/events";
-import { eventSchema } from "../../../shared/events";
+import { eventSchema, startsAssistantResponse, type Answers } from "../../../shared/events";
 import type { ServerMessage } from "../../../shared/ws";
 import type { BufferHandle } from "../../buffer/Buffer";
 import type { BufferController, PromptSpec } from "../../buffer/controller";
@@ -58,6 +57,7 @@ export type ConversationEnvironment = {
   schedule(callback: () => void, ms: number): () => void;
 };
 type QuestionEvent = Extract<Event, { type: "question" }>;
+type QuestionDisplay = "pending" | "answered" | "retired";
 type Block = { event: Event; lines: LineInfo[] };
 type UndoRequest = { message: ConversationMessage; local: DraftSync };
 type DeferredDraftSave = {
@@ -88,6 +88,7 @@ export class ConversationSession {
   private contiguousSeq = 0;
   private pendingEvents = new Map<number, Event>();
   private question: QuestionEvent | null = null;
+  private responseInputSeq: number | null = null;
   private reply = "";
   private removers: (() => void)[] = [];
   private draft: DraftSync;
@@ -102,12 +103,13 @@ export class ConversationSession {
   private queueOperation = false;
   private queueEditing: QueueItem | null = null;
   private online = true;
-  private connected = false;
+  private viewConnection: symbol | null = null;
   readonly id: string;
   readonly api: ConversationApi;
   readonly controller: BufferController;
   private env: ConversationEnvironment;
   private readonly questionRemovers: (() => void)[] = [];
+  private dismissAnswerConfirmation: (() => void) | undefined;
   private readonly view: "conversation" | "stock-thread";
   constructor(
     id: string,
@@ -184,7 +186,7 @@ export class ConversationSession {
     this.adopt(data, preserveDraft || this.draft !== draft, version);
   }
   connect(monitor = this.monitor): () => void {
-    this.connected = true;
+    this.viewConnection = Symbol();
     let connecting = true;
     const conversation = this.state.data?.conversation;
     if (conversation?.kind === "chat" && conversation.closedAt !== null)
@@ -221,8 +223,8 @@ export class ConversationSession {
     this.bindAction(conversationActions.undoItem, () => this.undoQueue());
     this.bindAction(conversationActions.expandDiff, () => this.fold(false));
     this.bindAction(conversationActions.collapseDiff, () => this.fold(true));
-    this.bindAction(conversationActions.sendAnswers, () => this.sendAnswers(false));
-    this.bindAction(conversationActions.confirmAnswers, () => this.sendAnswers(true));
+    this.bindAction(conversationActions.sendAnswers, (context) => this.sendAnswers(context));
+    this.bindAction(conversationActions.confirmAnswers, (context) => this.sendAnswers(context));
     this.bindAction(conversationActions.answered, () => {
       this.controller.notify("この質問には、回答を送ってあります");
     });
@@ -246,7 +248,9 @@ export class ConversationSession {
     const disconnectRecap = this.recap?.connect();
     return () => {
       connecting = false;
-      this.connected = false;
+      this.viewConnection = null;
+      this.dismissAnswerConfirmation?.();
+      this.dismissAnswerConfirmation = undefined;
       this.questionRemovers.splice(0).forEach((remove) => remove());
       disconnectRecap?.();
       disconnectMonitor?.();
@@ -296,12 +300,16 @@ export class ConversationSession {
   ): void {
     this.bindAction(conversationAction(name, label), run, confirm);
   }
-  private bindAction(info: ActionInfo, run: () => void | Promise<void>, confirm?: string): void {
+  private bindAction(
+    info: ActionInfo,
+    run: (context: ActionContext) => void | Promise<void>,
+    confirm?: string,
+  ): void {
     this.removers.push(this.registerConversationAction(info, run, confirm));
   }
   private registerConversationAction(
     info: ActionInfo,
-    run: () => void | Promise<void>,
+    run: (context: ActionContext) => void | Promise<void>,
     confirm?: string,
   ): () => void {
     return this.view === "conversation"
@@ -309,8 +317,8 @@ export class ConversationSession {
       : this.controller.registerActionInterceptor(info.name, {
           views: [this.view],
           run: async (ctx) => {
-            if (confirm) this.controller.confirm(confirm, ctx, run);
-            else await run();
+            if (confirm) this.controller.confirm(confirm, ctx, () => run(ctx));
+            else await run(ctx);
             return true;
           },
         });
@@ -374,11 +382,13 @@ export class ConversationSession {
     this.blocks.push({ event, lines });
     this.handle?.append(this.withUnread(lines), clearReply ? ["reply"] : []);
   }
-  private replaceBlock(block: Block, lines: LineInfo[]): void {
-    const index = this.blocks.indexOf(block);
-    const from = this.blocks
+  private blockOffset(index: number): number {
+    return this.blocks
       .slice(0, index)
       .reduce((sum, block) => sum + this.withUnread(block.lines).length, this.head.length);
+  }
+  private replaceBlock(block: Block, lines: LineInfo[]): void {
+    const from = this.blockOffset(this.blocks.indexOf(block));
     this.handle?.replace(from, from + this.withUnread(block.lines).length, this.withUnread(lines));
     block.lines = lines;
   }
@@ -399,6 +409,17 @@ export class ConversationSession {
   }
   private applyEvent(event: Event): void {
     this.events.push(event);
+    if (event.type === "user_message")
+      this.responseInputSeq = event.payload.origin === "answer_text" ? null : event.seq;
+    else if (event.type === "turn_end" || event.type === "stopped") this.responseInputSeq = null;
+    else if (
+      this.question &&
+      this.responseInputSeq !== null &&
+      this.question.seq < this.responseInputSeq &&
+      startsAssistantResponse(event.type)
+    )
+      this.archiveQuestion(undefined, true);
+
     if (event.type === "question") {
       this.archiveQuestion();
       this.question = event;
@@ -407,17 +428,8 @@ export class ConversationSession {
       this.emit();
       return;
     }
-    if (
-      event.type === "answer" ||
-      (event.type === "user_message" &&
-        event.payload.origin !== "answer_text" &&
-        event.payload.origin !== "resume")
-    ) {
-      if (event.type === "answer") {
-        if (this.state.data) this.state.data.pendingAnswers = null;
-      }
-      this.archiveQuestion(event.type === "answer" ? event.payload.answers : {});
-    }
+    if (event.type === "answer" && event.payload.request_id === this.question?.payload.request_id)
+      this.archiveQuestion(event.payload.answers);
     if (event.type === "assistant_text" || event.type === "turn_end") this.reply = "";
     const data = this.state.data;
     if (!data) return;
@@ -454,13 +466,25 @@ export class ConversationSession {
     this.refreshTail();
     this.emit();
   }
-  private archiveQuestion(answers: Answers = {}): void {
-    if (!this.question) return;
+  private archiveQuestion(answers?: Answers, chronological = false): void {
     const question = this.question;
+    if (!question) return;
     this.question = null;
+    const data = this.state.data;
+    if (data?.pendingAnswers?.questionSeq === question.seq) data.pendingAnswers = null;
     this.installQuestionActions();
     this.setTail("question", []);
-    this.append(question, this.questionLines(question, answers, true));
+    const lines = this.questionLines(question, answers ?? {}, answers ? "answered" : "retired");
+    const index = chronological
+      ? this.blocks.findIndex((block) => block.event.seq > question.seq)
+      : -1;
+    if (index < 0) {
+      this.append(question, lines);
+      return;
+    }
+    const from = this.blockOffset(index);
+    this.blocks.splice(index, 0, { event: question, lines });
+    this.handle?.replace(from, from, this.withUnread(lines));
   }
   delta(text: string): void {
     if (!this.blocks.length) this.handle?.replaceAll(this.head);
@@ -468,21 +492,27 @@ export class ConversationSession {
     this.refreshTail();
     if (this.view === "stock-thread") this.emit();
   }
-  private questionLines(question: QuestionEvent, answers: Answers, sent: boolean): LineInfo[] {
+  private questionLines(
+    question: QuestionEvent,
+    answers: Answers,
+    display: QuestionDisplay,
+  ): LineInfo[] {
+    const pending = display === "pending";
     const lines = question.payload.questions.flatMap((item, index): LineInfo[] => {
       const answer = answers[index];
       const choices = item.options.map((option, choice): LineInfo => {
+        if (display === "retired") return { kind: "text", text: option.label, seq: question.seq };
         const selected = answer?.choices.includes(option.label) ?? false;
         const description = selected
-          ? sent
-            ? "✓ 送った回答"
-            : "✓ 選んだ (まだ送っていない)"
+          ? pending
+            ? "✓ 選んだ (まだ送っていない)"
+            : "✓ 送った回答"
           : "この選択肢を選ぶ";
         return {
           kind: "menu",
           text: `${option.label}  ${description}`,
           cols: [option.label, description],
-          action: sent ? "conversation.answered" : `conversation.choice.${index}.${choice}`,
+          action: pending ? `conversation.choice.${index}.${choice}` : "conversation.answered",
           done: selected,
           seq: question.seq,
         };
@@ -490,21 +520,21 @@ export class ConversationSession {
       return [
         { kind: "ask", text: `Q${index + 1}. ${item.question}`, seq: question.seq },
         ...choices,
-        ...(sent
-          ? []
-          : [
+        ...(pending
+          ? [
               {
                 kind: "menu" as const,
                 text: `Q${index + 1} に文章で答える`,
                 action: `conversation.answer.${index}`,
                 seq: question.seq,
               },
-            ]),
+            ]
+          : []),
         ...(answer?.text
           ? [
               {
                 kind: "text" as const,
-                text: `→ あなたの回答${sent ? "" : " (まだ送っていない)"}: ${answer.text}`,
+                text: `→ あなたの回答${pending ? " (まだ送っていない)" : ""}: ${answer.text}`,
                 noQuote: true as const,
                 seq: question.seq,
               },
@@ -512,7 +542,7 @@ export class ConversationSession {
           : []),
       ];
     });
-    if (!sent) {
+    if (pending) {
       const count = Object.values(answers).filter(
         (answer) => answer.choices.length || answer.text?.trim(),
       ).length;
@@ -531,23 +561,24 @@ export class ConversationSession {
     return lines.map((line, seqLine) => ({ ...line, seqLine }));
   }
   private installQuestionActions(): void {
-    if (!this.connected) return;
+    if (!this.viewConnection) return;
     this.questionRemovers.splice(0).forEach((remove) => remove());
     const register = (name: string, label: string, run: () => void | Promise<void>) =>
       this.questionRemovers.push(
         this.registerConversationAction(conversationAction(name, label), run),
       );
-    this.question?.payload.questions.forEach((item, index) => {
+    const question = this.question;
+    question?.payload.questions.forEach((item, index) => {
       item.options.forEach((option, choice) =>
         register(`conversation.choice.${index}.${choice}`, "選択肢を選ぶ", async () => {
-          const current = this.state.data?.pendingAnswers?.answers ?? {};
+          const current = this.answersForCurrentQuestion();
           const answer = current[index] ?? { choices: [], text: null };
           const choices = answer.choices.includes(option.label)
             ? answer.choices.filter((label) => label !== option.label)
             : item.multi_select
               ? [...answer.choices, option.label]
               : [option.label];
-          await this.saveAnswers({ ...current, [index]: { ...answer, choices } });
+          await this.saveAnswers(question.seq, { ...current, [index]: { ...answer, choices } });
         }),
       );
       register(`conversation.answer.${index}`, "文章で答える", () => {
@@ -556,30 +587,52 @@ export class ConversationSession {
           target: this.state.data!.conversation.title,
           verb: "決める",
           scope: this.id,
-          initialText: this.state.data?.pendingAnswers?.answers[index]?.text ?? "",
+          initialText: this.answersForCurrentQuestion()[index]?.text ?? "",
           submit: async (text) => {
-            const current = this.state.data?.pendingAnswers?.answers ?? {};
-            await this.saveAnswers({
+            const current = this.answersForCurrentQuestion();
+            const saved = await this.saveAnswers(question.seq, {
               ...current,
               [index]: { choices: current[index]?.choices ?? [], text },
             });
-            this.controller.notify("回答を書きました。「回答をまとめて送る」で送ります");
+            if (saved) this.controller.notify("回答を書きました。「回答をまとめて送る」で送ります");
           },
           close: () => {},
         });
       });
     });
   }
-  private async saveAnswers(answers: Answers): Promise<void> {
-    if (!this.question || !this.state.data) return;
-    const result = await this.api.saveAnswers(this.id, this.question.seq, answers);
+  private answersForCurrentQuestion(): Answers {
+    const pending = this.state.data?.pendingAnswers;
+    return pending && pending.questionSeq === this.question?.seq ? pending.answers : {};
+  }
+  private async saveAnswers(questionSeq: number, answers: Answers): Promise<boolean> {
+    if (this.question?.seq !== questionSeq)
+      throw new Error("回答する質問が変わりました。読み直してください。");
+    if (!this.state.data) return false;
+    const result = await this.api.saveAnswers(this.id, questionSeq, answers);
+    if (this.question?.seq !== questionSeq) return false;
     this.state.data = { ...this.state.data, pendingAnswers: result.pendingAnswers };
     this.refreshTail();
     this.emit();
+    return true;
   }
-  private async sendAnswers(confirmed: boolean): Promise<void> {
-    if (!this.question) return;
-    const answers = this.state.data?.pendingAnswers?.answers ?? {};
+  private confirmAnswerSend(context: ActionContext, questionSeq: number, missing: number): void {
+    this.dismissAnswerConfirmation = this.controller.confirm(
+      `答えていない質問が ${missing} 件あります。このまま送りますか?`,
+      context,
+      () => this.sendAnswers(context, true, questionSeq),
+    );
+  }
+  private async sendAnswers(
+    context: ActionContext,
+    confirmed = false,
+    questionSeq = this.question?.seq,
+  ): Promise<void> {
+    if (questionSeq === undefined) return;
+    const question = this.question;
+    if (question?.seq !== questionSeq)
+      throw new Error("回答する質問が変わりました。読み直してください。");
+    const answers = this.answersForCurrentQuestion();
     const count = Object.values(answers).filter(
       (answer) => answer.choices.length || answer.text?.trim(),
     ).length;
@@ -587,35 +640,31 @@ export class ConversationSession {
       this.controller.notify("回答がまだありません。選択肢を選ぶか、文章で答えてください");
       return;
     }
-    const missing = this.question.payload.questions.length - count;
-    if (missing && !confirmed) {
-      this.action(
-        "conversation.answers.confirm",
-        "回答を送る",
-        () => this.sendAnswers(true),
-        `答えていない質問が ${missing} 件あります。このまま送りますか?`,
-      );
-      await this.controller.run("conversation.answers.confirm");
-      return;
-    }
+    const missing = question.payload.questions.length - count;
+    if (missing && !confirmed) return this.confirmAnswerSend(context, questionSeq, missing);
+    const viewConnection = this.viewConnection;
     try {
-      await this.api.sendAnswers(this.id, confirmed);
+      await this.api.sendAnswers(this.id, confirmed, questionSeq);
     } catch (error) {
-      if (
-        error instanceof ConversationApiError &&
-        error.code === "unanswered_questions" &&
-        !confirmed
-      ) {
-        this.action(
-          "conversation.answers.confirm",
-          "回答を送る",
-          () => this.sendAnswers(true),
-          `答えていない質問が ${missing} 件あります。このまま送りますか?`,
-        );
-        await this.controller.run("conversation.answers.confirm");
+      if (!(error instanceof ConversationApiError) || error.code !== "unanswered_questions")
+        throw error;
+      const stillCurrent = () =>
+        viewConnection !== null &&
+        this.viewConnection === viewConnection &&
+        this.question?.seq === questionSeq;
+      if (!stillCurrent()) return;
+      try {
+        await this.refresh(false, stillCurrent);
+      } catch (readError) {
+        if (stillCurrent()) throw readError;
         return;
       }
-      throw error;
+      if (stillCurrent())
+        this.controller.notify(
+          "回答が変わりました。内容を確認してからもう一度送ってください。",
+          "error",
+        );
+      return;
     }
     this.controller.notify(`回答 ${count} 件を 1 通にまとめて送りました`);
   }
@@ -632,11 +681,7 @@ export class ConversationSession {
         : [],
     );
     const questionLines = this.question
-      ? this.questionLines(
-          this.question,
-          data.pendingAnswers?.questionSeq === this.question.seq ? data.pendingAnswers.answers : {},
-          false,
-        )
+      ? this.questionLines(this.question, this.answersForCurrentQuestion(), "pending")
       : [];
     const permission = data.pendingPermission;
     if (permission) {
@@ -804,7 +849,7 @@ export class ConversationSession {
     task: { id: string; title: string },
     current: () => boolean,
   ): Promise<void> {
-    if (!this.connected) await this.refresh(false, current);
+    if (!this.viewConnection) await this.refresh(false, current);
     if (current()) this.openConsultation(task);
   }
   async continueTimeline(title: string): Promise<void> {
@@ -1247,7 +1292,7 @@ export class ConversationSession {
       this.draft.edit(remaining, this.env.now());
       this.deferredDraftSave = { local: this.draft, expected: replacement, conflicted: false };
     }
-    if (this.connected && this.view === "conversation" && !this.queueEditing)
+    if (this.viewConnection && this.view === "conversation" && !this.queueEditing)
       this.syncDraftPrompt({ replaceText: true });
   }
   private async prepareUndoRequest(undo: QueueUndo): Promise<UndoRequest> {
