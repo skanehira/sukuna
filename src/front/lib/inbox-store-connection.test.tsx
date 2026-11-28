@@ -81,6 +81,6 @@ it.each([false, true])(
     expect(screen.queryByText("つながりません", { exact: true })).toBeNull();
     expect(screen.getByText("会話: 再接続後", { exact: true })).toBeInTheDocument();
     expect(api.inbox.mock.calls.length).toBe(requests + 1);
-    stop();
+    act(() => stop());
   },
 );

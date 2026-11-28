@@ -120,7 +120,7 @@ it("直前の稼働件数で確認し、取り消した場合は送らない", a
   );
   await act(async () => f.controller.answer(new KeyboardEvent("keydown", { key: "n" })));
   expect(f.post).not.toHaveBeenCalled();
-  f.dispose();
+  act(() => f.dispose());
 });
 
 it.each([
@@ -167,7 +167,7 @@ it.each([
     await f.tick();
     expect(f.restore.restarting.snapshot()).toBe(false);
     expect(f.notice).toHaveBeenCalledWith(notice, status === "done" ? "info" : "error");
-    f.dispose();
+    act(() => f.dispose());
   },
 );
 
@@ -198,7 +198,7 @@ it("通信中断後に別の復元結果に置き換わっていたら、成功�
     "この復元の結果を確認できませんでした。設定を読み直してください。",
     "error",
   );
-  f.dispose();
+  act(() => f.dispose());
 });
 
 it("復元で再読込する前後で受付番号を保ち、すでに届いた結果も依頼した画面に表示する", async () => {
@@ -221,7 +221,7 @@ it("復元で再読込する前後で受付番号を保ち、すでに届いた�
   await before.tick();
   expect(before.restore.restarting.snapshot()).toBe(false);
   before.restore.prepareReload(requestId);
-  before.dispose();
+  act(() => before.dispose());
 
   const after = fixture(storage, result);
   expect(after.post).not.toHaveBeenCalled();
@@ -231,8 +231,9 @@ it("復元で再読込する前後で受付番号を保ち、すでに届いた�
     "11/26 03:00 のバックアップから戻しました。自動フローを一時停止しています。:resume で再開します。",
     "info",
   );
-  after.dispose();
+  act(() => after.dispose());
   const later = fixture(storage);
+  await act(async () => {});
   expect(later.getResult).not.toHaveBeenCalled();
-  later.dispose();
+  act(() => later.dispose());
 });

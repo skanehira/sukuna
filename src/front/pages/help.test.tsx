@@ -82,7 +82,7 @@ describe("ヘルプとキーの設定", () => {
       await f.controller.command(":h");
     });
     expect(f.navigate.mock.calls).toEqual([["/help"], ["/help"]]);
-    f.unregister();
+    act(() => f.unregister());
     await act(async () => {
       await f.controller.command(":help");
       await f.controller.command(":h");
@@ -101,7 +101,7 @@ describe("ヘルプとキーの設定", () => {
     });
     await act(async () => f.controller.command(":unmap <Space>T"));
     await waitFor(() => expect(screen.queryByText("Vim: j")).toBeNull());
-    f.unregister();
+    act(() => f.unregister());
   });
 
   it("上書きした組み込みキーを以前の Vim 動作として案内しない", async () => {
@@ -117,7 +117,7 @@ describe("ヘルプとキーの設定", () => {
     expect(nativeKeys()).toContain("k");
     await act(async () => f.controller.command(":unmap j"));
     expect(nativeKeys()).toContain("j");
-    f.unregister();
+    act(() => f.unregister());
   });
 
   it("別タブの更新で増えた重なりは、承認を取り直したあと一括で外す", async () => {
@@ -146,7 +146,7 @@ describe("ヘルプとキーの設定", () => {
       { keys: "<Space>P", context: "normal", to: { action: "timeline.open" } },
     ]);
     expect(f.controller.entries()).toContainEqual(unrelated);
-    f.unregister();
+    act(() => f.unregister());
   });
 
   it("保存待ちのあとに同じキーを変更する場合は、今の割り当てを示してから保存する", async () => {
@@ -171,7 +171,7 @@ describe("ヘルプとキーの設定", () => {
       context: "normal",
       to: { action: "tree.focus" },
     });
-    f.unregister();
+    act(() => f.unregister());
   });
 
   it("ウィンドウ内の移動を先に、閉じる動作を最後に表示する", async () => {
@@ -188,7 +188,7 @@ describe("ヘルプとキーの設定", () => {
       "会話へ",
       "右を閉じる",
     ]);
-    f.unregister();
+    act(() => f.unregister());
   });
 
   it(":h を実行し、新しいキーとカーソルの動作の名前を表示する", async () => {
@@ -206,7 +206,7 @@ describe("ヘルプとキーの設定", () => {
     expect(screen.getByRole("status").textContent).toContain(
       ":map <キー> timeline.open で割り当てる",
     );
-    f.unregister();
+    act(() => f.unregister());
   });
 
   it.each([
@@ -239,7 +239,7 @@ describe("ヘルプとキーの設定", () => {
     expect(
       f.controller.entries().find((x) => x.keys === keys && x.context === "normal")?.to,
     ).toEqual({ action: "timeline.open" });
-    f.unregister();
+    act(() => f.unregister());
   });
 
   it("別端末の割り当てを反映し、カーソルの動作の名前を保つ", async () => {
@@ -253,6 +253,6 @@ describe("ヘルプとキーの設定", () => {
     );
     await waitFor(() => expect(screen.getByText("Space T")).toBeTruthy());
     expect(screen.getByRole("status").textContent).toContain("名前: timeline.open");
-    f.unregister();
+    act(() => f.unregister());
   });
 });

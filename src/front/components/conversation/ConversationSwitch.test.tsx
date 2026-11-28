@@ -85,6 +85,6 @@ it.each([false, true])(
         : "one で会話を始めました (プロジェクトのディレクトリ)",
       kind: "info",
     });
-    unregister();
+    act(() => unregister());
   },
 );

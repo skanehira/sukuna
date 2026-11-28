@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
 import { SWRConfig } from "swr";
 import { afterEach, describe, it, expect, vi } from "vite-plus/test";
@@ -50,6 +50,7 @@ const conversation: Snapshot = {
 };
 const stops: (() => void)[] = [];
 afterEach(() => {
+  cleanup();
   stops.splice(0).forEach((stop) => stop());
 });
 

@@ -1,4 +1,4 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { expect, it, vi } from "vite-plus/test";
 import { EditorView } from "@codemirror/view";
 import { BufferController, BufferControllerContext } from "../buffer/controller";
@@ -104,15 +104,15 @@ it("次と前の木に移り、配信で行が増えても同じタスクを選�
     const frame = screen.getByRole("region", { name: "タイムライン" });
     const editor = await within(frame).findByRole("textbox");
     const view = EditorView.findFromDOM(editor)!;
-    await vi.waitFor(() => expect(view.state.doc.toString()).toContain("維持する行"));
+    await waitFor(() => expect(view.state.doc.toString()).toContain("維持する行"));
     await act(() =>
       controller.run("timeline.next", { window: "right", view: "timeline", line: 0 }),
     );
-    await vi.waitFor(() => expect(view.state.doc.toString()).toContain("2 / 2  木 B"));
+    await waitFor(() => expect(view.state.doc.toString()).toContain("2 / 2  木 B"));
     await act(() =>
       controller.run("timeline.prev", { window: "right", view: "timeline", line: 0 }),
     );
-    await vi.waitFor(() => expect(view.state.doc.toString()).toContain("維持する行"));
+    await waitFor(() => expect(view.state.doc.toString()).toContain("維持する行"));
     const previous = view.state.doc.lineAt(view.state.doc.toString().indexOf("維持する行"));
     act(() => view.dispatch({ selection: { anchor: previous.from } }));
     online = {
@@ -136,7 +136,7 @@ it("次と前の木に移り、配信で行が増えても同じタスクを選�
         payload: { parts: ["timeline"] },
       }),
     );
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(view.state.doc.toString()).toContain("追加の行");
       expect(view.state.doc.lineAt(view.state.selection.main.head).text).toContain("維持する行");
     });
@@ -149,7 +149,7 @@ it("次と前の木に移り、配信で行が増えても同じタスクを選�
         payload: { parts: ["timeline"] },
       }),
     );
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(view.state.doc.toString()).toContain("前に読めた内容を出しています");
       expect(view.state.doc.toString()).toContain("維持する行");
     });
@@ -178,7 +178,7 @@ it("次と前の木に移り、配信で行が増えても同じタスクを選�
     );
     expect(api).toHaveBeenCalledTimes(beforeRestore);
     await act(() => controller.run("view.prev"));
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(view.state.doc.toString()).toContain("隠れている間に変わったタスク"),
     );
     expect(api).toHaveBeenCalledTimes(beforeRestore + 1);

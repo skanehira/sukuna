@@ -110,7 +110,7 @@ describe("設定画面", () => {
       await act(async () => controller.answer(new KeyboardEvent("keydown", { key: "y" })));
       expect(replace).toHaveBeenCalledExactlyOnceWith([]);
       await waitFor(() => expect(container.textContent).toContain("既定のまま"));
-      unregister();
+      act(() => unregister());
     },
   );
 });
