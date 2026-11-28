@@ -422,16 +422,16 @@ SDK のメッセージは、まず Port の出力 (「Agent SDK を包む Port�
 
 ### 番の途中の出力トークンの数
 
-ランナーは、サブエージェントでない AI (`parentToolUseId` が `null`) が出力したトークンの数を会話ごとに数え、変わるたびに知らせの `output_tokens` を出す。作業中の表示が、AI が書き進めていることを数で見せるためである (`features/work-monitor.md`「作業中の会話の表示」)。
+ランナーは、サブエージェントでない AI (`parentToolUseId` が `null`) が出力したトークンの数を会話ごとに数え、変わるたびに知らせの `output_tokens` を出す。数え方は、受けた出力から数を求める純粋な関数にし、会話のモジュールの合図 (`outputTokens`) を `src/runner/app.ts` が知らせに渡す。作業中の表示が、AI が書き進めていることを数で見せるためである (`features/work-monitor.md`「作業中の会話の表示」)。
 
 | 受けた出力 | 数え方 |
 | --- | --- |
 | `message_start` | 前のメッセージの数を「終わったメッセージの合計」に足し、今のメッセージの文字数と確定した数を空にする |
-| `text_delta`・`output_chars` | 今のメッセージの文字数に足す |
+| `text_delta`・`output_chars` | 今のメッセージの文字数に足す。文字数はコードポイントの数 (`Array.from` の長さ) で数える |
 | `message_usage` | 今のメッセージの確定した数を、その値にする |
 
 - 知らせる数は「終わったメッセージの合計 + 今のメッセージの数」である。今のメッセージの数は、確定した数があればその値、無ければ文字数 ÷ 4 の切り上げとする
-- 数を 0 に戻すのは、`user_message`・`resumed`・`answer`・`permission_decision` を保存したときである。作業中の表示の番の経過と同じ起点から数えるためである
+- 数を 0 に戻すのは、`user_message`・`resumed`・`answer`・`permission_decision` を保存したときである。作業中の表示の番の経過と同じ起点から数えるためである。終わったメッセージの合計、今のメッセージの文字数、確定した数の 3 つを空にし、`output_tokens` の 0 を知らせる
 - 数はメモリーにだけ持つ。ランナーが再起動すると、作業中の会話は止まるので、引き継がない
 
 決定: メッセージの途中は、届いた文字数から見積もり、メッセージの終わりに API の数で置き換える
@@ -649,7 +649,7 @@ type AppTool = {
 
 | 段 | 動き |
 | --- | --- |
-| `text` | `message_start`、`text_delta` を 1 件、`message_usage` (文字数 ÷ 4 の切り上げ)、`assistant_text` の順に流す |
+| `text` | `message_start`、`text_delta` を 1 件、`message_usage`、`assistant_text` の順に流す。`message_usage` の値は、段に `usage` (数) があればその値、無ければ文字数 ÷ 4 の切り上げとする |
 | `tool` | `tool_use` と `tool_result` を流す。`diff` があれば結果に付ける。`images` (`{ "media_type", "data" }` の配列。`data` は base64) があれば、結果に画像として付ける。名前が `mcp__sukuna__` で始まるツールは、`AppToolRegistry` に登録した処理を実際に呼び、その戻り値を結果にする。台本の `result` は使わない |
 | `shell` | 会話の `cwd` でコマンドを実際に実行し、`Bash` の `tool_use` と、標準出力と標準エラーをつないだ `tool_result` を流す。終了コードが 0 でなければ `is_error` を真にする |
 | `ask` | `onQuestion` を呼び、回答が返るまで次へ進まない |
