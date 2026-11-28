@@ -31,7 +31,7 @@ export function numberMenuOperation(base: BufferContent, op: BufferOp): BufferOp
   };
   const content: BufferContent = {
     committed: numbered(op.content.committed),
-    tail: { reply: [], question: [], queue: [] },
+    tail: { reply: [], question: [], queue: [], "issue-footer": [] },
   };
   for (const part of TAIL_ORDER) content.tail[part] = numbered(op.content.tail[part]);
   const original = contentLines(op.content);

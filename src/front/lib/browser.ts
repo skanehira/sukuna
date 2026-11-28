@@ -29,10 +29,17 @@ export function createBrowserController(
     positions,
     url: `${browser.location.pathname}${browser.location.search}`,
     entry: initial?.sukunaEntry,
-    navigate(url, entry) {
+    navigate(url, entry, replace) {
       const current = parseRoute(`${browser.location.pathname}${browser.location.search}`);
       const next = parseRoute(url);
-      if (current.kind === "issue" && next.kind === "issue" && current.id === next.id)
+      if (
+        replace ||
+        (current.kind === "issue" &&
+          next.kind === "issue" &&
+          current.id === next.id &&
+          current.view !== "edit" &&
+          next.view !== "edit")
+      )
         browser.history.replaceState(stateFor(entry), "", url);
       else {
         depth += 1;

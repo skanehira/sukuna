@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 import { ScriptedAgent } from "../../../../runner/modules/conversation/adapter/scripted-agent";
 import { eq } from "drizzle-orm";
-import { projects, issues, issueEvents } from "../../../../shared/db/schema";
-import type { IssueView } from "../../../../shared/issue/schema";
+import { projects, issues, issueEvents, worktrees } from "../../../../shared/db/schema";
+import { issueResponseSchema, type IssueView } from "../../../../shared/issue/schema";
 import { issueFixture, expectedIssue } from "../test-support";
 import { createIssueRoutes } from "./issue-routes";
 import { createIssueDependencies } from "./dependencies";
@@ -212,7 +212,92 @@ describe("issue API とランナー", () => {
         body: { error: { code, message } },
       });
     }
+    expect(
+      issueResponseSchema.parse(await (await f.request("/api/issues/draft")).json()).issue.state,
+    ).toBe("draft");
   });
+  it("詳細に停止前の段階と現在の停止原因を返す", async () => {
+    f.addIssue("stopped", 1, { state: "stopped", stopReason: "failed" });
+    f.opened.db
+      .insert(issueEvents)
+      .values([
+        {
+          issueId: "stopped",
+          seq: 1,
+          type: "state_changed",
+          createdAt: 1,
+          payload: {
+            from: "design",
+            to: "stopped",
+            stopReason: "dependency_withdrawn",
+            detail: "#2",
+            cause: "dependency_withdrawn",
+          },
+        },
+        {
+          issueId: "stopped",
+          seq: 2,
+          type: "state_changed",
+          createdAt: 2,
+          payload: {
+            from: "stopped",
+            to: "stopped",
+            stopReason: "failed",
+            detail: "worktree の作成に失敗",
+            cause: "worktree_failed",
+          },
+        },
+      ])
+      .run();
+    const response = await f.request("/api/issues/stopped");
+    expect(response.status).toBe(200);
+    expect(issueResponseSchema.parse(await response.json()).issue).toMatchObject({
+      stoppedFrom: "design",
+      stopCause: "worktree_failed",
+      stopDetail: "worktree の作成に失敗",
+    });
+  });
+
+  it("閉じた issue の詳細に、削除されていない worktree のパスを返す", async () => {
+    f.addIssue("closed", 1, { state: "done", closedAt: 2 });
+    f.opened.db
+      .insert(worktrees)
+      .values([
+        { id: "kept", projectId: "p", path: "/kept", branch: "kept", origin: "flow" },
+        {
+          id: "removed",
+          projectId: "p",
+          path: "/removed",
+          branch: "removed",
+          origin: "flow",
+          removedAt: 3,
+        },
+      ])
+      .run();
+    f.opened.db
+      .insert(issueEvents)
+      .values([
+        {
+          issueId: "closed",
+          seq: 1,
+          type: "worktree_kept",
+          createdAt: 1,
+          payload: { worktreeId: "kept" },
+        },
+        {
+          issueId: "closed",
+          seq: 2,
+          type: "worktree_kept",
+          createdAt: 2,
+          payload: { worktreeId: "removed" },
+        },
+      ])
+      .run();
+    const response = await f.request("/api/issues/closed");
+    expect(response.status).toBe(200);
+    expect(issueResponseSchema.parse(await response.json()).issue.keptWorktreePath).toBe("/kept");
+  });
+
   it("確定した issue の項目はランナーで更新し edited を残す", async () => {
     f.addIssue("i", 1);
     expect(
@@ -275,6 +360,8 @@ describe("issue API とランナー", () => {
         state: "stopped",
         stopReason: "dependency_withdrawn",
         stopDetail: "#1",
+        stoppedFrom: "triage",
+        stopCause: "dependency_withdrawn",
         dependsOn: [{ id: "source", number: 1, title: "source", state: "withdrawn" }],
         conversations: [{ id: conversations[1]!, kind: "triage", runState: "stopped" }],
       }),
@@ -554,6 +641,8 @@ describe("issue API とランナー", () => {
         state: "stopped",
         stopReason: "failed",
         stopDetail: "作業の失敗",
+        stoppedFrom: "triage",
+        stopCause: "agent_failed",
         comments: Array.from({ length: 50 }, (_, i) => ({
           at: 1002 + i,
           conversationId: "c",

@@ -44,7 +44,7 @@ export interface IssueDataRepository {
   all(projectId: string): IssueRecord[];
   graph(projectId: string): IssueLinks[];
   nextNumber(projectId: string): number;
-  view(id: string): IssueView | undefined;
+  view(id: string, includePageDetails?: boolean): IssueView | undefined;
   list(
     projectId: string,
     input: IssueListInput,

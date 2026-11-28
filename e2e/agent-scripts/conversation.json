@@ -36,6 +36,21 @@
       ]
     },
     {
+      "match": "^#1「予約の監査ログを追加する」を精査してください。",
+      "steps": [
+        { "text": "予約の監査ログを精査します。" },
+        {
+          "tool": "mcp__sukuna__report_needs_human",
+          "input": {
+            "number": 1,
+            "questions": [{ "text": "記録する時刻は予約確定時でよいですか？" }],
+            "summary": "監査ログに記録する時刻を確かめたい"
+          }
+        },
+        { "end": "success" }
+      ]
+    },
+    {
       "match": "^予約 API を作って$",
       "steps": [
         {

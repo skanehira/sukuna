@@ -36,6 +36,8 @@ import {
   restorePendingNotice,
 } from "./lib/settings-restore";
 import { createRestoreConnection } from "./lib/restore-connection";
+import { createIssueApi } from "./pages/issue/issue-api";
+import { createIssueWorkspace } from "./pages/issue/issue-workspace";
 
 const reload = () => window.location.reload();
 const restoreConnection = createRestoreConnection({
@@ -149,6 +151,23 @@ const projectSettings = {
   projectForConversation: conversations.projectForConversation,
 };
 const stopSettingsCommands = registerSettingsCommands(controller, projectSettings, settings);
+const issues = createIssueWorkspace({
+  controller,
+  api: createIssueApi(request),
+  id: ulid,
+  storage: window.sessionStorage,
+  subscribe: conversations.subscribeChanges,
+  schedule: timer.schedule,
+  subscribeConversation: conversations.subscribeIssueConversation,
+  loadConversation: conversations.loadConversation,
+  monitorConversation: conversations.issueMonitor,
+  stopConversation: conversations.stopConversation,
+  projectForConversation: conversations.projectForConversation,
+  refreshListings: (id) => {
+    void inbox.overview(id).refresh();
+  },
+});
+const stopIssues = issues.start();
 const loadScreen: ScreenLoader = async (route) => {
   if (route.kind === "home")
     return {
@@ -157,7 +176,7 @@ const loadScreen: ScreenLoader = async (route) => {
       fullWindow: true,
       content: <InboxPage store={inbox} controller={controller} />,
     };
-  if (route.kind === "project" && route.id && !route.view)
+  if (route.kind === "project" && route.id && !route.view) {
     return {
       kind: "ready",
       title: "プロジェクト",
@@ -169,9 +188,13 @@ const loadScreen: ScreenLoader = async (route) => {
           id={route.id}
           controller={controller}
           withdraw={inboxApi.withdraw}
+          onProjectShown={issues.rememberProject}
         />
       ),
     };
+  }
+  const issue = await issues.loadScreen(route);
+  if (issue) return issue;
   return (
     loadSettingsScreen(route, controller, settings, formatTime, projectSettings) ??
     loadProjectUsageScreen(route, controller, projectUsage, formatTime) ??
@@ -198,6 +221,7 @@ import.meta.hot?.dispose(() => {
   stopSettingsCommands();
   stopUsageCommand();
   stopRestore();
+  stopIssues();
   stopConversations();
   stopInboxNavigation();
   inbox.dispose();

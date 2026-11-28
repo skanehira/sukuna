@@ -161,8 +161,9 @@ async function application(onTestFinished: (cleanup: () => Promise<void>) => voi
     const { socket, messages } = await subscribe("app");
     try {
       await expect
-        .poll(() =>
-          messages.some((message) => message.type === "runner" && message.payload.connected),
+        .poll(
+          () => messages.some((message) => message.type === "runner" && message.payload.connected),
+          { timeout: 5_000 },
         )
         .toBe(true);
     } finally {

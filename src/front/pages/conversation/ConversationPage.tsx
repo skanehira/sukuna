@@ -4,7 +4,11 @@ import { useEffect } from "react";
 import { Buffer } from "../../buffer/Buffer";
 import type { BufferMarks } from "../../buffer/marks";
 import { Frame } from "../../buffer/Frame";
+import type { ColumnDef, LineInfo } from "../../buffer/line";
 import type { ConversationSession } from "../../lib/conversation/session";
+import type { WorkMonitor } from "../../lib/conversation/work-monitor";
+
+const empty: LineInfo[] = [];
 
 const loading = [{ kind: "skeleton" as const, text: "読み込み中" }];
 export function ConversationPage({
@@ -17,34 +21,51 @@ export function ConversationPage({
   recordColumn,
   marks,
   positionKey,
+  title,
+  tabs,
+  head = empty,
+  footer = empty,
+  columns,
+  monitor,
 }: {
   session: ConversationSession;
   activity?: ReactNode;
   openAtTail?: boolean;
-  subscribe?: (session: ConversationSession) => () => void;
+  subscribe?: (session: ConversationSession, monitor?: WorkMonitor) => () => void;
   recordSeq?: number;
   recordLine?: number;
   recordColumn?: number;
   marks?: BufferMarks;
   positionKey?: string;
+  title?: string;
+  tabs?: ReactNode;
+  head?: LineInfo[];
+  footer?: LineInfo[];
+  columns?: ColumnDef[];
+  monitor?: WorkMonitor;
 }) {
   const { data } = useSyncExternalStore(session.subscribe, session.snapshot, session.snapshot);
   useEffect(() => {
-    const disconnect = session.connect();
-    const unsubscribe = subscribe?.(session);
+    const disconnect = session.connect(monitor);
+    const unsubscribe = subscribe?.(session, monitor);
     return () => {
       unsubscribe?.();
       disconnect();
     };
-  }, [session, subscribe]);
+  }, [session, subscribe, monitor]);
+  useEffect(() => {
+    session.surround(head, footer);
+  }, [session, head, footer]);
   return (
-    <Frame title={data ? `会話: ${data.conversation.title}` : "会話"} side="main" active>
+    <Frame title={title ?? (data ? `会話: ${data.conversation.title}` : "会話")} side="main" active>
+      {tabs}
       <Buffer
         side="main"
         viewName="conversation"
         posKey={positionKey ?? `/conversations/${session.id}:main`}
         lines={loading}
         marks={marks}
+        columns={columns}
         followTail
         scrollPastEnd
         restorePosition={
@@ -52,6 +73,7 @@ export function ConversationPage({
           (!openAtTail && (session.controller.options.restoringPosition === true || !session.recap))
         }
         onReady={(handle) => {
+          session.surround(head, footer);
           session.bind(handle, openAtTail);
           if (recordSeq === undefined) return;
           let record = handle.findSeq(recordSeq, recordLine);

@@ -1,7 +1,14 @@
-export type RightView = { view: string; target: string; parent?: string };
+export type RightView = {
+  view: string;
+  target: string;
+  parent?: string;
+  task?: { id: string; conversationId: string };
+};
 export type RightState = { current: RightView | null; stack: RightView[] };
 export const isThreadRight = (view: RightView) =>
   view.view === "thread" || view.view === "stock-thread";
+export const isTimelineView = (view: string): view is "timeline" | "timeline-task" =>
+  view === "timeline" || view === "timeline-task";
 const transient = (view: RightView) =>
   view.view === "closing" || view.view === "backups" || (isThreadRight(view) && !view.parent);
 const sameView = (a: RightView, b: RightView) =>

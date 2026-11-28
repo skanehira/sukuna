@@ -4,10 +4,12 @@ import { CommandRetry } from "../../buffer/commands";
 import type { ActionInfo } from "../../buffer/keymap/registry";
 import { canPlaceCursor } from "../../buffer/no-cursor";
 import type { LineInfo } from "../../buffer/line";
+import { isTimelineView } from "../../buffer/right-window";
 import type { ConversationSession } from "../conversation/session";
 import type { Event, Snapshot } from "../conversation/types";
 import { ConversationApiError } from "../conversation/api";
 import { eventLines } from "../conversation/lines";
+import { parseRoute } from "../routes";
 import type { RecapApi } from "./api";
 import { recapAction, recapActions, recapCommands, recapItemActions } from "./keymap";
 import { openPosition } from "./open-position";
@@ -127,8 +129,17 @@ export class RecapSession {
     }
     this.tracking.open(this.conversation.receivedThrough());
     this.tracking.cursor(this.cursorSeq());
-    const right = this.conversation.controller.right.current?.view;
-    if (this.position.recent && right !== "thread" && right !== "conversation-switch")
+    const { controller } = this.conversation;
+    const right = controller.right.current;
+    const route = parseRoute(controller.options.url ?? "/");
+    const issueTimeline =
+      right && isTimelineView(right.view) && route.kind === "issue" && right.target === route.id;
+    if (
+      this.position.recent &&
+      !issueTimeline &&
+      right?.view !== "thread" &&
+      right?.view !== "conversation-switch"
+    )
       void this.open("recent", false);
   }
   private findLine(seq: number | null, lines = this.conversation.bodyLines()): number | null {

@@ -53,7 +53,7 @@ function projectLines(data: OverviewResponse, now: number, store: InboxStore): L
           row.lastActivityAt,
           row.unread,
           now,
-          `/issues/${encodeURIComponent(row.id)}${state === "draft" ? "/edit" : ""}`,
+          `/issues/${encodeURIComponent(row.id)}${state === "draft" ? "/edit" : row.activity ? "?tail=1" : ""}`,
         ),
       ),
     );
@@ -90,16 +90,19 @@ export function ProjectPage({
   id,
   controller,
   withdraw,
+  onProjectShown,
 }: {
   store: InboxStore;
   id: string;
   controller: BufferController;
   withdraw: Withdraw;
+  onProjectShown?: (id: string) => void;
 }) {
   const resource = store.overview(id);
   const state = useSyncExternalStore(resource.subscribe, resource.snapshot);
   const data = state.data;
   useEffect(() => {
+    if (data) onProjectShown?.(data.project.id);
     const rows = data?.issueSections.flatMap((section) => section.rows) ?? [];
     const current = () => rows.find((row) => row.key === controller.currentLine()?.id);
     const removers = [
@@ -166,7 +169,7 @@ export function ProjectPage({
       removers.forEach((remove) => remove());
       controller.setHints("project", []);
     };
-  }, [data, store, id, controller, withdraw]);
+  }, [data, store, id, controller, withdraw, onProjectShown]);
   const missing = state.error?.code === "not_found";
   return (
     <Frame
