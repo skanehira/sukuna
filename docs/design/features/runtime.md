@@ -99,7 +99,7 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 | `toc_entries` の `title`・`start_seq` の修正 | 画面のサーバー | 開発者が目次を直す (`features/recap.md`) |
 | `conversations` の `last_read_seq`、`last_position`、`closed_at` | 画面のサーバー | 開発者の操作で決まる |
 | `conversation_events` | ランナー | 記録の `seq` を 1 か所で振る |
-| `queued_instructions` の追加 (`stock_item_id` を含む) と、届けたときの削除 | ランナー | 預けるか届けるかは、ランナーだけが知る AI の状態で決まる |
+| `queued_instructions` の追加 (`stock_item_id` と `delivery_context` を含む) と、届けたときの削除 | ランナー | 預けるか届けるかは、ランナーだけが知る AI の状態で決まる |
 | `queued_instructions` の編集と取り消し | 画面のサーバー | 開発者の操作。届けた行は残っていないので、409 になる |
 | `pending_answers` の保存 | 画面のサーバー | 開発者の操作 |
 | `pending_answers` の削除、`questions` の `answered` | ランナー | 回答を送ったときに書く。待ちの消えた選択式の質問は、回答以外の指示 (`origin` が `answer_text` 以外) を届けて AI が次の応答を始めたときに書く (BR-090、`features/conversation.md`) |
@@ -135,7 +135,7 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 - `stock_items` の `state` と `thread_conversation_id` (`features/stock-thread.md`)
 - `settings` の `runner-stock-send:` で始まるキー。ランナーが受付結果を、画面のサーバーが残りの受付の取消しを書く
 - 下書きから精査待ちへ移す `issues` (`features/issue.md`)
-- `drafts` の `text`、`images`、`updated_at`、`updated_by`、`timeline_anchors`。ランナーは、差し戻しの受付では、本文・更新時刻・更新元が送った版と一致し、送った版と保存した版の両方に画像がない下書きだけを空にする。取り消した指示の復帰では、画面から送られた版と保存済みの版が一致する下書きだけを更新する
+- `drafts` の `text`、`images`、`updated_at`、`updated_by`、`timeline_anchors`。ランナーは、差し戻しの受付では、本文・更新時刻・更新元・相談の範囲を送った版と照合し、画像がない下書きだけを空にする。取り消した指示の復帰では、画面から送られた版と保存済みの版が一致する下書きだけを更新する
 - `toc_entries` の `title` と `start_seq`。ランナーが行を足し、画面のサーバーが開発者の修正を書く (`features/recap.md`)
 - `conversations` の `cwd` と `worktree_id`。worktree の削除では、画面のサーバーが `cwd` が消した worktree のパスのときだけ書く。merge のあとの直しなど、自動フローが worktree を用意したときと、開発者が作業場所を切り替えたときはランナーが書く。切り替えでは、読んだときの `cwd` を条件に付ける (`features/worktree-terminal.md`、`features/implementation-flow.md`)
 - `settings` の `runner-workspace-switch:` で始まるキー。ランナーは確定結果を、画面のサーバーは未確定の要求の取消しを書く。どちらも SQLite の書き込みロック内で同じ要求の行が無いことを確かめてから追加する。この名前で始まる期限切れの行だけを掃除する
@@ -156,7 +156,7 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 | メソッド | パス | 用途 | 主な入力 | 主な出力 |
 | --- | --- | --- | --- | --- |
 | POST | `/conversations` | 会話を始める | `project_id`、`kind`、`cwd`、`worktree_id?`、`issue_id?`、`parent_conversation_id?`、`title`、`message?` | `conversation_id` |
-| POST | `/conversations/:id/messages` | 指示を送る | `text`、`images`、`interrupt`、`client_id`、`origin`、`restore_draft?` | `result` (`delivered` / `queued`)、`queued_id?`、`seq?` |
+| POST | `/conversations/:id/messages` | 指示を送る | `text`、`images`、`interrupt`、`client_id`、`origin`、`restore_draft?`、`stock_ids?` | `result` (`delivered` / `queued`)、`queued_id?`、`seq?` |
 | POST | `/conversations/:id/queue/deliver` | 残った届く前の指示をいま届ける (BR-088) | なし | `seq` |
 | POST | `/conversations/:id/stop` | AI を止める | なし | `run_state` |
 | POST | `/conversations/:id/resume` | 止まった作業を再開する | なし | `seq` |
@@ -176,7 +176,7 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 | POST | `/flow/issues/:id/reopen` | 再開する (`features/issue.md`) | なし | `issue` |
 | PATCH | `/flow/issues/:id` | 確定した issue の親・依存・優先度・merge 前の確認を直す (`features/issue.md`) | `parent_number?`、`depends_on?`、`priority?`、`confirm_before_merge?` | `issue` |
 | POST | `/flow/issues/:id/design/approve` | 設計を承認し、反映を始める (`features/design-review.md`) | `head_commit` | `status` |
-| POST | `/flow/issues/:id/design/reject` | メニューから設計を差し戻す (`features/design-review.md`) | `text` | `delivered_stock_ids` |
+| POST | `/flow/issues/:id/design/reject` | メニューから設計を差し戻す (`features/design-review.md`) | `text`、`draft?` | `delivered_stock_ids` |
 | POST | `/flow/issues/:id/pr/allow-merge` | merge を許可し、実装の会話に merge の指示を届ける (`features/pr-review.md`) | `head_sha` | `state` |
 | POST | `/flow/terminal-cleanup` | 実装 worktree の管理ターミナルの終了依頼を受理し、処理結果を返す | `request_id`、`worktree_id`、`directory_key`、`step` (`claim` / `closed` / `defer`) | `accepted` |
 | POST | `/flow/projects/:id/stop` | プロジェクトの解除の前に、そのプロジェクトの会話を止める (`features/project-settings.md`「解除」) | なし | `stopped_conversation_ids` |
@@ -200,7 +200,7 @@ AI を動かすランナーと画面のサーバーを別々に動かし、AI �
 - `/flow/projects/:id/stop` は、作業中と回答待ち・許可待ちの会話を止める。作業中でない `usage_limited` と `stopped` (`restarted`) の会話も、`stopped` (`user`) にし、利用枠の戻りを待つタイマーを外す
 - `client_id` は、画面が送信ごとに作る ULID である (API の `clientMessageId`)。二重の送信の判定は、ランナーのこの操作の 1 か所だけで行う
 - 同じ会話で、同じ `client_id` が 10 分以内に届いていたら、ランナーは何もせずに前の結果を返す。届いていたかは、届く前の指示の `client_id` と、記録の `user_message` の `client_receipts` で調べる
-- 預けた指示は、`client_id` を `queued_instructions.client_id` に持つ。まとめて届けるときは、`user_message.client_receipts` に各指示の `client_id`、受付時刻、初回の結果を対応付けて残す。預けた指示には元の `queued_id` も保存する。番号のない指示は本文に含め、対応付けには含めない。`client_ids` と `queued_ids` は、まとめた指示の番号の一覧として残す
+- 預けた指示は、`client_id` を `queued_instructions.client_id` に持つ。まとめて届けるときは、`user_message.client_receipts` に各指示の `client_id`、受付時刻、初回の結果を対応付けて残す。預けた指示の `client_receipts` には元の `queued_id` も入れる。`client_ids` と `queued_ids` は、まとめた指示の番号の一覧である。`queued_ids` には、`client_id` がない預かりや、配達できず預かりに戻した元の行の ID も残す
 - 自動フローは同じランナーの中で動くので、これらの操作をソケットを通さずに直接呼ぶ
 - 会話のモジュールは、自動フローだけが呼ぶ口として、段階の会話に止まった記録を書く操作を持つ。`stopped` の記録と `run_state` を 1 つのトランザクションで書く
 - 段階の worktree を作れなかったとき、`flow` はこの口で `stopped` (`reason` は `error`) を書き、会話を `failed` にする。`detail` には worktree を作れなかったことを書く (`features/issue-flow.md`)
