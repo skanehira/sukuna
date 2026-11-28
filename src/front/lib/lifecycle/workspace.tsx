@@ -168,6 +168,7 @@ export function createLifecycleWorkspace({
             api={conversations}
             subscribe={subscribe}
             showConversation={showConversation}
+            openExternal={openExternal}
           />
         );
       }

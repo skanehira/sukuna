@@ -87,6 +87,7 @@ export async function startRunnerApp(options: {
         return project?.removedAt === null ? project : undefined;
       },
     });
+    const imageFiles = createImageFiles(env.directories.data);
     const runtime = new ConversationRuntime({
       canResume: (conversation) =>
         Promise.resolve(
@@ -97,7 +98,8 @@ export async function startRunnerApp(options: {
         ),
       store: new SqliteConversationStore(database.sqlite, database.directories.state),
       agent,
-      images: createImageFiles(env.directories.data),
+      images: imageFiles,
+      toolImages: imageFiles,
       clock,
       commands: new CommandCache(),
       id: ulid,

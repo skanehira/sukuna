@@ -41,7 +41,7 @@ import {
   type CancelledDraft,
 } from "./queue-undo";
 import { ConversationApiError } from "./api";
-import { eventLines, stoppedText } from "./lines";
+import { eventLines, stoppedText, type ConversationLine } from "./lines";
 import type {
   ConversationApi,
   DraftContent,
@@ -56,6 +56,7 @@ export type ConversationEnvironment = {
   id(): string;
   now(): number;
   schedule(callback: () => void, ms: number): () => void;
+  openExternal?(url: string): void;
 };
 type QuestionEvent = Extract<Event, { type: "question" }>;
 type QuestionDisplay = "pending" | "answered" | "retired";
@@ -480,11 +481,19 @@ export class ConversationSession {
         ? []
         : event.type === "diff"
           ? this.diffLines(event, data.conversation.cwd, false)
-          : eventLines(event, this.id, data.conversation.cwd),
+          : this.withImageOpeners(eventLines(event, this.id, data.conversation.cwd)),
       event.type === "assistant_text" || event.type === "turn_end",
     );
     this.refreshTail();
     this.emit();
+  }
+  private withImageOpeners(lines: ConversationLine[]): LineInfo[] {
+    const env = this.env;
+    if (!env.openExternal) return lines;
+    return lines.map((line) => {
+      const image = line.image;
+      return image ? { ...line, open: () => env.openExternal?.(image.url) } : line;
+    });
   }
   private archiveQuestion(answers?: Answers, chronological = false): void {
     const question = this.question;

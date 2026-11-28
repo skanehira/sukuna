@@ -26,6 +26,7 @@ import { saveAnswers, sendAnswers } from "../usecase/answers";
 import { validTimelineAnchors } from "../../../../shared/progress/draft";
 import { editQueue, cancelQueue } from "../usecase/edit-queue";
 import { uploadImage } from "../usecase/upload-image";
+import { readImage } from "../usecase/read-image";
 import { resumeConversation } from "../usecase/resume";
 import type { Context } from "hono";
 const invalid = { code: "invalid_input", message: "入力を確認してください。" };
@@ -238,5 +239,16 @@ export function createConversationRoutes(
       201,
     ),
   );
+  app.get("/conversations/:id/images/:imageId", (c) => {
+    const image = readImage(c.req.param("id"), c.req.param("imageId"), deps);
+    return image.isErr()
+      ? respond(c, image)
+      : new Response(image.value.data, {
+          headers: {
+            "content-type": image.value.mediaType,
+            "cache-control": "private, max-age=31536000, immutable",
+          },
+        });
+  });
   return app;
 }

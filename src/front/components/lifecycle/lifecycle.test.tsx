@@ -536,6 +536,54 @@ it("issue の下のスレッドは元の会話を特定し、右に記録を出�
   }
 });
 
+it("（US-014）右のスレッドの記録でもツールの結果の画像を行の下に出し、行で Enter を押すと元の大きさの画像を開く", async () => {
+  const url = "/api/conversations/t1/images/01J0000000000000000000000A";
+  const app = mount("/conversations/c1?thread=t1", (request) =>
+    request.path.startsWith("/api/conversations/t1/events?")
+      ? Response.json({
+          events: [
+            {
+              seq: 1,
+              createdAt: 1,
+              type: "tool_use",
+              payload: {
+                tool_use_id: "t",
+                name: "take_screenshot",
+                input: {},
+                parent_tool_use_id: null,
+              },
+            },
+            {
+              seq: 2,
+              createdAt: 1,
+              type: "tool_result",
+              payload: {
+                tool_use_id: "t",
+                is_error: false,
+                content: "Took a screenshot.",
+                truncated: false,
+                bytes: 18,
+                images: [{ id: "01J0000000000000000000000A", media_type: "image/png" }],
+              },
+            },
+          ],
+          lastSeq: 2,
+          hasMore: false,
+        })
+      : undefined,
+  );
+  try {
+    const threadTitle = "スレッド: 在庫の質問";
+    await find(threadTitle, "画像 1 / 1 (Enter で元の大きさで開く)");
+    const preview = screen.getByRole("region", { name: threadTitle });
+    expect(within(preview).getByRole("img", { name: "画像 1 / 1" })).toHaveAttribute("src", url);
+    key(choose(threadTitle, "画像 1 / 1 (Enter で元の大きさで開く)"), "Enter");
+    await waitFor(() => expect(app.openExternal.mock.calls).toEqual([[url]]));
+  } finally {
+    app.close();
+  }
+});
+
 it("検索を開いたまま inbox の配信だけを受けて結果を読み直す", async () => {
   let changed = false;
   const app = mount("/search?q=在庫", (request) => {

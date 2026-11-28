@@ -63,6 +63,10 @@ export type ImageStorage = {
     mediaType: string,
     data: Uint8Array,
   ): Result<void, ConversationError>;
+  read(
+    conversationId: string,
+    imageId: string,
+  ): Result<{ mediaType: string; data: Uint8Array<ArrayBuffer> }, ConversationError>;
   exists(path: string): boolean;
 };
 export type ConversationDependencies = {
@@ -81,4 +85,8 @@ export const emptyDraft = (draft: ConversationDraft | null): ConversationDraft |
 export const missingConversation: ConversationError = {
   code: "not_found",
   message: "会話が見つかりません。",
+};
+export const missingImage: ConversationError = {
+  code: "not_found",
+  message: "画像が見つかりません。",
 };

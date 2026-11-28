@@ -5,6 +5,8 @@ const RESULT_HEAD = "  ⎿  ";
 const RESULT_INDENT = "     ";
 const RESULT_ROWS = 3;
 
+export type ConversationLine = LineInfo & { image?: { url: string; alt: string } };
+
 function record(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
@@ -80,7 +82,7 @@ export function eventLines(
   cwd: string,
   result: string | null = null,
   expanded = false,
-): LineInfo[] {
+): ConversationLine[] {
   const { seq } = event;
   const line = (kind: LineInfo["kind"], text: string, extra: Partial<LineInfo> = {}): LineInfo => ({
     kind,
@@ -126,9 +128,37 @@ export function eventLines(
       ];
     }
     case "tool_result": {
-      const { content, truncated } = event.payload;
+      const { content, truncated, images = [], omitted_images: omitted = 0 } = event.payload;
+      const pictures: ConversationLine[] = [
+        ...images.map((image, index) => {
+          const alt = `画像 ${index + 1} / ${images.length}`;
+          return {
+            ...line("tool", `${RESULT_INDENT}${alt} (Enter で元の大きさで開く)`),
+            image: {
+              url: `/api/conversations/${encodeURIComponent(id)}/images/${encodeURIComponent(image.id)}`,
+              alt,
+            },
+          };
+        }),
+        ...(omitted
+          ? [line("tool", `${RESULT_INDENT}画像 ${omitted} 件は保存できなかったため表示できません`)]
+          : []),
+      ];
       const output = content.replace(/\n+$/, "");
-      if (output === "") return [line("tool", `${RESULT_HEAD}(出力なし)`)];
+      if (output === "")
+        return [
+          line(
+            "tool",
+            `${RESULT_HEAD}${
+              images.length
+                ? `画像 ${images.length} 件`
+                : omitted
+                  ? `画像 ${omitted} 件 (表示できません)`
+                  : "(出力なし)"
+            }`,
+          ),
+          ...pictures,
+        ];
       const rows = output.split("\n");
       const shown = rows
         .slice(0, RESULT_ROWS)
@@ -137,8 +167,12 @@ export function eventLines(
         );
       const rest = rows.length - RESULT_ROWS;
       return rest > 0
-        ? [...shown, line("tool", `${RESULT_INDENT}… +${rest} 行${truncated ? "以上" : ""}`)]
-        : shown;
+        ? [
+            ...shown,
+            line("tool", `${RESULT_INDENT}… +${rest} 行${truncated ? "以上" : ""}`),
+            ...pictures,
+          ]
+        : [...shown, ...pictures];
     }
     case "diff": {
       let seqLine = 0;

@@ -97,6 +97,8 @@ export type AgentOutput =
       toolUseId: string;
       isError: boolean;
       content: string;
+      images: { mediaType: string; data: Buffer }[];
+      omittedImages: number;
       diff: DiffOutput | null;
       parentToolUseId: string | null;
     }

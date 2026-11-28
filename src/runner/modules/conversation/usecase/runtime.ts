@@ -40,7 +40,7 @@ import type {
   PermissionRequest,
   PermissionDecision,
 } from "../domain/agent-port";
-import type { ImagePort, LoadedImage } from "../domain/image-port";
+import type { ImagePort, ImageWritePort, LoadedImage } from "../domain/image-port";
 import type { Clock } from "../domain/clock";
 import type {
   AcceptedInstruction,
@@ -50,7 +50,7 @@ import type {
   SendResult,
 } from "../domain/conversation-store";
 import { classifyStop, type RateLimit, type StopIntent } from "../domain/stop-reason";
-import { outputEvents } from "../domain/event-mapping";
+import { outputEvents, toolResultEvents } from "../domain/event-mapping";
 import {
   startsAssistantResponse,
   type ConversationEvent,
@@ -94,6 +94,7 @@ export type RuntimeOptions = {
   notice: (conversationId: string, message: string, level: "info" | "error") => void;
   tools?: AppToolRegistry;
   commands?: CommandCache;
+  toolImages?: ImageWritePort;
 };
 export type SendInput = {
   text: string;
@@ -1077,7 +1078,24 @@ export class ConversationRuntime {
         });
       return;
     }
-    this.recordAssistantOutput(id, execution, outputEvents(output));
+    this.recordAssistantOutput(
+      id,
+      execution,
+      output.kind === "tool_result"
+        ? toolResultEvents(output, (image) =>
+            this.store.recorded(id, output.uuid) ? null : this.writeToolImage(id, image),
+          )
+        : outputEvents(output),
+    );
+  }
+  private writeToolImage(id: string, image: { mediaType: string; data: Buffer }): string | null {
+    const writer = this.options.toolImages;
+    if (!writer) return null;
+    const imageId = this.options.id();
+    const written = writer.write(id, imageId, image.mediaType, image.data);
+    if (written.isOk()) return imageId;
+    this.log(id, "ツールの結果の画像を保存できませんでした。", written.error.message);
+    return null;
   }
   private recordAssistantOutput(id: string, execution: Execution, events: ConversationEvent[]) {
     if (

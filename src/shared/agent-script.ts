@@ -21,6 +21,7 @@ const stepSchema = z.union([
         content: z.string().optional(),
       })
       .optional(),
+    images: z.array(z.object({ media_type: z.string(), data: z.string() })).default([]),
   }),
   z.object({ shell: z.string() }),
   z.object({ ask: questionsSchema }),

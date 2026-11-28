@@ -112,6 +112,8 @@ export const eventSchema = z.discriminatedUnion("type", [
       content: z.string(),
       truncated: z.boolean(),
       bytes: z.number(),
+      images: z.array(z.object({ id: z.string(), media_type: z.string() })).optional(),
+      omitted_images: z.number().int().positive().optional(),
     }),
   ),
   event("diff", diffSchema),

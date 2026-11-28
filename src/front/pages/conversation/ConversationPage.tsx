@@ -8,6 +8,7 @@ import { Frame } from "../../buffer/Frame";
 import type { ColumnDef, LineInfo } from "../../buffer/line";
 import type { ConversationSession } from "../../lib/conversation/session";
 import type { WorkMonitor } from "../../lib/conversation/work-monitor";
+import { toolImageDisplay } from "./tool-images";
 
 const empty: LineInfo[] = [];
 
@@ -67,6 +68,7 @@ export function ConversationPage({
         viewName="conversation"
         posKey={positionKey ?? `/conversations/${session.id}:main`}
         lines={loading}
+        display={toolImageDisplay}
         marks={marks}
         columns={columns}
         followTail

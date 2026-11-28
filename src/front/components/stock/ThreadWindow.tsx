@@ -11,6 +11,7 @@ import { ConversationApiError } from "../../lib/conversation/api";
 import type { ConversationSession } from "../../lib/conversation/session";
 import type { ConversationApi } from "../../lib/conversation/types";
 import { completedProposal } from "../../lib/stock/proposal";
+import { toolImageDisplay } from "../../pages/conversation/tool-images";
 import type { StockSession } from "../../lib/stock/session";
 import { FileBuffer } from "../files/FileBuffer";
 import type { LifecycleFeed } from "../lifecycle/use-lifecycle";
@@ -339,6 +340,7 @@ export function ThreadWindow({
         viewName={stockThreadView}
         columns={menuColumns}
         lines={lines}
+        display={toolImageDisplay}
         ready={ready || error !== undefined}
       />
     </Frame>

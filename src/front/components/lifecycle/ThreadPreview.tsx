@@ -8,6 +8,7 @@ import { ConversationApiError } from "../../lib/conversation/api";
 import { eventLines } from "../../lib/conversation/lines";
 import type { ConversationApi, Event } from "../../lib/conversation/types";
 import { singleLine } from "../../lib/lifecycle/rows";
+import { toolImageDisplay } from "../../pages/conversation/tool-images";
 import { LifecycleBuffer } from "./LifecycleBuffer";
 import { useLifecycleData, type LifecycleFeed } from "./use-lifecycle";
 
@@ -17,7 +18,12 @@ function threadChanged(message: ServerMessage) {
   return message.type === "event" || message.type === "state" || message.type === "changed";
 }
 
-async function loadThread(api: ConversationApi, id: string, parentId: string) {
+async function loadThread(
+  api: ConversationApi,
+  id: string,
+  parentId: string,
+  openExternal: (url: string) => void,
+) {
   const { conversation } = await api.get(id);
   if (conversation.kind !== "thread" || conversation.parentConversationId !== parentId)
     throw new ConversationApiError(404, "not_found", "この会話のスレッドが見つかりません");
@@ -31,7 +37,12 @@ async function loadThread(api: ConversationApi, id: string, parentId: string) {
     if (next <= after) throw new Error("スレッドの続きが読み込めませんでした");
     after = next;
   }
-  const lines = events.flatMap((event) => eventLines(event, id, conversation.cwd, null, false));
+  const lines: LineInfo[] = events.flatMap((event) =>
+    eventLines(event, id, conversation.cwd, null, false).map((line) => {
+      const image = line.image;
+      return image ? { ...line, open: () => openExternal(image.url) } : line;
+    }),
+  );
   return { title: conversation.title, lines, lastSeq: events.at(-1)?.seq ?? 0 };
 }
 
@@ -41,16 +52,18 @@ export function ThreadPreview({
   parentId,
   subscribe,
   showConversation,
+  openExternal,
 }: {
   api: ConversationApi;
   id: string;
   parentId: string;
   subscribe: LifecycleFeed;
   showConversation: (id: string) => () => void;
+  openExternal: (url: string) => void;
 }) {
   const { data, error } = useLifecycleData(
     ["thread-preview", api, id, parentId],
-    () => loadThread(api, id, parentId),
+    () => loadThread(api, id, parentId, openExternal),
     subscribe,
     "conversation:" + id,
     threadChanged,
@@ -77,7 +90,13 @@ export function ThreadPreview({
   }, [thread, error]);
   return (
     <Frame title={thread ? "スレッド: " + thread.title : "スレッド"} side="right">
-      <LifecycleBuffer side="right" viewName={threadView} lines={lines} temporary={!displayed} />
+      <LifecycleBuffer
+        side="right"
+        viewName={threadView}
+        lines={lines}
+        display={toolImageDisplay}
+        temporary={!displayed}
+      />
     </Frame>
   );
 }

@@ -115,6 +115,14 @@ export class ScriptedAgent implements AgentPort {
             toolUseId: id,
             isError,
             content,
+            images:
+              "images" in step
+                ? step.images.map((image) => ({
+                    mediaType: image.media_type,
+                    data: Buffer.from(image.data, "base64"),
+                  }))
+                : [],
+            omittedImages: 0,
             diff: "diff" in step ? (step.diff ?? null) : null,
             parentToolUseId: null,
           });

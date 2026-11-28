@@ -106,3 +106,61 @@ test.prop([
       : shown,
   );
 });
+
+test.prop([
+  fc.array(
+    fc.string().filter((text) => text.trim() !== "" && !text.includes("\n")),
+    { minLength: 1, maxLength: 5 },
+  ),
+  fc.uniqueArray(fc.stringMatching(/^[0-9A-HJKMNP-TV-Z]{26}$/), { maxLength: 20 }),
+  fc.nat({ max: 30 }),
+])(
+  "ツールの結果の文の行の後に、保存できた画像ごとに k / n の行を並べ、保存できなかった画像があれば最後にその数の行を出す",
+  (text, images, omitted) => {
+    const payload = {
+      tool_use_id: "tool",
+      is_error: false,
+      content: text.join("\n"),
+      truncated: false,
+      bytes: 0,
+    };
+    const event = (extra: object): Event => ({
+      seq: 9,
+      createdAt: 0,
+      type: "tool_result",
+      payload: { ...payload, ...extra },
+    });
+    expect(
+      eventLines(
+        event({
+          ...(images.length
+            ? { images: images.map((id) => ({ id, media_type: "image/png" })) }
+            : {}),
+          ...(omitted ? { omitted_images: omitted } : {}),
+        }),
+        "c1",
+        "/project",
+      ),
+    ).toEqual([
+      ...eventLines(event({}), "c1", "/project"),
+      ...images.map((id, index) => ({
+        kind: "tool",
+        text: `     画像 ${index + 1} / ${images.length} (Enter で元の大きさで開く)`,
+        seq: 9,
+        image: {
+          url: `/api/conversations/c1/images/${id}`,
+          alt: `画像 ${index + 1} / ${images.length}`,
+        },
+      })),
+      ...(omitted
+        ? [
+            {
+              kind: "tool",
+              text: `     画像 ${omitted} 件は保存できなかったため表示できません`,
+              seq: 9,
+            },
+          ]
+        : []),
+    ]);
+  },
+);

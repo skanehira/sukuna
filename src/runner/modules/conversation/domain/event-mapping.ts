@@ -14,6 +14,34 @@ function cutInput(value: unknown): unknown {
     return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, cutInput(v)]));
   return value;
 }
+type ToolResultOutput = Extract<AgentOutput, { kind: "tool_result" }>;
+const toolImageBytes = 5 * 1024 * 1024;
+const toolImagesPerResult = 20;
+export function toolResultEvents(
+  output: ToolResultOutput,
+  save: (image: ToolResultOutput["images"][number]) => string | null,
+): ConversationEvent[] {
+  const images: { id: string; media_type: string }[] = [];
+  let omitted = output.omittedImages;
+  output.images.forEach((image, index) => {
+    const id =
+      index < toolImagesPerResult && image.data.length <= toolImageBytes ? save(image) : null;
+    if (id === null) omitted++;
+    else images.push({ id, media_type: image.mediaType });
+  });
+  return outputEvents(output).map((event) =>
+    event.type === "tool_result"
+      ? {
+          ...event,
+          payload: {
+            ...event.payload,
+            ...(images.length ? { images } : {}),
+            ...(omitted ? { omitted_images: omitted } : {}),
+          },
+        }
+      : event,
+  );
+}
 export function outputEvents(output: AgentOutput): ConversationEvent[] {
   switch (output.kind) {
     case "assistant_text":
