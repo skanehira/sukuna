@@ -524,7 +524,7 @@ const THEME = (side) => EditorView.theme({
   ".cm-line.app-you": { backgroundColor: "var(--raised)", boxShadow: "inset 3px 0 0 var(--accent)", marginRight: "16px" },
   ".cm-line.app-ai": { boxShadow: "inset 3px 0 0 color-mix(in srgb, var(--ink) 28%, transparent)" },
   ".cm-line.app-you.app-turn-a": { borderTopRightRadius: "8px" }, ".cm-line.app-you.app-turn-z": { borderBottomRightRadius: "8px" },
-  ".cm-line.app-shot": { paddingBottom: "calc(9rem + 8px)", backgroundImage: `url("${SHOTS[0]}")`, backgroundSize: "16rem 9rem", backgroundRepeat: "no-repeat", backgroundPosition: "16px calc(100% - 4px)" },
+  ".cm-line.app-shot": { paddingBottom: "calc(16rem + 8px)", backgroundImage: `url("${SHOTS[0]}")`, backgroundSize: "auto 16rem", backgroundRepeat: "no-repeat", backgroundPosition: "16px calc(100% - 4px)" },
   ".cm-line.app-skel": { backgroundImage: "linear-gradient(var(--raised), var(--raised))", backgroundSize: "60% 12px", backgroundRepeat: "no-repeat", backgroundPosition: "8px center", animation: "pulse 2s cubic-bezier(0.4,0,0.6,1) infinite" },
   ".cm-gutters": { backgroundColor: "transparent", border: "none", color: "var(--muted)", fontFamily: MONO, fontSize: "12px" },
   ".app-num .cm-gutterElement": { width: "2.5rem", textAlign: "right", paddingRight: "8px" }, ".app-num .cur": { color: "var(--ink)" },
@@ -648,7 +648,7 @@ function PromptEditor({ label, initial, initialImages, imageSel, working, stocki
       {images > 0 && <div aria-label="貼った画像" data-sketch-change="154:縮小と番号" className="mt-1 flex flex-wrap gap-2">{Array.from({ length: images }, (_, n) => <div key={n} {...(n === imageSel ? { "data-sketch-change": "154:選んだ画像" } : {})} className={`relative h-[80px] w-[142px] overflow-hidden rounded bg-surface ${n === imageSel ? "border-2 border-accent" : "border border-line"}`}><img src={SHOTS[n % SHOTS.length]} alt={`貼った画像 ${n + 1}`} className="h-full w-full object-cover" /><span className="absolute left-0 top-0 rounded-br bg-raised px-1 font-mono text-[11px]">{n + 1}</span></div>)}</div>}
       <div className="text-[12px] text-muted mt-1 flex flex-wrap gap-x-4 items-center">
         {pmode === "IMAGE" ? <Hint items={[["h l", "選ぶ"], ["d", "外す"], ["Enter", "開く"], ["Ctrl+w k", "本文へ"]]} /> : pmode === "INSERT" ? <Hint items={[["Esc", "Normal へ (" + verb.split(" ")[0] + "のは Normal から)"], ...(!plain ? [["Cmd+V", "貼り付け"]] : [])]} /> : <Hint items={[["Enter", verb], ...(working && !stocking ? [["Alt+Enter", "AI を止めてすぐ送る"]] : []), ["Esc", "閉じる (書きかけは残る)"]]} />}
-        {!plain && <Hint items={[["/", "スキル"]]} />}
+        {!plain && pmode !== "IMAGE" && <Hint items={[["/", "スキル"]]} />}
         {images > 0 && <span className="text-accent">画像 {images} 件 (送信時に一緒に送る)</span>}
         {images > 0 && pmode === "NORMAL" && <span>Ctrl+w j 画像を選ぶ</span>}
         {!plain && <button type="button" tabIndex={-1} className="underline" onClick={() => setImages((n) => n + 1)}>画像を貼る (見本)</button>}
@@ -1078,7 +1078,7 @@ function PC() {
   const tabHint = v.s === "issue" ? [["Ctrl+l", `${TABS[((v.tab || 0) + 1) % TABS.length]}へ`], ["Ctrl+h", `${TABS[((v.tab || 0) + TABS.length - 1) % TABS.length]}へ`]] : [];
   const hints = confirm ? [["y", "実行する"], ["n", "やめる"]]
     : mode === "TERMINAL" ? [["Ctrl+]", "Normal へ"]]
-    : focus === "prompt" && mode === "IMAGE" ? [["h l", "画像を選ぶ"], ["d", "外す"], ["Ctrl+w k", "本文へ戻る"]]
+    : focus === "prompt" && mode === "IMAGE" ? [["h l", "選ぶ"], ["d", "外す"], ["Enter", "開く"], ["Ctrl+w k", "本文へ"]]
     : focus === "prompt" ? [["Ctrl+w k", "会話へ移る (入力欄は開いたまま)"]]
     : /^VISUAL/.test(mode) ? [["Space q", "選んだ箇所に質問"], ["Space c", "選んだ箇所に指示"], ["y", "コピー"], ["Esc", "やめる"]]
     : hereStock ? [["cc", `この${hereStock.kind}を直す`], ["dd", "取り消す"], ["Space l", "ストックの一覧"], ["Space s a", "全部送る"]]
