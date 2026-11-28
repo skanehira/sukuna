@@ -14,7 +14,7 @@ const provenance = z.object({
     .array(z.object({ path: z.string(), key: z.string(), stagedPath: z.string().optional() }))
     .default([]),
 });
-const provenanceKey = (id: string) => `implementation-worktree:${id}`;
+export const provenanceKey = (id: string) => `implementation-worktree:${id}`;
 
 export function createImplementationTrees(database: OpenedDatabase): ImplementationTrees {
   const { db } = database;
@@ -42,12 +42,14 @@ export function createImplementationTrees(database: OpenedDatabase): Implementat
         ),
       )
       .all()
-      .flatMap(({ id, projectId, path, branch, issueId, portSlot }) =>
-        issueId && /^sukuna\/issue-\d+(?:-\d+)?$/.test(branch)
-          ? [{ id, projectId, issueId, path, branch, portSlot: portSlot ?? 0, ...read(id) }]
-          : [],
-      );
-  const list = (projectId: string) => rows(projectId);
+      .flatMap(({ id, projectId, path, branch, issueId, portSlot, branchCreated }) => {
+        if (!issueId || !/^sukuna\/(?:issue|design)-\d+(?:-\d+)?$/.test(branch)) return [];
+        const proof = read(id);
+        if (branch.startsWith("sukuna/design-") && (!branchCreated || !proof.identity)) return [];
+        return [{ id, projectId, issueId, path, branch, portSlot: portSlot ?? 0, ...proof }];
+      });
+  const list = (projectId: string) =>
+    rows(projectId).filter((tree) => tree.branch.startsWith("sukuna/issue-"));
   const resetLocation: ImplementationTrees["resetLocation"] = (tree, cwd) => {
     db.update(conversations)
       .set({ cwd, worktreeId: null })
@@ -63,6 +65,11 @@ export function createImplementationTrees(database: OpenedDatabase): Implementat
   return {
     activity: createWorktreeActivity(database.sqlite.name),
     list,
+    ownedDesignForCleanup: (projectId, issueId) =>
+      rows(projectId).filter(
+        (tree) => tree.issueId === issueId && tree.branch.startsWith("sukuna/design-"),
+      ),
+    forCleanup: (projectId, id) => rows(projectId).find((tree) => tree.id === id),
     pending: () =>
       rows().filter((tree) => tree.cleanupPath !== null || tree.cleanupLocks.length > 0),
     resetLocation,

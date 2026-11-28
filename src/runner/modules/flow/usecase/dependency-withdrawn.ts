@@ -1,7 +1,25 @@
-import type { FinishWithdrawal, IssueNotice, StopConversationPort } from "../domain/ports";
+import type {
+  FinishWithdrawal,
+  IssueNotice,
+  IssueRepositoryPort,
+  StopConversationPort,
+} from "../domain/ports";
 import { createMoveState, moveStateWithin, type MoveStateDeps } from "./move-state";
 
 class WithdrawalExpired extends Error {}
+class WithdrawalBlocked extends Error {}
+
+export function clearDependencyWithin(
+  repository: IssueRepositoryPort,
+  issueId: string,
+  now: number,
+) {
+  const issue = repository.getIssue(issueId);
+  if (issue?.state !== "stopped" || issue.stopReason !== "dependency_withdrawn") return null;
+  const { stoppedFrom, hasWithdrawnDependencies } = repository.contextOf(issue);
+  if (!stoppedFrom || stoppedFrom === "stopped" || hasWithdrawnDependencies) return null;
+  return moveStateWithin(repository, { issueId, trigger: "dependency_cleared" }, now);
+}
 
 export function createDependencyWithdrawn(
   deps: MoveStateDeps & { conversations: StopConversationPort },
@@ -35,7 +53,8 @@ export function createDependencyWithdrawn(
                 { issueId: dependentId, trigger: "dependency_withdrawn" },
                 now,
               );
-              if (stopped.kind === "moved") notices.push(stopped.notice);
+              if (stopped.kind !== "moved") throw new WithdrawalBlocked();
+              notices.push(stopped.notice);
             }
             for (const id of repository.workingStageConversationIds(dependentId))
               conversations.set(id, "dependency_withdrawn");
@@ -48,6 +67,7 @@ export function createDependencyWithdrawn(
         committed = commit();
       } catch (error) {
         if (error instanceof WithdrawalExpired) return { kind: "caller_cancelled" as const };
+        if (error instanceof WithdrawalBlocked) return { kind: "unchanged" as const };
         throw error;
       }
       if (committed.result.kind !== "moved") return committed.result;

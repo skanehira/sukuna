@@ -306,7 +306,7 @@ issue の項目を直す。送った項目だけを変える。
 - 画面のサーバーは、状態が完了と取り下げ以外であることを確かめてから、ランナーの `POST /flow/issues/:id/withdraw` に渡す
 - 応答: 200 `{ "issue": IssueView, "stoppedDependents": [43, 45] }`。`stoppedDependents` は、状態を停止中として保存した依存元の番号
 - 設計の段階か、設計の worktree が残っている issue では、取り下げを保存したら応答を返す。ランナーは、取り下げ時点の issue と依存元で動いていた番を止めた後、設計の作業場所を確認する。停止や作業場所の確認に失敗したら、お知らせに出す
-- 409 `conflict`: すでに閉じている
+- 409 `conflict`: すでに閉じているか、対象の作業場所が使用中で依存元を停止できない。取り下げと依存元の状態はどちらも変更しない
 - 503 `runner_unavailable`: 何も変えない
 
 ### POST `/api/issues/:id/reopen`

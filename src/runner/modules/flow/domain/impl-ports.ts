@@ -100,6 +100,8 @@ export interface ImplementationGithub {
 export interface ImplementationTrees {
   activity: WorktreeActivity;
   list(projectId: string): ImplementationTree[];
+  ownedDesignForCleanup(projectId: string, issueId: string): ImplementationTree[];
+  forCleanup(projectId: string, id: string): ImplementationTree | undefined;
   reserve(
     tree: Omit<
       ImplementationTree,
@@ -118,6 +120,7 @@ export interface ImplementationTrees {
 }
 
 export interface ImplementationTerminalCleanup {
+  readonly available: boolean;
   close(
     worktreeId: string,
     path: string,

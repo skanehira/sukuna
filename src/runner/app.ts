@@ -281,10 +281,9 @@ export async function startRunnerApp(options: {
         flow: createIssueOpsHandler(
           issueOps,
           (id, stop) =>
-            design.finishWithdrawal(id, async () => {
-              await stop();
-              await flow.finishWithdrawal(id);
-            }),
+            design.finishWithdrawal(id, stop, (withdrawalSeq) =>
+              flow.finishWithdrawal(id, withdrawalSeq),
+            ),
           () => clock.now(),
         )
           .route(

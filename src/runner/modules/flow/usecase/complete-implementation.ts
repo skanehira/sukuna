@@ -41,6 +41,12 @@ const fail = (message: string) =>
   });
 const closed = (record: StageSnapshot) => ["done", "withdrawn"].includes(record.issue.state);
 
+function isKept(event: StageSnapshot["events"][number], worktreeId: string) {
+  if (event.type !== "worktree_kept") return false;
+  const payload = event.payload as { worktreeId?: string; awaitingTerminal?: boolean };
+  return payload?.worktreeId === worktreeId && payload.awaitingTerminal !== true;
+}
+
 export function createImplementationCompletion(deps: {
   repo: StageRepository;
   runtime: ConversationRuntime;
@@ -52,6 +58,8 @@ export function createImplementationCompletion(deps: {
   start: ReturnType<typeof createImplementationStart>;
   logFailure: (error: unknown, issueId: string) => void;
   schedule: (projectId: string) => void;
+  defer: (projectId: string) => void;
+  designCleanupFailed: (id: string, error: unknown) => void;
 }) {
   const { repo, runtime, notices, trees, git, gh, start, logFailure, terminals } = deps;
   const external = new Set<string>();
@@ -134,24 +142,49 @@ export function createImplementationCompletion(deps: {
     );
   }
 
-  async function cleanup(record: StageSnapshot, verifiedHead?: string) {
-    if (!closed(record)) return;
-    const live = trees.list(record.project.id).filter((row) => row.issueId === record.issue.id);
-    for (const tree of live) {
-      if (
-        record.events.some(
-          (event) =>
-            event.type === "worktree_kept" &&
-            (event.payload as { worktreeId?: string }).worktreeId === tree.id,
+  function waitingForWithdrawalStops(record: StageSnapshot) {
+    return (
+      record.issue.state === "withdrawn" &&
+      runtime.store
+        .list()
+        .some(
+          (c) =>
+            c.issueId === record.issue.id &&
+            ["triage", "design", "impl"].includes(c.kind) &&
+            activeStates.includes(c.runState),
         )
-      )
-        continue;
+    );
+  }
+
+  async function cleanup(record: StageSnapshot, verifiedHead?: string) {
+    if (!closed(record) || waitingForWithdrawalStops(record)) return;
+    const { project, issue } = record;
+    const live = trees.list(project.id).filter((row) => row.issueId === issue.id);
+    if (issue.state === "withdrawn" && terminals.available)
+      live.push(...trees.ownedDesignForCleanup(project.id, issue.id));
+    for (const tree of live) {
+      if (record.events.some((event) => isKept(event, tree.id))) continue;
       try {
         await removeOrKeep(record, tree, verifiedHead);
       } catch (error) {
-        logFailure(error, record.issue.id);
+        if (tree.branch.startsWith("sukuna/design-")) deps.designCleanupFailed(issue.id, error);
+        else logFailure(error, issue.id);
       }
     }
+  }
+
+  function finishWithdrawal(id: string, withdrawalSeq: number) {
+    const record = repo.read(id);
+    if (
+      !record ||
+      record.issue.state !== "withdrawn" ||
+      issueHistoryPoint(record.events) !== withdrawalSeq
+    )
+      return "owned" as const;
+    const projectId = record.project.id;
+    deps.schedule(projectId);
+    if (!trees.ownedDesignForCleanup(projectId, id).length) return "legacy" as const;
+    return terminals.available ? ("owned" as const) : ("awaiting_terminal" as const);
   }
 
   async function removeOrKeep(
@@ -159,9 +192,14 @@ export function createImplementationCompletion(deps: {
     tree: ImplementationTree,
     verifiedHead?: string,
   ) {
-    const lease = trees.activity.acquire([tree.id]);
-    if (lease.isErr()) return;
+    if (waitingForWithdrawalStops(record)) return;
     const { project, issue } = record;
+    const design = tree.branch.startsWith("sukuna/design-");
+    const lease = trees.activity.acquire([tree.id]);
+    if (lease.isErr()) {
+      if (design && lease.error.code === "conflict") deps.defer(project.id);
+      return;
+    }
     const stillClosed = () => currentClosed(record);
     const append = (
       type: "worktree_kept" | "worktree_removed",
@@ -173,7 +211,12 @@ export function createImplementationCompletion(deps: {
         if (removed && !trees.detach(tree, project.path, repo.now())) return;
         if (!removed && "path" in payload && payload.path !== tree.path)
           trees.resetLocation(tree, project.path);
-        return repo.append(issue.id, type, { worktreeId: tree.id, path: tree.path, ...payload });
+        return repo.append(issue.id, type, {
+          worktreeId: tree.id,
+          path: tree.path,
+          ...(removed && design ? { retainedBranch: tree.branch } : {}),
+          ...payload,
+        });
       }, lease.value);
       if (event)
         notices.publish({
@@ -189,17 +232,8 @@ export function createImplementationCompletion(deps: {
     const kept = (path = tree.path) =>
       append("worktree_kept", { path, uncommittedFiles, unpushedCommits }, false);
     try {
-      if (!stillClosed() || !trees.list(project.id).some((row) => row.id === tree.id)) return;
-      if (
-        repo
-          .events(issue.id)
-          .some(
-            (event) =>
-              event.type === "worktree_kept" &&
-              (event.payload as { worktreeId?: string }).worktreeId === tree.id,
-          )
-      )
-        return;
+      if (!stillClosed() || !trees.forCleanup(project.id, tree.id)) return;
+      if (repo.events(issue.id).some((event) => isKept(event, tree.id))) return;
       const root = await git.canonical(project.path);
       const identity = tree.identity;
       if (dirname(tree.path) !== join(root, ".claude/worktrees") || !identity) return kept();
@@ -208,14 +242,34 @@ export function createImplementationCompletion(deps: {
       if (!git.owns(physical, identity)) {
         if (tree.cleanupPath && !git.registrationExists(identity))
           return append("worktree_removed", {}, true);
+        if (design && !git.registrationExists(identity)) {
+          const exists = await git.exists(physical);
+          const listed = await git.list(project.path);
+          if (
+            exists.isOk() &&
+            !exists.value &&
+            listed.isOk() &&
+            !listed.value.some((entry) => entry.path === physical)
+          )
+            return append("worktree_removed", {}, true);
+        }
         return kept();
       }
       const listed = await git.list(project.path);
-      if (listed.isErr()) return kept(physical);
+      if (listed.isErr()) {
+        kept(physical);
+        if (design) throw new Error(listed.error.message);
+        return;
+      }
       const entry = listed.value.find((row) => row.path === physical);
       if (!entry || entry.branch !== tree.branch) return kept(physical);
       const status = await git.status(project, entry);
-      if (status.isErr() || status.value.branch !== tree.branch) return kept(physical);
+      if (status.isErr()) {
+        kept(physical);
+        if (design) throw new Error(status.error.message);
+        return;
+      }
+      if (status.value.branch !== tree.branch) return kept(physical);
       const urls = record.events.flatMap((event) => {
         const payload = event.payload as { prUrl?: string | null; previousPrUrl?: string | null };
         if (event.type === "reopened_for_fix" && payload.previousPrUrl)
@@ -245,7 +299,9 @@ export function createImplementationCompletion(deps: {
             .filter(
               (c) =>
                 c.cwd === tree.path &&
-                (c.issueId !== issue.id || !["triage", "design", "impl"].includes(c.kind)),
+                (issue.state === "withdrawn" ||
+                  c.issueId !== issue.id ||
+                  !["triage", "design", "impl"].includes(c.kind)),
             ),
           locked: entry.locked,
           ...current,
@@ -281,8 +337,12 @@ export function createImplementationCompletion(deps: {
         if (!stillClosed()) return;
         if (!git.owns(physical, identity)) return kept();
         const latest = await git.status(project, entry);
+        if (latest.isErr()) {
+          kept(physical);
+          if (design) throw new Error(latest.error.message);
+          return;
+        }
         if (
-          latest.isErr() ||
           latest.value.head !== status.value.head ||
           latest.value.branch !== tree.branch ||
           !git.owns(physical, identity)
@@ -307,7 +367,7 @@ export function createImplementationCompletion(deps: {
       } finally {
         await protection.value.release();
       }
-      const pendingLocks = trees.list(project.id).find((row) => row.id === tree.id)?.cleanupLocks;
+      const pendingLocks = trees.forCleanup(project.id, tree.id)?.cleanupLocks;
       if (cleanupRemoved && pendingLocks?.length === 0) append("worktree_removed", {}, true);
     } finally {
       lease.value.release();
@@ -493,19 +553,16 @@ export function createImplementationCompletion(deps: {
               repo.append(tree.issueId, "worktree_removed", {
                 worktreeId: tree.id,
                 path: tree.path,
+                ...(tree.branch.startsWith("sukuna/design-")
+                  ? { retainedBranch: tree.branch }
+                  : {}),
               });
             return;
           }
           trees.resetLocation(tree, record.project.path);
           trees.planCleanup(tree.id, null, false);
           trees.clearLocks(tree.id);
-          if (
-            !record.events.some(
-              (event) =>
-                event.type === "worktree_kept" &&
-                (event.payload as { worktreeId?: string }).worktreeId === tree.id,
-            )
-          )
+          if (!record.events.some((event) => isKept(event, tree.id)))
             repo.append(tree.issueId, "worktree_kept", {
               worktreeId: tree.id,
               path: result.path ?? tree.path,
@@ -549,6 +606,7 @@ export function createImplementationCompletion(deps: {
     observe,
     noteExternalMerge: (id: string) => external.add(id),
     cleanup,
+    finishWithdrawal,
     cleanupIfClosed,
     recoverBeforeConversations,
     checkParentsWithin,

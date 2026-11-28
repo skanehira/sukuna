@@ -36,7 +36,6 @@ export interface DesignWorkspaceGit {
   branchExists(cwd: string, branch: string): GitResult<boolean>;
   exclude(cwd: string): GitResult<void>;
   fetch(cwd: string, branch: string): GitResult<void>;
-  add(cwd: string, path: string, branch: string, start: string): GitResult<void>;
   status(
     project: DesignProject,
     worktree: DesignGitEntry,
@@ -131,6 +130,7 @@ export type DesignFlowDependencies = {
   ): T;
   activity: WorktreeActivity;
   workspace: DesignWorkspaceGit;
+  createOwnedTree(cwd: string, tree: DesignWorktree, start: string): GitResult<void>;
   git: DesignGit;
   gh: DesignGithub;
   clock: { now(): number; id(): string };

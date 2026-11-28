@@ -124,7 +124,7 @@ export function createDesignWorkspace(deps: DesignFlowDependencies, runtime: Con
         }, lease.value);
         if (!reserved) return err(designConflict);
         if (cancelled()) return err(unavailableRunnerError);
-        const created = await deps.workspace.add(project.path, path, branch, start);
+        const created = await deps.createOwnedTree(project.path, tree, start);
         if (created.isErr()) {
           deps.repo.abandonTree(tree.id, deps.clock.now());
           return reportFailure(created.error.message, lease.value);
@@ -217,15 +217,17 @@ export function createDesignWorkspace(deps: DesignFlowDependencies, runtime: Con
     return err(designInternal(message));
   }
 
-  async function cleanup(record: DesignRecord, mergedHead?: string): Promise<void> {
+  async function cleanup(record: DesignRecord, mergedHead?: string, awaitingTerminal = false) {
     const tree = deps.repo.findTree(record.issue.id, record.project.id, record.issue.number);
     if (!tree) return;
     const { project, issue } = record;
     const lease = deps.activity.acquire([tree.id]);
+    if (awaitingTerminal && lease.isErr() && lease.error.code === "conflict") return;
     const now = () => deps.clock.now();
     let files = 0;
     let unpushed = 0;
     let removed = false;
+    let verifiedClean = false;
     const withdrawal = issue.state === "withdrawn";
     const withdrawalSeq = record.events.findLast((event) => event.type === "state_changed")?.seq;
     const sameWithdrawal = () => {
@@ -270,7 +272,10 @@ export function createDesignWorkspace(deps: DesignFlowDependencies, runtime: Con
       files = current.value.uncommittedCount;
       if (mergedHead === current.value.head) return;
       unpushed = current.value.unpushedCount;
-      if (!unpushed) return;
+      if (!unpushed) {
+        verifiedClean = !files && entry.locked === null;
+        return;
+      }
       const urls = record.events.flatMap((event) => {
         const parsed = designPrCreatedSchema.safeParse(event.payload);
         return event.type === "design_pr_created" && parsed.success ? [parsed.data.prUrl] : [];
@@ -280,29 +285,32 @@ export function createDesignWorkspace(deps: DesignFlowDependencies, runtime: Con
         const published = await deps.workspace.mergedPrHeads(project.path, [...new Set(urls)]);
         if (published.includes(current.value.head)) unpushed = 0;
       }
+      verifiedClean = !files && !unpushed && entry.locked === null;
     } catch (error) {
       deps.log(error);
       if (withdrawal)
         deps.alert(issue.id, "取り下げは保存しましたが、設計の作業場所を確認できませんでした。");
     } finally {
       if (lease.isOk()) lease.value.release();
-      const notice = sameWithdrawal()
-        ? deps.transaction((repo) =>
-            repo.append(
-              record,
-              removed ? "worktree_removed" : "worktree_kept",
-              removed
-                ? { worktreeId: tree.id, path: tree.path, retainedBranch: tree.branch }
-                : {
-                    worktreeId: tree.id,
-                    path: tree.path,
-                    uncommittedFiles: files,
-                    unpushedCommits: unpushed,
-                  },
-              now(),
-            ),
-          )
-        : null;
+      const notice =
+        sameWithdrawal() && (removed || sameCleanup())
+          ? deps.transaction((repo) =>
+              repo.append(
+                record,
+                removed ? "worktree_removed" : "worktree_kept",
+                removed
+                  ? { worktreeId: tree.id, path: tree.path, retainedBranch: tree.branch }
+                  : {
+                      worktreeId: tree.id,
+                      path: tree.path,
+                      uncommittedFiles: files,
+                      unpushedCommits: unpushed,
+                      ...(awaitingTerminal && verifiedClean ? { awaitingTerminal: true } : {}),
+                    },
+                now(),
+              ),
+            )
+          : null;
       if (notice) deps.notices.publish(notice);
     }
   }

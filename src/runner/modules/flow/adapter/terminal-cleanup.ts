@@ -69,6 +69,9 @@ export function createImplementationTerminalCleanup(
   return {
     app,
     close,
+    get available() {
+      return !closing && changes.terminalCleanupAvailable;
+    },
     reconnected() {
       for (const request of pending.values()) request.resolve("reconnected");
     },

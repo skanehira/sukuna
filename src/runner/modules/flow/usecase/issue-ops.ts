@@ -51,12 +51,8 @@ export function createIssueOps(deps: IssueOpsDeps) {
           code: "confirmed_text_locked" as const,
           message: "確定した issue の題名と本文は、会話で AI に頼んで直します",
         });
-      const prepared = prepareIssueWrite(
-        issue,
-        input,
-        repo.all(issue.projectId),
-        repo.graph(issue.projectId),
-      );
+      const graph = repo.graph(issue.projectId);
+      const prepared = prepareIssueWrite(issue, input, repo.all(issue.projectId), graph);
       if (prepared.error) return err(prepared.error);
       const now = deps.clock.now();
       repo.update(id, { ...prepared.fields, updatedAt: now }, prepared.dependencies);
@@ -66,7 +62,13 @@ export function createIssueOps(deps: IssueOpsDeps) {
         { fields: Object.keys(input), by, conversationId },
         now,
       );
-      return ok({ issue: repo.view(id)!, event });
+      const dependsOn = input.dependsOn;
+      const removedDependency =
+        dependsOn !== undefined &&
+        graph
+          .find((entry) => entry.number === issue.number)
+          ?.dependsOn.some((number) => !dependsOn.includes(number));
+      return ok({ issue: repo.view(id)!, event, removedDependency });
     });
     if (result.isErr()) return err(result.error);
     deps.notices.publish({
@@ -75,7 +77,8 @@ export function createIssueOps(deps: IssueOpsDeps) {
       project_id: result.value.issue.projectId,
       seq: result.value.event.seq,
     });
-    return ok({ issue: result.value.issue });
+    if (result.value.removedDependency) deps.clear(id);
+    return ok({ issue: deps.data.read.view(id)! });
   };
   return {
     edit(id: string, input: unknown): IssueOperationResult {
