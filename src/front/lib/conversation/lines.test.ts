@@ -208,6 +208,83 @@ describe("会話の行", () => {
       expect(eventLines(result, "c1", "/project")).toEqual(expected);
     },
   );
+  it.each([
+    {
+      name: "文と保存できた画像と保存できなかった画像",
+      content: "Took a screenshot.",
+      images: ["01J0000000000000000000000A", "01J0000000000000000000000B"],
+      omitted: 1,
+      expected: [
+        { kind: "tool", text: "  ⎿  Took a screenshot.", seq: 5, seqLine: 0 },
+        {
+          kind: "tool",
+          text: "     画像 1 / 2 (Enter で元の大きさで開く)",
+          seq: 5,
+          image: {
+            url: "/api/conversations/c1/images/01J0000000000000000000000A",
+            alt: "画像 1 / 2",
+          },
+        },
+        {
+          kind: "tool",
+          text: "     画像 2 / 2 (Enter で元の大きさで開く)",
+          seq: 5,
+          image: {
+            url: "/api/conversations/c1/images/01J0000000000000000000000B",
+            alt: "画像 2 / 2",
+          },
+        },
+        { kind: "tool", text: "     画像 1 件は保存できなかったため表示できません", seq: 5 },
+      ],
+    },
+    {
+      name: "文が無く保存できた画像",
+      content: "",
+      images: ["01J0000000000000000000000A"],
+      omitted: 0,
+      expected: [
+        { kind: "tool", text: "  ⎿  画像 1 件", seq: 5 },
+        {
+          kind: "tool",
+          text: "     画像 1 / 1 (Enter で元の大きさで開く)",
+          seq: 5,
+          image: {
+            url: "/api/conversations/c1/images/01J0000000000000000000000A",
+            alt: "画像 1 / 1",
+          },
+        },
+      ],
+    },
+    {
+      name: "文が無く 1 枚も保存できなかった画像",
+      content: "",
+      images: [],
+      omitted: 2,
+      expected: [
+        { kind: "tool", text: "  ⎿  画像 2 件 (表示できません)", seq: 5 },
+        { kind: "tool", text: "     画像 2 件は保存できなかったため表示できません", seq: 5 },
+      ],
+    },
+  ])(
+    "ツールの結果が $name のとき、結果の行の下に画像の行を並べる",
+    ({ content, images, omitted, expected }) => {
+      const result = event(5, {
+        type: "tool_result",
+        payload: {
+          tool_use_id: "t",
+          is_error: false,
+          content,
+          truncated: false,
+          bytes: 0,
+          ...(images.length
+            ? { images: images.map((id) => ({ id, media_type: "image/png" })) }
+            : {}),
+          ...(omitted ? { omitted_images: omitted } : {}),
+        },
+      });
+      expect(eventLines(result, "c1", "/project")).toEqual(expected);
+    },
+  );
   it("切替一覧はプロジェクトごとに会話・対象 issue・開始メニューを並べ、現在のプロジェクトだけ worktree の開始を出す", () => {
     const projects = [
       {

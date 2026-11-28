@@ -14,7 +14,7 @@ import type {
 } from "../../../../shared/conversation/api";
 import { afterEach, expect, it } from "vite-plus/test";
 import { join } from "node:path";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { err, ok } from "neverthrow";
 import { issueInstructions } from "../../../../runner/modules/issue/domain/issue-instructions";
 import {
@@ -223,6 +223,7 @@ async function fixture(
     removeTempHome(home);
   });
   return {
+    app,
     home,
     database,
     agent,
@@ -1266,6 +1267,101 @@ it("画像を保存して順番どおり実データを届け、欠落した画�
   expect(await f.send(id, "欠落", "missing", "send", [images[0]])).toEqual({
     status: 400,
     body: { error: { code: "invalid_input", message: "画像が見つかりません。貼り直してください" } },
+  });
+});
+
+it("（US-014）ツールの結果の画像をファイルに保存して記録には ID だけを残し、画像の API でそのバイト列を返す", async () => {
+  const summary = "Took a screenshot of the current page's viewport.";
+  const f = await fixture({
+    rules: [
+      {
+        match: "^画面",
+        steps: [
+          {
+            tool: "take_screenshot",
+            input: {},
+            result: summary,
+            images: [{ media_type: "image/png", data: png.toString("base64") }],
+          },
+          { end: "success" },
+        ],
+      },
+    ],
+  });
+  const id = await f.start();
+  expect(await f.send(id, "画面を確かめて")).toEqual(delivered);
+  await settled(f, id, "idle");
+  const page = await f.request<ConversationEventsPage>(`/conversations/${id}/events`);
+  const [file] = readdirSync(join(f.home, "images", id));
+  const imageId = file!.replace(/\.png$/, "");
+  expect({
+    result: page.body.events.find((event) => event.type === "tool_result"),
+    file: readFileSync(join(f.home, "images", id, file!)),
+  }).toEqual({
+    result: {
+      seq: 3,
+      type: "tool_result",
+      payload: {
+        tool_use_id: expect.any(String),
+        is_error: false,
+        content: summary,
+        truncated: false,
+        bytes: Buffer.byteLength(summary),
+        images: [{ id: imageId, media_type: "image/png" }],
+      },
+      createdAt: 1000,
+    },
+    file: png,
+  });
+  const response = await f.app.request(
+    `/api/conversations/${id}/images/${imageId}`,
+    {},
+    incomingWith("127.0.0.1", 1),
+  );
+  expect({
+    status: response.status,
+    contentType: response.headers.get("content-type"),
+    cacheControl: response.headers.get("cache-control"),
+    body: Buffer.from(await response.arrayBuffer()),
+  }).toEqual({
+    status: 200,
+    contentType: "image/png",
+    cacheControl: "private, max-age=31536000, immutable",
+    body: png,
+  });
+  const notFound = {
+    status: 404,
+    body: { error: { code: "not_found", message: "画像が見つかりません。" } },
+  };
+  expect([
+    await f.request(`/conversations/${id}/images/01J00000000000000000000999`),
+    await f.request(`/conversations/${id}/images/not-a-ulid`),
+  ]).toEqual([notFound, notFound]);
+});
+
+it.each([
+  "画像のディレクトリが無い",
+  "画像のファイルが会話の外へのシンボリックリンク",
+  "画像のディレクトリが会話の外へのシンボリックリンク",
+])("画像の API は、%s とき画像を返さずに 404 を返す", async (kind) => {
+  const f = await fixture();
+  const id = await f.start();
+  const imageId = "01J0000000000000000000000A";
+  const directory = join(f.home, "images", id);
+  const outside = join(f.home, "outside");
+  mkdirSync(outside);
+  writeFileSync(join(outside, `${imageId}.png`), png);
+  if (kind === "画像のファイルが会話の外へのシンボリックリンク") {
+    mkdirSync(directory, { recursive: true });
+    symlinkSync(join(outside, `${imageId}.png`), join(directory, `${imageId}.png`));
+  }
+  if (kind === "画像のディレクトリが会話の外へのシンボリックリンク") {
+    mkdirSync(join(f.home, "images"), { recursive: true });
+    symlinkSync(outside, directory);
+  }
+  expect(await f.request(`/conversations/${id}/images/${imageId}`)).toEqual({
+    status: 404,
+    body: { error: { code: "not_found", message: "画像が見つかりません。" } },
   });
 });
 

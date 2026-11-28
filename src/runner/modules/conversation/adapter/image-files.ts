@@ -3,13 +3,15 @@ import {
   constants,
   fstatSync,
   openSync,
+  mkdirSync,
   readFileSync,
   readdirSync,
   realpathSync,
+  writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { err, ok } from "neverthrow";
-import type { ImagePort, ImageReadError } from "../domain/image-port";
+import type { ImagePort, ImageReadError, ImageWritePort } from "../domain/image-port";
 
 const mediaTypes = new Map([
   ["png", "image/png"],
@@ -17,11 +19,12 @@ const mediaTypes = new Map([
   ["gif", "image/gif"],
   ["webp", "image/webp"],
 ]);
+const extensions = new Map([...mediaTypes].map(([extension, type]) => [type, extension]));
 const missing: ImageReadError = {
   code: "invalid_input",
   message: "画像が見つかりません。貼り直してください",
 };
-export function createImageFiles(homeDir: string): ImagePort {
+export function createImageFiles(homeDir: string): ImagePort & ImageWritePort {
   const home = realpathSync(homeDir);
   return {
     read(conversationId, imageId) {
@@ -60,6 +63,29 @@ export function createImageFiles(homeDir: string): ImagePort {
           code: "internal",
           message: "画像を読み取れませんでした。もう一度操作してください。",
         });
+      }
+    },
+    write(conversationId, imageId, mediaType, data) {
+      const extension = extensions.get(mediaType);
+      if (!extension) return err({ message: `画像の形式が対象外です: ${mediaType}` });
+      try {
+        const directory = join(home, "images", conversationId);
+        mkdirSync(directory, { recursive: true });
+        if (realpathSync(directory) !== directory)
+          return err({ message: "画像のディレクトリがシンボリックリンクです。" });
+        const descriptor = openSync(
+          join(directory, `${imageId}.${extension}`),
+          constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+          0o600,
+        );
+        try {
+          writeFileSync(descriptor, data);
+        } finally {
+          closeSync(descriptor);
+        }
+        return ok(undefined);
+      } catch (error) {
+        return err({ message: error instanceof Error ? error.message : String(error) });
       }
     },
   };

@@ -9,7 +9,7 @@ import { Layout } from "../../buffer/Layout";
 import { BufferController } from "../../buffer/controller";
 import type { LineInfo } from "../../buffer/line";
 import { ConversationApiError, createConversationApi } from "../../lib/conversation/api";
-import type { Snapshot } from "../../lib/conversation/types";
+import type { Event, Snapshot } from "../../lib/conversation/types";
 import { markdownPreview } from "../../lib/files/markdown-decorations";
 import type { StockApi } from "../../lib/stock/api";
 import { conversationSource, fileSource } from "../../lib/stock/quote";
@@ -377,7 +377,7 @@ const stockSeed = (id: string, text: string, start: number, end = start): StockI
   },
 });
 
-it("終えたスレッドの ✓ の行で Enter を押すと、右にそのスレッドが開く", async () => {
+async function openThread(events: Event[]) {
   const title = "期限についての質問";
   const snapshot = {
     conversation: {
@@ -407,7 +407,7 @@ it("終えたスレッドの ✓ の行で Enter を押すと、右にそのス�
   const conversations = createConversationApi(async (path) => {
     if (path === "/api/conversations/thread") return Response.json(snapshot);
     if (typeof path === "string" && path.startsWith("/api/conversations/thread/events?"))
-      return Response.json({ events: [], lastSeq: 0, hasMore: false });
+      return Response.json({ events, lastSeq: events.length, hasMore: false });
     return new Response(null, { status: 404 });
   });
   const f = await fixture(
@@ -428,8 +428,49 @@ it("終えたスレッドの ✓ の行で Enter を押すと、右にそのス�
     await waitFor(() => expect(within(f.main).getByText("✓", { exact: true })).toBeVisible());
     f.focus(0, 0);
     await f.press("Enter");
-    const thread = await screen.findByRole("region", { name: `スレッド: ${title}` });
+    return { f, thread: await screen.findByRole("region", { name: `スレッド: ${title}` }) };
+  } catch (error) {
+    f.close();
+    throw error;
+  }
+}
+
+it("終えたスレッドの ✓ の行で Enter を押すと、右にそのスレッドが開く", async () => {
+  const { f, thread } = await openThread([]);
+  try {
     expect(await within(thread).findByText(/再開する/)).toBeVisible();
+  } finally {
+    f.close();
+  }
+});
+
+it("（US-014）右に開いたスレッドでもツールの結果の画像を行の下に出す", async () => {
+  const { f, thread } = await openThread([
+    {
+      seq: 1,
+      createdAt: 0,
+      type: "tool_use",
+      payload: { tool_use_id: "t", name: "take_screenshot", input: {}, parent_tool_use_id: null },
+    },
+    {
+      seq: 2,
+      createdAt: 0,
+      type: "tool_result",
+      payload: {
+        tool_use_id: "t",
+        is_error: false,
+        content: "Took a screenshot.",
+        truncated: false,
+        bytes: 18,
+        images: [{ id: "01J0000000000000000000000A", media_type: "image/png" }],
+      },
+    },
+  ]);
+  try {
+    expect(await within(thread).findByRole("img", { name: "画像 1 / 1" })).toHaveAttribute(
+      "src",
+      "/api/conversations/thread/images/01J0000000000000000000000A",
+    );
   } finally {
     f.close();
   }

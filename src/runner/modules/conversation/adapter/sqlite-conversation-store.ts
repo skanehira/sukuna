@@ -338,18 +338,19 @@ export class SqliteConversationStore implements ConversationStore {
       .get(id) as { seq: number } | undefined;
     return stop?.seq ?? null;
   }
+  recorded(id: string, sdkUuid: string): boolean {
+    return Boolean(
+      this.sqlite
+        .prepare("SELECT 1 FROM conversation_events WHERE conversation_id = ? AND sdk_uuid = ?")
+        .get(id, sdkUuid),
+    );
+  }
   append(id: string, input: ConversationEvent, now: number): StoredEvent | null {
     return this.withWorkspace(id, () => {
       const event = eventSchema.parse(input);
       const c = this.get(id);
       if (!c) throw new Error("会話がありません。");
-      if (
-        event.sdkUuid &&
-        this.sqlite
-          .prepare("SELECT 1 FROM conversation_events WHERE conversation_id = ? AND sdk_uuid = ?")
-          .get(id, event.sdkUuid)
-      )
-        return null;
+      if (event.sdkUuid && this.recorded(id, event.sdkUuid)) return null;
       const seq = c.lastSeq + 1;
       this.sqlite
         .prepare(

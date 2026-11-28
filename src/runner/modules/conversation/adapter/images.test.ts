@@ -1,11 +1,11 @@
 import { afterEach, expect, it } from "vite-plus/test";
-import { chmodSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AsyncQueue } from "../../../../shared/async-queue";
 import { createTempHome, removeTempHome } from "../../../../shared/db/test-helpers";
 import { applyMigrations, migrations } from "../../../../shared/db/migrate";
 import { openDatabase } from "../../../../shared/db/open";
-import { ok } from "neverthrow";
+import { err, ok } from "neverthrow";
 import { createLogger } from "../../../../shared/log";
 import { startRunnerApp } from "../../../app";
 import { RunnerLink } from "../../../../server/runner-link";
@@ -16,6 +16,7 @@ import type { AgentOutput, AgentSession, OpenParams } from "../domain/agent-port
 import type { Clock } from "../domain/clock";
 import { ScriptedAgent, turnEnd } from "./scripted-agent";
 import { separateDirectoriesIn, testEnvironment } from "../../../../test/directories";
+import { createImageFiles } from "./image-files";
 
 const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1cAAAAASUVORK5CYII=",
@@ -533,4 +534,113 @@ it("作業中の明示送信も欠落画像を400で拒み、既存キューと�
       },
     },
   });
+});
+
+function screenshot(uuid: string): AgentOutput {
+  return {
+    kind: "tool_result",
+    uuid,
+    toolUseId: "tool",
+    isError: false,
+    content: "Took a screenshot.",
+    images: [{ mediaType: "image/png", data: png }],
+    omittedImages: 0,
+    diff: null,
+    parentToolUseId: null,
+  };
+}
+
+it("同じ SDK のメッセージのツールの結果がもう一度届いても、画像のファイルを書き足さない", async () => {
+  const f = await fixture();
+  await f.post("画面を確かめて", [], "start");
+  const output = f.agent.outputs.get(f.id)!;
+  output.push(screenshot("shot"));
+  output.push(screenshot("shot"));
+  output.push(turnEnd("success"));
+  await expect.poll(() => f.runner.runtime.store.get(f.id)?.runState).toBe("idle");
+  const [file, ...rest] = readdirSync(join(f.data, "images", f.id));
+  expect({
+    rest,
+    results: f.runner.runtime.store
+      .events(f.id)
+      .filter((event) => event.type === "tool_result")
+      .map((event) => event.payload),
+  }).toEqual({
+    rest: [],
+    results: [
+      {
+        tool_use_id: "tool",
+        is_error: false,
+        content: "Took a screenshot.",
+        truncated: false,
+        bytes: 18,
+        images: [{ id: file!.replace(/\.png$/, ""), media_type: "image/png" }],
+      },
+    ],
+  });
+});
+
+it("画像を書き込めなかったときはログに残し、保存できなかった数を記録して番を続ける", async () => {
+  const f = await fixture();
+  f.runner.runtime.options.toolImages = {
+    write: () => err({ message: "ディスクがいっぱいです" }),
+  };
+  await f.post("画面を確かめて", [], "start");
+  const output = f.agent.outputs.get(f.id)!;
+  output.push(screenshot("shot"));
+  output.push(turnEnd("success"));
+  await expect.poll(() => f.runner.runtime.store.get(f.id)?.runState).toBe("idle");
+  expect({
+    result: f.runner.runtime.store.events(f.id).find((event) => event.type === "tool_result")
+      ?.payload,
+    errors: f.logs.filter((entry) => entry.level === "error"),
+  }).toEqual({
+    result: {
+      tool_use_id: "tool",
+      is_error: false,
+      content: "Took a screenshot.",
+      truncated: false,
+      bytes: 18,
+      omitted_images: 1,
+    },
+    errors: [
+      {
+        time: new Date(1000).toISOString(),
+        level: "error",
+        component: "runner.agent",
+        message: "ツールの結果の画像を保存できませんでした。",
+        conversation_id: f.id,
+        error: { name: "Error", message: "ディスクがいっぱいです" },
+      },
+    ],
+  });
+});
+
+it.each([
+  {
+    kind: "対象の形式でない",
+    mediaType: "image/bmp",
+    message: "画像の形式が対象外です: image/bmp",
+  },
+  {
+    kind: "会話のディレクトリが会話の外へのシンボリックリンク",
+    mediaType: "image/png",
+    message: "画像のディレクトリがシンボリックリンクです。",
+  },
+])("ツールの結果の画像は、$kind ときファイルを書かない", ({ kind, mediaType, message }) => {
+  const home = createTempHome();
+  try {
+    const outside = join(home, "outside");
+    mkdirSync(outside);
+    if (kind !== "対象の形式でない") {
+      mkdirSync(join(home, "images"));
+      symlinkSync(outside, join(home, "images", "c1"));
+    }
+    expect({
+      result: createImageFiles(home).write("c1", "01J0000000000000000000000A", mediaType, png),
+      outside: readdirSync(outside),
+    }).toEqual({ result: err({ message }), outside: [] });
+  } finally {
+    removeTempHome(home);
+  }
 });

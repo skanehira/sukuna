@@ -80,6 +80,7 @@ export interface ConversationStore {
   create(conversation: Conversation): void;
   session(id: string, sessionId: string): void;
   events(id: string): StoredEvent[];
+  recorded(id: string, sdkUuid: string): boolean;
   latestStopSeq(id: string): number | null;
   append(id: string, event: ConversationEvent, now: number): StoredEvent | null;
   stageAccepted(instruction: AcceptedInstruction): void;

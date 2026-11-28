@@ -141,7 +141,7 @@ function persistentQueueApi(queued: Snapshot["queue"][number], initial: Snapshot
   });
 }
 
-async function mount(api = fakeApi(), events: Event[] = []) {
+async function mount(api = fakeApi(), events: Event[] = [], openExternal?: (url: string) => void) {
   const controller = new BufferController({ url: "/conversations/c1" });
   const session = new ConversationSession("c1", api, controller, {
     clientId: "tab",
@@ -151,6 +151,7 @@ async function mount(api = fakeApi(), events: Event[] = []) {
       const timer = setTimeout(fn, ms);
       return () => clearTimeout(timer);
     },
+    openExternal,
   });
   await session.load();
   events.forEach((event) => session.receiveEvent(event));
@@ -1268,6 +1269,54 @@ describe("会話の画面", () => {
     );
     await flush();
     expect(main().state.doc.toString()).toBe("AI\n調べました");
+  });
+  it("（US-014）ツールの結果の画像を行の下に出し、行で Enter を押すと元の大きさの画像を開き、読み込めない画像は見つからないと出す", async () => {
+    const openExternal = vi.fn<(url: string) => void>();
+    const url = "/api/conversations/c1/images/01J0000000000000000000000A";
+    await mount(
+      fakeApi({
+        events: async () => ({
+          events: [
+            {
+              seq: 1,
+              createdAt: 0,
+              type: "tool_use",
+              payload: {
+                tool_use_id: "t",
+                name: "take_screenshot",
+                input: {},
+                parent_tool_use_id: null,
+              },
+            },
+            {
+              seq: 2,
+              createdAt: 0,
+              type: "tool_result",
+              payload: {
+                tool_use_id: "t",
+                is_error: false,
+                content: "Took a screenshot.",
+                truncated: false,
+                bytes: 18,
+                images: [{ id: "01J0000000000000000000000A", media_type: "image/png" }],
+              },
+            },
+          ],
+          lastSeq: 2,
+          hasMore: false,
+        }),
+      }),
+      [],
+      openExternal,
+    );
+    const image = screen.getByRole("img", { name: "画像 1 / 1" });
+    expect(image).toHaveAttribute("src", url);
+    await openLine("     画像 1 / 1 (Enter で元の大きさで開く)");
+    expect(openExternal.mock.calls).toEqual([[url]]);
+    act(() => {
+      fireEvent.error(image);
+    });
+    expect(screen.getByText("画像が見つかりません", { exact: true })).toBeVisible();
   });
   it("（US-016）選択は保存だけを行い、もう一度 Enter で外れ、未回答を残して送ると y の確認を出す", async () => {
     const { api, controller } = await mount(fakeApi(), [question]);

@@ -125,6 +125,9 @@ const conversations = createConversationWorkspace(
       const id = window.setTimeout(fn, ms);
       return () => window.clearTimeout(id);
     },
+    openExternal: (url) => {
+      window.open(url, "_blank", "noopener,noreferrer");
+    },
   },
   () =>
     new WebSocket(

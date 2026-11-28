@@ -11,6 +11,45 @@ const blockSchema = z.looseObject({
   is_error: z.boolean().optional(),
   content: z.unknown().optional(),
 });
+const resultBlockSchema = z.looseObject({
+  type: z.string(),
+  text: z.string().optional(),
+  source: z
+    .looseObject({
+      type: z.string(),
+      media_type: z.string().optional(),
+      data: z.string().optional(),
+    })
+    .optional(),
+});
+const imageMediaTypes = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+function resultContent(
+  content: unknown,
+): Pick<Extract<AgentOutput, { kind: "tool_result" }>, "content" | "images" | "omittedImages"> {
+  if (typeof content === "string") return { content, images: [], omittedImages: 0 };
+  const blocks = z.array(resultBlockSchema).safeParse(content);
+  if (!blocks.success || !blocks.data.some((block) => block.type === "image"))
+    return { content: JSON.stringify(content ?? ""), images: [], omittedImages: 0 };
+  const images: { mediaType: string; data: Buffer }[] = [];
+  let omittedImages = 0;
+  for (const { type, source } of blocks.data) {
+    if (type !== "image") continue;
+    if (
+      source?.type === "base64" &&
+      source.data !== undefined &&
+      imageMediaTypes.includes(source.media_type ?? "")
+    )
+      images.push({ mediaType: source.media_type!, data: Buffer.from(source.data, "base64") });
+    else omittedImages++;
+  }
+  return {
+    content: blocks.data
+      .flatMap((block) => (block.type === "text" ? [block.text ?? ""] : []))
+      .join("\n"),
+    images,
+    omittedImages,
+  };
+}
 const patchSchema = z.object({
   oldStart: z.number(),
   oldLines: z.number(),
@@ -145,8 +184,7 @@ export function mapSdkMessage(
           uuid: `${m.uuid}:result:${index}`,
           toolUseId: block.tool_use_id ?? "",
           isError: block.is_error ?? false,
-          content:
-            typeof block.content === "string" ? block.content : JSON.stringify(block.content ?? ""),
+          ...resultContent(block.content),
           diff,
           parentToolUseId,
         },

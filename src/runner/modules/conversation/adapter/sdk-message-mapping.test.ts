@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import { mapSdkMessage } from "./sdk-message-mapping";
-import { outputEvents } from "../domain/event-mapping";
+import { outputEvents, toolResultEvents } from "../domain/event-mapping";
 import { classifyStop } from "../domain/stop-reason";
 
 const usage = {
@@ -35,6 +35,74 @@ describe("SDK の出力の変換", () => {
         toolUseId: "tool",
         isError: false,
         content: "saved",
+        images: [],
+        omittedImages: 0,
+        diff: null,
+        parentToolUseId: null,
+      },
+    ]);
+  });
+
+  it("画像を含む結果は文字のブロックだけを本文にし、base64 の対象の形式の画像だけを取り出して、ほかの画像を数える", () => {
+    const png = Buffer.from("png-bytes");
+    expect(
+      mapSdkMessage({
+        type: "user",
+        uuid: "shot",
+        message: {
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tool",
+              content: [
+                { type: "text", text: "Took a screenshot." },
+                {
+                  type: "image",
+                  source: { type: "base64", media_type: "image/png", data: png.toString("base64") },
+                },
+                { type: "image", source: { type: "url", url: "https://example.com/a.png" } },
+                {
+                  type: "image",
+                  source: { type: "base64", media_type: "image/bmp", data: "Qk0=" },
+                },
+                { type: "text", text: "Saved." },
+              ],
+            },
+          ],
+        },
+      }),
+    ).toEqual([
+      {
+        kind: "tool_result",
+        uuid: "shot:result:0",
+        toolUseId: "tool",
+        isError: false,
+        content: "Took a screenshot.\nSaved.",
+        images: [{ mediaType: "image/png", data: png }],
+        omittedImages: 2,
+        diff: null,
+        parentToolUseId: null,
+      },
+    ]);
+  });
+
+  it("画像を含まない配列の結果は、配列を JSON の文字にしたまま残す", () => {
+    const content = [{ type: "text", text: '{"issue":{"number":43}}' }];
+    expect(
+      mapSdkMessage({
+        type: "user",
+        uuid: "mcp",
+        message: { content: [{ type: "tool_result", tool_use_id: "tool", content }] },
+      }),
+    ).toEqual([
+      {
+        kind: "tool_result",
+        uuid: "mcp:result:0",
+        toolUseId: "tool",
+        isError: false,
+        content: JSON.stringify(content),
+        images: [],
+        omittedImages: 0,
         diff: null,
         parentToolUseId: null,
       },
@@ -61,6 +129,8 @@ describe("SDK の出力の変換", () => {
           toolUseId: "t",
           isError: false,
           content: "ok",
+          images: [],
+          omittedImages: 0,
           parentToolUseId: null,
           diff: { path: "a.ts", change, hunks },
         });
@@ -103,6 +173,8 @@ describe("SDK の出力の変換", () => {
         toolUseId: "t",
         isError: false,
         content: "ok",
+        images: [],
+        omittedImages: 0,
         parentToolUseId: null,
         diff: { path: "a.ts", change, hunks: [first, { ...first, lines: ["+later"] }] },
       }),
@@ -236,6 +308,8 @@ describe("SDK の出力の変換", () => {
       toolUseId: "t",
       isError: false,
       content: "あ".repeat(30000),
+      images: [],
+      omittedImages: 0,
       parentToolUseId: null,
       diff: {
         path: "new",
@@ -289,6 +363,96 @@ describe("SDK の出力の変換", () => {
           parent_tool_use_id: null,
         },
       },
+    ]);
+  });
+});
+
+describe("ツールの結果の画像の保存", () => {
+  const megabytes5 = 5 * 1024 * 1024;
+  const result = (images: { mediaType: string; data: Buffer }[], omittedImages = 0) =>
+    ({
+      kind: "tool_result",
+      uuid: "r",
+      toolUseId: "t",
+      isError: false,
+      content: "Took a screenshot.",
+      images,
+      omittedImages,
+      diff: null,
+      parentToolUseId: null,
+    }) as const;
+  const saved = () => {
+    const calls: { mediaType: string; bytes: number }[] = [];
+    return {
+      calls,
+      save: (image: { mediaType: string; data: Buffer }) => {
+        calls.push({ mediaType: image.mediaType, bytes: image.data.length });
+        return `img-${calls.length}`;
+      },
+    };
+  };
+  const payload = (extra: object) => ({
+    type: "tool_result",
+    sdkUuid: "r",
+    payload: {
+      tool_use_id: "t",
+      is_error: false,
+      content: "Took a screenshot.",
+      truncated: false,
+      bytes: 18,
+      ...extra,
+    },
+  });
+
+  it.each([
+    { name: "ちょうど 5 MB の画像は保存する", bytes: megabytes5, kept: true },
+    { name: "5 MB を 1 バイト超える画像は保存しない", bytes: megabytes5 + 1, kept: false },
+  ])("$name", ({ bytes, kept }) => {
+    const target = saved();
+    expect(
+      toolResultEvents(
+        result([{ mediaType: "image/png", data: Buffer.alloc(bytes) }]),
+        target.save,
+      ),
+    ).toEqual([
+      payload(
+        kept ? { images: [{ id: "img-1", media_type: "image/png" }] } : { omitted_images: 1 },
+      ),
+    ]);
+    expect(target.calls).toEqual(kept ? [{ mediaType: "image/png", bytes }] : []);
+  });
+
+  it("20 枚目までを保存し、21 枚目からは保存せずに数える", () => {
+    const target = saved();
+    const images = Array.from({ length: 21 }, () => ({
+      mediaType: "image/webp",
+      data: Buffer.from("x"),
+    }));
+    expect(toolResultEvents(result(images), target.save)).toEqual([
+      payload({
+        images: Array.from({ length: 20 }, (_, index) => ({
+          id: `img-${index + 1}`,
+          media_type: "image/webp",
+        })),
+        omitted_images: 1,
+      }),
+    ]);
+  });
+
+  it("書き込めなかった画像と、取り出せなかった画像を保存できなかった数に足す", () => {
+    expect(
+      toolResultEvents(
+        result(
+          [
+            { mediaType: "image/png", data: Buffer.from("a") },
+            { mediaType: "image/gif", data: Buffer.from("b") },
+          ],
+          2,
+        ),
+        (image) => (image.mediaType === "image/png" ? null : "gif-id"),
+      ),
+    ).toEqual([
+      payload({ images: [{ id: "gif-id", media_type: "image/gif" }], omitted_images: 3 }),
     ]);
   });
 });
@@ -410,6 +574,8 @@ it("保存上限の直前に元からある置換文字を消さない", () => {
       toolUseId: "t",
       isError: false,
       content: text + "x",
+      images: [],
+      omittedImages: 0,
       parentToolUseId: null,
       diff: null,
     }),
