@@ -100,6 +100,155 @@ describe("入力欄", () => {
   });
 });
 
+describe("すぐ送るキー", () => {
+  it.each([
+    { name: "Insert の Ctrl+Enter", normal: false, alt: false, interrupt: true },
+    { name: "Normal の Ctrl+Enter", normal: true, alt: false, interrupt: true },
+    { name: "Insert の Alt+Enter", normal: false, alt: true, interrupt: true },
+    { name: "すぐ送る処理が無い欄の Ctrl+Enter", normal: false, alt: false, interrupt: false },
+  ])("$name で、すぐ送る処理か送る処理を呼び、欄を閉じる", async ({ normal, alt, interrupt }) => {
+    const quick = vi.fn();
+    const { view, submit, controller } = mount("本文", interrupt ? { interrupt: quick } : {});
+    if (normal) key(view, "Escape");
+    key(view, "Enter", !alt, { altKey: alt });
+    await act(async () => {});
+    expect({
+      quick: quick.mock.calls,
+      submit: submit.mock.calls,
+      prompt: controller.snapshot().prompt,
+      mode: controller.snapshot().mode,
+    }).toEqual({
+      quick: interrupt ? [["本文"]] : [],
+      submit: interrupt ? [] : [["本文"]],
+      prompt: null,
+      mode: "NORMAL",
+    });
+  });
+});
+
+describe("前と次の項目", () => {
+  // cross-product: src/front/buffer/PromptEditor.tsx:133 が矢印と行の位置を同じ条件で読む
+  it.each([
+    { name: "先頭の行の ↑", text: "一行目\n二行目", line: 1, arrow: "ArrowUp", called: "prev" },
+    { name: "末尾の行の ↓", text: "一行目\n二行目", line: 2, arrow: "ArrowDown", called: "next" },
+    { name: "2 行目の ↑", text: "一行目\n二行目", line: 2, arrow: "ArrowUp", called: null },
+    { name: "1 行目の ↓", text: "一行目\n二行目", line: 1, arrow: "ArrowDown", called: null },
+  ])("$name は、開いた機能の処理を呼ぶか、カーソルを動かす", ({ text, line, arrow, called }) => {
+    const prev = vi.fn();
+    const next = vi.fn();
+    const { view } = mount(text, { prev, next });
+    act(() => view.dispatch({ selection: { anchor: view.state.doc.line(line).from + 1 } }));
+    key(view, arrow);
+    expect({
+      prev: prev.mock.calls.length,
+      next: next.mock.calls.length,
+      line: view.state.doc.lineAt(view.state.selection.main.head).number,
+    }).toEqual({
+      prev: called === "prev" ? 1 : 0,
+      next: called === "next" ? 1 : 0,
+      line: called ? line : line === 1 ? 2 : 1,
+    });
+  });
+  it("前の項目へ移れなかったときは、理由をエラーのお知らせに出す", async () => {
+    const { view } = mount("本文", {
+      prev: async () => {
+        throw new Error("書きかけを保存できませんでした");
+      },
+    });
+    key(view, "ArrowUp");
+    expect((await screen.findByRole("alert")).textContent).toBe("書きかけを保存できませんでした");
+  });
+  it("前の項目を渡さない欄では、先頭の行の ↑ で Vim と同じにカーソルが動く", () => {
+    const { view } = mount("一行目\n二行目");
+    key(view, "Escape");
+    act(() => view.dispatch({ selection: { anchor: 2 } }));
+    key(view, "j");
+    key(view, "ArrowUp");
+    expect(view.state.doc.lineAt(view.state.selection.main.head).number).toBe(1);
+  });
+  it("項目を移ると、モードを変えずに本文と欄の名前を差し替え、カーソルを末尾に置く", () => {
+    const controller = new BufferController();
+    controller.openPrompt({
+      label: "指示",
+      target: "会話",
+      verb: "送る",
+      initialText: "書きかけ",
+      submit: vi.fn(),
+      close: vi.fn(),
+      prev: () => controller.showPromptItem({ label: "前の項目", prev: undefined }, "前の本文"),
+    });
+    render(<Layout controller={controller} main={<div>会話</div>} />);
+    const view = EditorView.findFromDOM(screen.getByRole("textbox", { name: "指示" }))!;
+    key(view, "Escape");
+    key(view, "ArrowUp");
+    expect({
+      text: view.state.doc.toString(),
+      head: view.state.selection.main.head,
+      mode: controller.snapshot().mode,
+      label: screen.getByRole("textbox", { name: "前の項目" }) === view.contentDOM,
+      prev: controller.snapshot().prompt?.prev,
+    }).toEqual({ text: "前の本文", head: 3, mode: "NORMAL", label: true, prev: undefined });
+  });
+});
+
+describe("入力欄のヒント", () => {
+  const hint = () => screen.getByText(/^(Esc Normal|Enter )/).textContent;
+  it.each([
+    {
+      name: "Insert",
+      normal: false,
+      extra: { interrupt: vi.fn(), interruptVerb: "AI を止めてすぐ送る" },
+      text: "Esc Normal へ　Ctrl+Enter AI を止めてすぐ送る",
+    },
+    {
+      name: "すぐ送る処理が無い Insert",
+      normal: false,
+      extra: {},
+      text: "Esc Normal へ　Ctrl+Enter 送る",
+    },
+    {
+      name: "Normal",
+      normal: true,
+      extra: { interrupt: vi.fn(), interruptVerb: "AI を止めてすぐ送る" },
+      text: "Enter 送る　Ctrl+Enter AI を止めてすぐ送る　Esc 閉じる (書きかけは残る)",
+    },
+    {
+      name: "すぐ送る処理が無い Normal",
+      normal: true,
+      extra: {},
+      text: "Enter 送る　Esc 閉じる (書きかけは残る)",
+    },
+    {
+      name: "Esc の説明と前の項目の説明を渡した Normal",
+      normal: true,
+      extra: { escHint: "閉じる (直した内容は残る)", prevHint: "前の指示へ" },
+      text: "Enter 送る　Esc 閉じる (直した内容は残る)　↑ 前の指示へ",
+    },
+    {
+      name: "前の項目の説明を渡した Insert",
+      normal: false,
+      extra: { prevHint: "届く前の指示を直す" },
+      text: "Esc Normal へ　Ctrl+Enter 送る　↑ 届く前の指示を直す",
+    },
+  ])("$name の下の段に、渡した動詞と説明を出す", ({ normal, extra, text }) => {
+    const { view } = mount("本文", extra);
+    if (normal) key(view, "Escape");
+    expect(hint()).toBe(text);
+  });
+  it.each([false, true])(
+    "入力欄を操作しているあいだのステータス行は、主のウィンドウへ移るキーだけを案内する (Normal: %s)",
+    (normal) => {
+      const { view } = mount("本文");
+      if (normal) key(view, "Escape");
+      expect(
+        [...screen.getByRole("status").querySelectorAll(".font-mono + .text-muted")].map(
+          (node) => `${node.previousElementSibling?.textContent} ${node.textContent}`,
+        ),
+      ).toEqual(["Ctrl+w k 主のウィンドウへ移る (入力欄は開いたまま)", ":h ヘルプ"]);
+    },
+  );
+});
+
 describe("スキルの候補の表示", () => {
   it("Tabの循環と手入力の絞り込みで、本文と強調する候補が一致する", () => {
     const { view } = mount("/dev-", {

@@ -472,7 +472,7 @@ DESIGN.md「API 一覧」のうち本機能の分を書く。エラーの形と�
 | 利用枠の戻りを待つタイマー (自動フローの会話は一時停止を `flow` に問う)、再起動のあとの状態の付け直し | ユースケース | `src/runner/modules/conversation/usecase/usage-limit-timer.ts`、`src/runner/modules/conversation/usecase/recover.ts` | 足す |
 | スキルとコマンドの一覧の記憶 | インフラ | `src/runner/modules/conversation/adapter/command-cache.ts` | 足す |
 | 会話の画面、入力欄、質問の区画、届く前の指示の行 | UI | `src/front/pages/conversation/ConversationPage.tsx`、`src/front/components/conversation/ConversationSwitch.tsx`、`src/front/lib/conversation/lines.ts` | 足す |
-| 入力欄の ↑ と ↓ で届く前の指示を選んで直す、直した指示をすぐに届ける、指示を直すあいだ書きかけを脇に置く (「届く前の指示を入力欄で直す」) | UI | `src/front/lib/conversation/session.ts`、`src/front/lib/conversation/keymap.ts` | 足す |
+| 入力欄の ↑ と ↓ で届く前の指示を選んで直す、直した指示をすぐに届ける、指示を直すあいだ書きかけを脇に置く (「届く前の指示を入力欄で直す」。↑ と ↓ と Ctrl+Enter のキーの受け口は `features/buffer-ui.md` の入力欄が持つ) | UI | `src/front/lib/conversation/session.ts` | 足す |
 | 書きかけの同期と未送信の扱い | UI | `src/front/lib/conversation/draft-sync.ts` | 足す |
 
 ## エッジケースの決定

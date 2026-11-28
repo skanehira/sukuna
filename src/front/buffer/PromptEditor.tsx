@@ -53,7 +53,9 @@ export function PromptEditor({
               !transaction.docChanged ||
               spec.allowChange?.(transaction.newDoc.toString(), transaction.changes) !== false,
           ),
-          EditorView.contentAttributes.of({ "aria-label": spec.label }),
+          EditorView.contentAttributes.of(() => ({
+            "aria-label": controller.snapshot().prompt?.label ?? spec.label,
+          })),
           EditorView.theme({
             "&": { maxHeight: "10rem", fontSize: "15px" },
             ".cm-scroller": { overflow: "auto", fontFamily: "inherit", lineHeight: "24px" },
@@ -77,13 +79,17 @@ export function PromptEditor({
         ],
       }),
     });
-    const removeUpdate = controller.registerPromptUpdate((text) => {
-      if (view.state.doc.toString() === text) return;
+    const cm = getCM(view)!;
+    const removeUpdate = controller.registerPromptUpdate((text, cursorToEnd) => {
+      if (view.state.doc.toString() === text && !cursorToEnd) return;
       externalChange = true;
-      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
+      const end = cm.state.vim?.insertMode ? text.length : Math.max(0, text.length - 1);
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: text },
+        ...(cursorToEnd ? { selection: { anchor: end }, scrollIntoView: true } : {}),
+      });
       externalChange = false;
     });
-    const cm = getCM(view)!;
     const syncMode = () => {
       const next = vimMode(view);
       setMode(next);
@@ -101,9 +107,10 @@ export function PromptEditor({
         else {
           controller.closePrompt(view.state.doc.toString());
         }
-      } else if (token === "<CR>" || token === "<A-CR>") {
+      } else if (token === "<CR>" || token === "<A-CR>" || token === "<C-CR>") {
         consumed = true;
-        if (state?.insertMode && token === "<CR>")
+        const quick = token !== "<CR>";
+        if (state?.insertMode && !quick)
           view.dispatch({
             changes: {
               from: view.state.selection.main.from,
@@ -113,16 +120,21 @@ export function PromptEditor({
             selection: { anchor: view.state.selection.main.from + 1 },
             scrollIntoView: true,
           });
-        else if (
-          !state?.insertMode &&
-          !state?.visualMode &&
-          !submitting &&
-          (token !== "<A-CR>" || spec.interrupt)
-        ) {
+        else if (!state?.visualMode && !submitting) {
           submitting = true;
-          void controller.submitPrompt(view.state.doc.toString(), token === "<A-CR>").then(() => {
+          void controller.submitPrompt(view.state.doc.toString(), quick).then(() => {
             submitting = false;
           });
+        }
+      } else if (token === "<Up>" || token === "<Down>") {
+        const current = controller.snapshot().prompt;
+        const move = token === "<Up>" ? current?.prev : current?.next;
+        const line = view.state.doc.lineAt(view.state.selection.main.head).number;
+        if (move && line === (token === "<Up>" ? 1 : view.state.doc.lines)) {
+          consumed = true;
+          void Promise.resolve(move(view.state.doc.toString())).catch((error: unknown) =>
+            controller.notify(error instanceof Error ? error.message : "移れませんでした", "error"),
+          );
         }
       } else if (token === "<Tab>") {
         consumed = true;
@@ -233,8 +245,9 @@ export function PromptEditor({
       ) : null}
       <div className="px-3 pb-2 text-xs text-muted">
         {mode === "INSERT" || mode === "REPLACE"
-          ? `Esc Normal へ (${spec.verb}のは Normal から)`
-          : `Enter ${spec.verb}　${spec.interrupt ? "Alt+Enter AI を止めてすぐ送る　" : ""}Esc ${promptCloseHint(spec)}`}
+          ? `Esc Normal へ　Ctrl+Enter ${spec.interruptVerb ?? spec.verb}`
+          : `Enter ${spec.verb}　${spec.interrupt ? `Ctrl+Enter ${spec.interruptVerb ?? spec.verb}　` : ""}Esc ${promptCloseHint(spec)}`}
+        {spec.prevHint ? `　↑ ${spec.prevHint}` : ""}
         {spec.images ? (
           <span className="ml-4 text-accent">画像 {spec.images} 件 (送信時に一緒に送る)</span>
         ) : null}

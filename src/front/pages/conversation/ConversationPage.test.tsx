@@ -771,7 +771,7 @@ describe("会話の画面", () => {
       data.queue = [];
       if (!closeFirst) {
         await act(async () => {
-          expect(await controller.submitPrompt("修正本文")).toBe(false);
+          expect(await controller.submitPrompt("修正本文")).toBe(true);
         });
         await flush();
         expect({
@@ -784,7 +784,10 @@ describe("会話の画面", () => {
         }).toEqual({
           gets: 2,
           queue: "",
-          notice: { message: "すでに届きました", kind: "error" },
+          notice: {
+            message: "この指示は取り消されました。直した内容を書きかけに戻しました",
+            kind: "info",
+          },
           text: "修正本文",
           images: 1,
           calls: [],
@@ -804,9 +807,9 @@ describe("会話の画面", () => {
         mode: "send",
         clientMessageId: "message-id",
       });
-      expect(editQueue.mock.calls).toEqual(
-        closeFirst ? [] : [["c1", "queued", { text: "修正本文", images: ["img-one"] }]],
-      );
+      expect(editQueue.mock.calls).toEqual([
+        ["c1", "queued", { text: "修正本文", images: ["img-one"] }],
+      ]);
     },
   );
   it.each(
@@ -917,10 +920,7 @@ describe("会話の画面", () => {
         images: controller.snapshot().prompt?.images,
         open: controller.snapshot().prompt !== null,
       }).toEqual({ text: imageOnly ? "送る本文" : "送る本文に追記", images: 2, open: true });
-      if (mode === "queue-edit")
-        expect(editQueue.mock.calls).toEqual([
-          ["c1", "queued", { text: "送る本文", images: ["img-one"] }],
-        ]);
+      if (mode === "queue-edit") expect(editQueue.mock.calls).toEqual([]);
       else
         expect(send.mock.calls).toEqual([
           [
@@ -936,18 +936,21 @@ describe("会話の画面", () => {
       await act(async () => {
         await session.saveDraft();
       });
-      expect(data.draft).toEqual({
-        text: imageOnly ? "送る本文" : "送る本文に追記",
-        images: ["img-one", "image-1"],
-        updatedAt: (imageOnly ? 1000 : 1001) + (mode === "queue-edit" ? 1 : 0),
-        updatedBy: "tab",
-      });
+      expect(data.draft).toEqual(
+        mode === "queue-edit"
+          ? { text: "送る本文", images: ["img-one"], updatedAt: 10, updatedBy: "other" }
+          : {
+              text: imageOnly ? "送る本文" : "送る本文に追記",
+              images: ["img-one", "image-1"],
+              updatedAt: imageOnly ? 1000 : 1001,
+              updatedBy: "tab",
+            },
+      );
       if (mode === "queue-edit") {
         await act(async () => {
           await controller.submitPrompt(view.state.doc.toString());
         });
         expect(editQueue.mock.calls).toEqual([
-          ["c1", "queued", { text: "送る本文", images: ["img-one"] }],
           [
             "c1",
             "queued",
@@ -1452,3 +1455,93 @@ it(
   },
   navigationTestTimeout,
 );
+
+describe("届く前の指示を入力欄で直す", () => {
+  const queued = (id: string, text: string, position: number): Snapshot["queue"][number] => ({
+    id,
+    text,
+    images: [],
+    position,
+    stockItemId: null,
+    clientId: null,
+    createdAt: position,
+  });
+  function workingApi() {
+    const data = structuredClone(snapshot);
+    data.conversation.runState = "working";
+    data.queue = [
+      queued("q1", "BOM 付きのときも確かめて", 1),
+      queued("q2", "終わったらテストの件数を教えて", 2),
+    ];
+    const saveDraft = vi.fn<ConversationApi["saveDraft"]>(async (_id, body) => {
+      data.draft = {
+        text: body.text,
+        images: body.images,
+        updatedAt: body.editedAt,
+        updatedBy: body.clientId,
+      };
+      return { draft: data.draft, applied: true };
+    });
+    const editQueue = vi.fn<ConversationApi["editQueue"]>(async () => ({}));
+    return { data, api: fakeApi({ get: async () => structuredClone(data), saveDraft, editQueue }) };
+  }
+  const input = (controller: BufferController) =>
+    EditorView.findFromDOM(
+      screen.getByRole("textbox", { name: controller.snapshot().prompt!.label }),
+    )!;
+
+  it("↑ で届く前の指示を新しい順に呼び出し、↓ で書きかけに戻ると、書きかけが元のまま残っている", async () => {
+    const { api } = workingApi();
+    const { controller } = await mount(api);
+    key(main(), "i");
+    act(() => prompt().dispatch({ changes: { from: 0, insert: "書きかけの文" } }));
+    const shown = () => ({
+      label: controller.snapshot().prompt?.label,
+      text: input(controller).state.doc.toString(),
+    });
+    const press = async (arrow: string) => {
+      key(input(controller), arrow);
+      await flush();
+      return shown();
+    };
+    expect([
+      await press("ArrowUp"),
+      await press("ArrowUp"),
+      await press("ArrowDown"),
+      await press("ArrowDown"),
+    ]).toEqual([
+      { label: "預けた指示を直す (2 / 2 件目)", text: "終わったらテストの件数を教えて" },
+      { label: "預けた指示を直す (1 / 2 件目)", text: "BOM 付きのときも確かめて" },
+      { label: "預けた指示を直す (2 / 2 件目)", text: "終わったらテストの件数を教えて" },
+      { label: "指示", text: "書きかけの文" },
+    ]);
+    expect(vi.mocked(api.saveDraft).mock.calls.map(([, body]) => body.text)).toEqual([
+      "書きかけの文",
+    ]);
+    expect(vi.mocked(api.editQueue).mock.calls).toEqual([]);
+  });
+
+  it("Insert のまま Ctrl+Enter を押すと、AI が作業中なら止めてすぐに送る", async () => {
+    const { api, data } = workingApi();
+    data.queue = [];
+    const { controller } = await mount(api);
+    key(main(), "i");
+    act(() => prompt().dispatch({ changes: { from: 0, insert: "急ぎの指示" } }));
+    key(prompt(), "Enter", { ctrlKey: true });
+    await flush();
+    expect({
+      sent: vi.mocked(api.send).mock.calls,
+      notice: controller.snapshot().notice,
+      prompt: controller.snapshot().prompt,
+    }).toEqual({
+      sent: [
+        [
+          "c1",
+          { text: "急ぎの指示", images: [], mode: "interrupt", clientMessageId: "message-id" },
+        ],
+      ],
+      notice: { message: "AI を止めて、すぐに送りました", kind: "info" },
+      prompt: null,
+    });
+  });
+});

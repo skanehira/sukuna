@@ -70,6 +70,45 @@ type DeferredDraftSave = {
   queued?: boolean;
 };
 type QueueUndo = { item: QueueItem; draft: CancelledDraft | null; pending?: UndoRequest };
+type QueueEdit = {
+  item: QueueItem;
+  base: DraftContent;
+  content: DraftContent;
+  head: string;
+  tail: string;
+  messageId?: string;
+};
+function authoredRange(item: QueueItem): { from: number; to: number } | null {
+  const context = item.deliveryContext;
+  if (context) {
+    const original = context.original?.text ?? "";
+    const ranges =
+      context.originalRanges ??
+      (original && item.text.endsWith(original)
+        ? [{ from: item.text.length - original.length, to: item.text.length }]
+        : []);
+    return ranges.length === 1 ? ranges[0] : null;
+  }
+  if (!item.stockItemId) return null;
+  const lines = item.text.split("\n");
+  let body = 1;
+  while (body < lines.length && lines[body].startsWith("> ")) body++;
+  return { from: lines.slice(0, body).join("\n").length + 1, to: item.text.length };
+}
+function queueEdit(item: QueueItem): QueueEdit {
+  const range = authoredRange(item);
+  const content = range
+    ? { text: item.text.slice(range.from, range.to), images: item.images }
+    : queueDraftContent(item);
+  return {
+    item,
+    base: content,
+    content,
+    head: range ? item.text.slice(0, range.from) : "",
+    tail: range ? item.text.slice(range.to) : "",
+  };
+}
+const emptyQueueEdit = "内容が空です。取り消すときは、届く前の指示の行で dd を押してください";
 const undoPending =
   "預けた指示を戻しています。対象の編集や送信は、復帰の結果が出てから行ってください。";
 const undoConflict = "戻した指示を書きかけの中で確認できません。書きかけはそのまま残しました。";
@@ -103,7 +142,9 @@ export class ConversationSession {
   private undo: QueueUndo | null = null;
   private deferredDraftSave: DeferredDraftSave | null = null;
   private queueOperation = false;
-  private queueEditing: QueueItem | null = null;
+  private queueEditing: QueueEdit | null = null;
+  private readonly uploads = new Set<Promise<unknown>>();
+  private readonly mainPrompts = new WeakMap<PromptSpec["close"], string[] | undefined>();
   private online = true;
   private viewConnection: symbol | null = null;
   readonly id: string;
@@ -169,7 +210,10 @@ export class ConversationSession {
         ? { replaced: false, notice: null }
         : this.draft.receive(data.draft, readVersion);
     if (result.notice) this.controller.notify(result.notice);
-    this.syncDraftPrompt({ replaceText: result.replaced });
+    const editing = this.queueEditing;
+    if (editing && !data.queue.some((item) => item.id === editing.item.id))
+      this.queueEditVanished(editing);
+    else this.syncDraftPrompt({ replaceText: result.replaced });
     this.refreshTail();
     this.emit();
   }
@@ -254,6 +298,7 @@ export class ConversationSession {
           ...conversationCommands.images,
           run: async (args) => {
             if (args.join(" ") !== "clear") throw new Error("使い方: :images clear");
+            if (this.queueEditing) return this.editQueueContent({ images: [] });
             this.editDraft(this.draft.content().text, []);
             await this.saveDraft();
           },
@@ -778,43 +823,298 @@ export class ConversationSession {
     return true;
   }
 
-  private prompt(stockIds?: string[]): PromptSpec {
-    const content = this.draft.content();
+  private sortedQueue(): QueueItem[] {
+    return [...(this.state.data?.queue ?? [])].sort((a, b) => a.position - b.position);
+  }
+  private promptChrome(stockIds?: string[]): Partial<PromptSpec> {
+    const editing = this.queueEditing;
+    const queue = this.sortedQueue();
+    if (editing) {
+      const index = queue.findIndex((item) => item.id === editing.item.id);
+      const older = index > 0;
+      return {
+        label: `預けた指示を直す (${index + 1} / ${queue.length} 件目)`,
+        verb: "直す",
+        escHint: "閉じる (直した内容は残る)",
+        interruptVerb: this.working()
+          ? "AI を止めて届く前の指示をすぐ送る"
+          : "届く前の指示をすぐ送る",
+        prev: older ? (text) => this.moveQueueEdit(text, -1) : undefined,
+        prevHint: older ? "前の指示へ" : undefined,
+        next: (text) => this.moveQueueEdit(text, 1),
+        draftBinding: { kind: "queue", itemId: editing.item.id },
+        images: editing.content.images.length,
+      };
+    }
+    const recall = stockIds === undefined && queue.length > 0;
     return {
-      label: this.queueEditing ? "預けた指示" : this.view === "stock-thread" ? "返信" : "指示",
+      label: this.view === "stock-thread" ? "返信" : "指示",
+      verb: "送る",
+      escHint: undefined,
+      interruptVerb: this.working() ? "AI を止めてすぐ送る" : undefined,
+      prev: recall ? () => this.recallQueue() : undefined,
+      prevHint: recall ? "届く前の指示を直す" : undefined,
+      next: undefined,
+      draftBinding: { kind: "message" },
+      images: this.draft.content().images.length,
+    };
+  }
+  private prompt(stockIds?: string[]): PromptSpec {
+    const content = this.queueEditing?.content ?? this.draft.content();
+    const close = (text: string) => {
+      if (this.queueEditing) this.closeQueueEdit(text);
+      else this.closeDraftPrompt(text, stockIds);
+    };
+    this.mainPrompts.set(close, stockIds);
+    return {
+      label: "",
+      verb: "",
+      ...this.promptChrome(stockIds),
       target: `${this.view === "stock-thread" ? "スレッド" : "会話"}: ${this.state.data!.conversation.title}${stockIds === undefined ? "" : ` (ストックの指示 ${stockIds.length} 件と一緒に送る)`}`,
       scope: this.id,
-      draftBinding: this.queueEditing
-        ? { kind: "queue", itemId: this.queueEditing.id }
-        : { kind: "message" },
-      verb: "送る",
       initialText: content.text,
-      images: content.images.length,
       commands: this.state.data!.commands,
       allowEmpty: true,
-      allowChange: (text, edits) => this.allowUndoEdit({ ...this.draft.content(), text }, edits),
-      change: (text, edits) => this.editDraft(text, undefined, edits),
-      submit: (text) => this.send(text, false, stockIds),
-      interrupt: (text) => this.send(text, true, stockIds),
-      close: (text) => {
-        if (text !== this.draft.content().text) this.editDraft(text);
-        this.queueEditing = null;
-        void this.saveDraft();
-        if (text || this.draft.content().images.length)
-          this.controller.notify(
-            this.undo?.pending
-              ? "書きかけは預け直しが確定したあとに保存します。"
-              : stockIds === undefined
-                ? "書きかけを残しました。i で続きを書けます"
-                : "書きかけを残しました。「指摘を書いて実装に戻す」で続きを書けます",
-          );
+      allowChange: (text, edits) =>
+        this.queueEditing !== null || this.allowUndoEdit({ ...this.draft.content(), text }, edits),
+      change: (text, edits) => {
+        if (this.queueEditing) this.editQueueContent({ text }, edits);
+        else this.editDraft(text, undefined, edits);
       },
+      submit: (text) =>
+        this.queueEditing ? this.finishQueueEdit(text) : this.send(text, false, stockIds),
+      interrupt: (text) =>
+        this.queueEditing ? this.sendEditedQueue(text) : this.send(text, true, stockIds),
+      close,
       paste: (files) => {
         void this.paste(files).catch((error: unknown) =>
           this.controller.notify(this.reason(error), "error"),
         );
       },
     };
+  }
+  private closeDraftPrompt(text: string, stockIds?: string[]): void {
+    if (text !== this.draft.content().text) this.editDraft(text);
+    void this.saveDraft();
+    if (text || this.draft.content().images.length)
+      this.controller.notify(
+        this.undo?.pending
+          ? "書きかけは預け直しが確定したあとに保存します。"
+          : stockIds === undefined
+            ? "書きかけを残しました。i で続きを書けます"
+            : "書きかけを残しました。「指摘を書いて実装に戻す」で続きを書けます",
+      );
+  }
+  private async recallQueue(): Promise<void> {
+    this.requireUndoResult();
+    if (!this.online) throw new Error("サーバーにつながりません");
+    const promptId = this.controller.snapshot().promptId;
+    if (!(await this.saveDraft())) return;
+    if (this.controller.snapshot().promptId !== promptId || this.queueEditing) return;
+    const item = this.sortedQueue().at(-1);
+    if (item) this.showQueueItem(item);
+  }
+  private showQueueItem(item: QueueItem): void {
+    this.queueEditing = queueEdit(item);
+    this.controller.showPromptItem(
+      { ...this.promptChrome(), unsent: undefined },
+      this.queueEditing.content.text,
+    );
+  }
+  private showDraftPrompt(): void {
+    this.controller.showPromptItem(
+      { ...this.promptChrome(), unsent: undefined },
+      this.draft.content().text,
+    );
+  }
+  private editQueueContent(
+    next: Partial<DraftContent>,
+    edits?: ChangeDesc,
+    editing = this.queueEditing!,
+  ): void {
+    const previous = editing.content;
+    const text = next.text ?? previous.text;
+    const anchors = previous.timeline_anchors;
+    editing.content = {
+      text,
+      images: next.images ?? previous.images,
+      ...(anchors === undefined
+        ? {}
+        : {
+            timeline_anchors: mapTimelineAnchors(
+              anchors,
+              previous.text,
+              text,
+              edits ?? replaceRange(previous.text, text),
+            ),
+          }),
+    };
+    if (editing.content.images !== previous.images && this.queueEditing === editing)
+      this.controller.patchPrompt({ images: editing.content.images.length });
+  }
+  private syncQueueText(editing: QueueEdit, text: string): void {
+    if (this.queueEditing === editing && text !== editing.content.text)
+      this.editQueueContent({ text });
+  }
+  private async saveQueueEdit(editing: QueueEdit): Promise<boolean> {
+    const content = editing.content;
+    if (sameDraftContent(content, editing.base)) return true;
+    if (!content.text.trim() && !content.images.length) throw new Error(emptyQueueEdit);
+    if (hasUnlocatedEdits(content)) throw new Error(unlocatedConsultationNotice);
+    try {
+      const edited = (await this.api.editQueue(this.id, editing.item.id, {
+        ...content,
+        text: editing.head + content.text + editing.tail,
+      })) as { queueItem?: QueueItem } | undefined;
+      editing.base = content;
+      const queueItem = edited?.queueItem;
+      if (queueItem?.id === editing.item.id && this.state.data) {
+        editing.item = queueItem;
+        this.appliedFetch = ++this.nextFetch;
+        this.state = {
+          ...this.state,
+          data: {
+            ...this.state.data,
+            queue: this.state.data.queue.map((item) =>
+              item.id === queueItem.id ? queueItem : item,
+            ),
+          },
+        };
+        this.refreshTail();
+        this.emit();
+      }
+      return true;
+    } catch (error) {
+      if (error instanceof ConversationApiError && error.status === 404) {
+        this.queueEditVanished(editing);
+        void this.refresh().catch((error: unknown) =>
+          this.controller.notify(this.reason(error), "error"),
+        );
+        return false;
+      }
+      throw error;
+    }
+  }
+  private async settleUploads(): Promise<void> {
+    while (this.uploads.size) await Promise.allSettled(this.uploads);
+  }
+  private async moveQueueEdit(text: string, direction: -1 | 1): Promise<void> {
+    const editing = this.queueEditing;
+    if (!editing) return;
+    this.syncQueueText(editing, text);
+    const promptId = this.controller.snapshot().promptId;
+    if (this.uploads.size) await this.settleUploads();
+    if (!(await this.saveQueueEdit(editing))) return;
+    if (this.queueEditing !== editing || this.controller.snapshot().promptId !== promptId) return;
+    const queue = this.sortedQueue();
+    const target = queue[queue.findIndex((item) => item.id === editing.item.id) + direction];
+    if (target) this.showQueueItem(target);
+    else if (direction > 0) await this.returnToDraft();
+  }
+  private async returnToDraft(): Promise<void> {
+    const promptId = this.controller.snapshot().promptId;
+    this.queueEditing = null;
+    await this.refresh().catch((error: unknown) =>
+      this.controller.notify(this.reason(error), "error"),
+    );
+    if (this.controller.snapshot().promptId === promptId && !this.queueEditing)
+      this.showDraftPrompt();
+  }
+  private async finishQueueEdit(text: string): Promise<boolean> {
+    const editing = this.queueEditing!;
+    this.syncQueueText(editing, text);
+    if (this.uploads.size) await this.settleUploads();
+    const content = editing.content;
+    if (!(await this.saveQueueEdit(editing))) return false;
+    if (this.uploads.size) await this.settleUploads();
+    if (this.queueEditing !== editing || editing.content !== content) return false;
+    this.queueEditing = null;
+    this.controller.notify("預けた指示を直しました");
+    return true;
+  }
+  private async sendEditedQueue(text: string): Promise<boolean> {
+    const editing = this.queueEditing!;
+    this.syncQueueText(editing, text);
+    if (this.uploads.size) await this.settleUploads();
+    const content = editing.content;
+    if (!(await this.saveQueueEdit(editing))) return false;
+    const working = this.working();
+    const count = this.state.data?.queue.length ?? 0;
+    editing.messageId ??= this.env.id();
+    try {
+      await this.api.send(this.id, {
+        text: "",
+        images: [],
+        mode: "interrupt",
+        clientMessageId: editing.messageId,
+      });
+    } catch (error) {
+      if (this.queueEditing === editing)
+        this.controller.patchPrompt({ unsent: this.reason(error) });
+      throw error;
+    }
+    delete editing.messageId;
+    if (this.uploads.size) await this.settleUploads();
+    const unchanged = editing.content === content;
+    if (unchanged && this.queueEditing === editing) this.queueEditing = null;
+    this.controller.notify(
+      working
+        ? `AI を止めて、届く前の指示 ${count} 件をすぐに送りました`
+        : `届く前の指示 ${count} 件を送りました`,
+    );
+    void this.refresh().catch((error: unknown) =>
+      this.controller.notify(this.reason(error), "error"),
+    );
+    return unchanged;
+  }
+  private closeQueueEdit(text: string): void {
+    const editing = this.queueEditing!;
+    this.syncQueueText(editing, text);
+    this.queueEditing = null;
+    const saving = this.settleUploads().then(() => this.saveQueueEdit(editing));
+    void saving.catch((error: unknown) => {
+      this.controller.notify(this.reason(error), "error");
+      if (!this.viewConnection || this.controller.snapshot().prompt) return;
+      this.queueEditing = editing;
+      this.controller.openPrompt(this.prompt());
+    });
+  }
+  private queueEditVanished(editing: QueueEdit): void {
+    if (this.queueEditing === editing) this.queueEditing = null;
+    const binding = this.controller.snapshot().prompt?.draftBinding;
+    const showing = binding?.kind === "queue" && binding.itemId === editing.item.id;
+    if (sameDraftContent(editing.content, editing.base))
+      this.controller.notify("この指示は、もう届く前の指示にありません");
+    else {
+      const delivered = this.events.some(
+        (event) =>
+          event.type === "user_message" && event.payload.queued_ids?.includes(editing.item.id),
+      );
+      const draft = this.draft.content();
+      const original = queuedDraftContent(editing.item);
+      const at = delivered || !original ? -1 : draft.text.lastIndexOf(original.text);
+      const next =
+        at < 0 || !original
+          ? joinDraftContent(draft, editing.content)
+          : {
+              text:
+                draft.text.slice(0, at) +
+                editing.content.text +
+                draft.text.slice(at + original.text.length),
+              images: [
+                ...draft.images.filter((id) => !original.images.includes(id)),
+                ...editing.content.images,
+              ],
+            };
+      this.editDraft(next.text, next.images);
+      this.controller.notify(
+        delivered
+          ? "この指示はもう届いていました。直した内容を書きかけの後ろに足しました"
+          : "この指示は取り消されました。直した内容を書きかけに戻しました",
+      );
+    }
+    if (showing) this.showDraftPrompt();
+    else this.syncDraftPrompt({ replaceText: true });
   }
   openDesignRejection(
     target: string,
@@ -973,15 +1273,18 @@ export class ConversationSession {
   }: { replaceText?: boolean; clearUnsent?: boolean } = {}): void {
     const prompt = this.controller.snapshot().prompt;
     if (prompt?.scope !== this.id) return;
-    const binding = prompt.draftBinding;
-    const matches = this.queueEditing
-      ? binding?.kind === "queue" && binding.itemId === this.queueEditing.id
-      : binding?.kind === "message";
-    if (!matches) return;
+    const main = this.mainPrompts.has(prompt.close);
+    const chrome = main ? this.promptChrome(this.mainPrompts.get(prompt.close)) : {};
+    if (this.queueEditing) {
+      if (main) this.controller.patchPrompt(chrome);
+      return;
+    }
+    if (prompt.draftBinding?.kind !== "message") return;
     const draft = this.draft.content();
     if (replaceText) this.controller.replacePromptText(draft.text);
     this.controller.patchPrompt({
       images: draft.images.length,
+      ...chrome,
       ...(clearUnsent ? { unsent: undefined } : {}),
     });
   }
@@ -1135,7 +1438,6 @@ export class ConversationSession {
     const draft = this.draft;
     const version = draft.version();
     const images = [...draft.content().images];
-    const editing = this.queueEditing;
     const anchors = draft.content().timeline_anchors;
     const structured = anchors === undefined ? {} : { timeline_anchors: anchors };
     const promptId = this.controller.snapshot().promptId;
@@ -1154,59 +1456,37 @@ export class ConversationSession {
     try {
       if (!this.online) throw new Error("サーバーにつながりません");
       if (hasUnlocatedEdits({ text, ...structured })) throw new Error(unlocatedConsultationNotice);
-      if (editing) {
-        const edited = (await this.api.editQueue(this.id, editing.id, {
-          text,
-          images,
-          ...structured,
-        })) as { queueItem?: QueueItem } | undefined;
-        const queueItem = edited?.queueItem;
-        if (queueItem?.id === editing.id && this.state.data) {
-          this.appliedFetch = ++this.nextFetch;
-          this.state = {
-            ...this.state,
-            data: {
-              ...this.state.data,
-              queue: this.state.data.queue.map((item) =>
-                item.id === queueItem.id ? queueItem : item,
-              ),
-            },
-          };
-          this.refreshTail();
-          this.emit();
-        }
-      } else {
-        this.messageId ??= this.env.id();
-        sentMessageId = this.messageId;
-        const queueCount = this.state.data?.queue.length ?? 0;
-        const conversation = this.state.data?.conversation;
-        const reopening = conversation?.kind === "chat" && conversation.closedAt !== null;
-        const result = await this.api.send(this.id, {
-          text,
-          images,
-          mode: interrupt ? "interrupt" : "send",
-          clientMessageId: sentMessageId,
-          ...(stockIds.length > 0 && { stockIds }),
-          ...(anchors === undefined
-            ? {}
-            : { ...structured, timeline_comments: commentsFromAnchors(text, anchors) }),
-        });
-        this.controller.notify(
-          reopening
-            ? "送りました。会話を再開し、一覧に戻します"
-            : result.result === "queued"
-              ? "預けました。今の作業が終わると届きます"
-              : interrupt && this.working()
-                ? queueCount
+      this.messageId ??= this.env.id();
+      sentMessageId = this.messageId;
+      const queueCount = this.state.data?.queue.length ?? 0;
+      const conversation = this.state.data?.conversation;
+      const reopening = conversation?.kind === "chat" && conversation.closedAt !== null;
+      const result = await this.api.send(this.id, {
+        text,
+        images,
+        mode: interrupt ? "interrupt" : "send",
+        clientMessageId: sentMessageId,
+        ...(stockIds.length > 0 && { stockIds }),
+        ...(anchors === undefined
+          ? {}
+          : { ...structured, timeline_comments: commentsFromAnchors(text, anchors) }),
+      });
+      this.controller.notify(
+        reopening
+          ? "送りました。会話を再開し、一覧に戻します"
+          : result.result === "queued"
+            ? "預けました。今の作業が終わると届きます"
+            : interrupt && this.working()
+              ? queueCount
+                ? text || images.length
                   ? `AI を止めて、届く前の指示 ${queueCount} 件と一緒にすぐに送りました`
-                  : "AI を止めて、すぐに送りました"
-                : images.length
-                  ? `画像 ${images.length} 件と一緒に送りました`
-                  : "送りました",
-        );
-      }
+                  : `AI を止めて、届く前の指示 ${queueCount} 件をすぐに送りました`
+                : "AI を止めて、すぐに送りました"
+              : images.length
+                ? `画像 ${images.length} 件と一緒に送りました`
+                : "送りました",
+      );
       const unchanged = this.draft === draft && draft.version() === version;
-      if (editing && unchanged && this.queueEditing === editing) this.queueEditing = null;
       if (unchanged) this.draft = new DraftSync(this.env.clientId, null);
       else await this.saveDraft();
       if (this.messageId === sentMessageId) this.messageId = null;
@@ -1216,15 +1496,6 @@ export class ConversationSession {
       );
       return unchanged;
     } catch (error) {
-      if (editing && error instanceof ConversationApiError && error.status === 404) {
-        if (this.queueEditing === editing) this.queueEditing = null;
-        await this.refresh(true);
-        if (submissionIsOpen()) {
-          this.controller.openPrompt(this.prompt());
-          this.controller.patchPrompt({ unsent: "すでに届きました" });
-        }
-        throw new Error("すでに届きました");
-      }
       if (submissionIsOpen()) this.controller.patchPrompt({ unsent: this.reason(error) });
       throw error;
     }
@@ -1236,9 +1507,25 @@ export class ConversationSession {
         file.size > 5 * 1024 * 1024
       )
         throw new Error("画像は PNG・JPEG・GIF・WebP、1 枚 5 MB までです");
-      if (this.draft.content().images.length >= 20) throw new Error("画像は 1 通に 20 枚までです");
-      const { image } = await this.api.upload(this.id, file);
-      this.editDraft(this.draft.content().text, [...this.draft.content().images, image.id]);
+      const editing = this.queueEditing;
+      if ((editing?.content ?? this.draft.content()).images.length >= 20)
+        throw new Error("画像は 1 通に 20 枚までです");
+      const upload = this.api.upload(this.id, file).then(({ image }) => {
+        if (!editing)
+          this.editDraft(this.draft.content().text, [...this.draft.content().images, image.id]);
+        else
+          this.editQueueContent(
+            { images: [...editing.content.images, image.id] },
+            undefined,
+            editing,
+          );
+      });
+      this.uploads.add(upload);
+      try {
+        await upload;
+      } finally {
+        this.uploads.delete(upload);
+      }
     }
   }
   private selectedQueue(): QueueItem | undefined {
@@ -1388,8 +1675,7 @@ export class ConversationSession {
     const item = this.selectedQueue();
     if (!item) return;
     this.controller.closePrompt();
-    this.queueEditing = item;
-    this.draft.edit(queueDraftContent(item), this.env.now());
+    this.queueEditing = queueEdit(item);
     this.controller.openPrompt(this.prompt());
   }
   private fold(collapse: boolean): void {

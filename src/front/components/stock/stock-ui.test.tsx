@@ -471,7 +471,9 @@ it("引用品の入力欄は先頭5行と残件数を示し、未保存文を捨
       screen.getByText("Enter ストックする Esc 閉じる (書きかけは捨てる)", { exact: true }),
     ).toBeVisible();
     expect(
-      within(screen.getByRole("status")).getByText("閉じる (書きかけは捨てる)", { exact: true }),
+      within(screen.getByRole("status")).getByText("主のウィンドウへ移る (入力欄は開いたまま)", {
+        exact: true,
+      }),
     ).toBeVisible();
   } finally {
     f.close();

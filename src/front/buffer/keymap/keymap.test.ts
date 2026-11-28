@@ -22,6 +22,9 @@ describe("キーの記法", () => {
     ["<C-w>h", "Ctrl+w h"],
     ["<CR>", "Enter"],
     ["<A-CR>", "Alt+Enter"],
+    ["<C-CR>", "Ctrl+Enter"],
+    ["<Up>", "↑"],
+    ["<Down>", "↓"],
     ["<Esc>", "Esc"],
   ])("%s を %s として表示する", (vim, label) => expect(displayKeys(vim)).toBe(label));
   it.each(["<broken>", "<C->", "<Space", ""])("読めない記法 %s を拒む", (keys) =>

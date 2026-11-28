@@ -1,11 +1,14 @@
-import { expect, it } from "vite-plus/test";
+import { ChangeSet } from "@codemirror/state";
+import { describe, expect, it } from "vite-plus/test";
+import type { ConversationMessage } from "../../../shared/conversation/api";
 import type { BufferHandle } from "../../buffer/Buffer";
-import { BufferController } from "../../buffer/controller";
+import { BufferController, type PromptSpec } from "../../buffer/controller";
 import type { LineInfo } from "../../buffer/line";
 import { Realtime, type RealtimeSocket } from "../realtime";
+import { unlocatedConsultationNotice } from "../../../shared/progress/draft";
 import { ConversationApiError } from "./api";
 import { ConversationSession } from "./session";
-import type { ConversationApi, DraftRequest, Event, Snapshot } from "./types";
+import type { ConversationApi, DraftContent, DraftRequest, Event, Snapshot } from "./types";
 
 const event = (seq: number): Event => ({
   seq,
@@ -360,12 +363,16 @@ it.each(
     );
     expect(f.session.snapshot().data).toEqual(f.data);
     await f.session.saveDraft();
-    expect(f.data.draft).toEqual({
-      text,
-      images: ["img-one", "img"],
-      updatedAt: 10 + (mode === "queue-edit" ? 1 : 0) + (change === "image-saved" ? 1 : 2),
-      updatedBy: "tab",
-    });
+    expect(f.data.draft).toEqual(
+      mode === "queue-edit"
+        ? { text: "送る本文", images: ["img-one"], updatedAt: 10, updatedBy: "other" }
+        : {
+            text,
+            images: ["img-one", "img"],
+            updatedAt: 10 + (change === "image-saved" ? 1 : 2),
+            updatedBy: "tab",
+          },
+    );
     expect(sends).toEqual(
       mode === "queue-edit"
         ? []
@@ -378,7 +385,7 @@ it.each(
             },
           ],
     );
-    expect(edits).toEqual(mode === "queue-edit" ? [{ text: "送る本文", images: ["img-one"] }] : []);
+    expect(edits).toEqual([]);
     disconnect();
   },
 );
@@ -1448,4 +1455,993 @@ it("確定事項の編集欄は同じスレッドの共有下書きを受け取�
   } finally {
     disconnect();
   }
+});
+
+describe("届く前の指示を入力欄で直す", () => {
+  const queued = (id: string, text: string, position: number): Snapshot["queue"][number] => ({
+    id,
+    text,
+    images: [],
+    position,
+    stockItemId: null,
+    clientId: null,
+    createdAt: position,
+  });
+  async function editing({ working = true, draft = "書きかけ" } = {}) {
+    const f = fixture();
+    f.data.conversation.runState = working ? "working" : "idle";
+    f.data.queue = [
+      queued("q1", "BOM 付きのときも確かめて", 1),
+      queued("q2", "終わったらテストの件数を教えて", 2),
+    ];
+    const edits: [string, DraftContent][] = [];
+    const sends: ConversationMessage[] = [];
+    f.api.editQueue = async (_id, itemId, body) => {
+      edits.push([itemId, body]);
+      const item = f.data.queue.find((value) => value.id === itemId);
+      if (!item) throw new ConversationApiError(404, "not_found", "預かった指示が見つかりません");
+      Object.assign(item, body);
+      return { queueItem: structuredClone(item) };
+    };
+    f.api.send = async (_id, body) => {
+      sends.push(body);
+      return { result: "delivered", queueItem: null };
+    };
+    await f.session.load();
+    const disconnect = f.session.connect();
+    const controller = f.session.controller;
+    controller.openPrompt(controller.options.prompt!()!);
+    const prompt = () => controller.snapshot().prompt!;
+    const type = (text: string) => {
+      controller.setPromptDraft(text);
+      prompt().change!(text);
+    };
+    if (draft) type(draft);
+    const up = () => prompt().prev!(controller.promptText());
+    const down = () => prompt().next!(controller.promptText());
+    return { f, controller, edits, sends, disconnect, prompt, type, up, down };
+  }
+  const chrome = (spec: PromptSpec | null) => ({
+    label: spec?.label,
+    verb: spec?.verb,
+    escHint: spec?.escHint,
+    interruptVerb: spec?.interruptVerb,
+    prevHint: spec?.prevHint,
+    prev: typeof spec?.prev,
+  });
+
+  it.each([
+    {
+      name: "作業中の書きかけ",
+      working: true,
+      ups: 0,
+      expected: {
+        label: "指示",
+        verb: "送る",
+        escHint: undefined,
+        interruptVerb: "AI を止めてすぐ送る",
+        prevHint: "届く前の指示を直す",
+        prev: "function",
+      },
+    },
+    {
+      name: "作業中のいちばん新しい指示",
+      working: true,
+      ups: 1,
+      expected: {
+        label: "預けた指示を直す (2 / 2 件目)",
+        verb: "直す",
+        escHint: "閉じる (直した内容は残る)",
+        interruptVerb: "AI を止めて届く前の指示をすぐ送る",
+        prevHint: "前の指示へ",
+        prev: "function",
+      },
+    },
+    {
+      name: "作業中でないいちばん古い指示",
+      working: false,
+      ups: 2,
+      expected: {
+        label: "預けた指示を直す (1 / 2 件目)",
+        verb: "直す",
+        escHint: "閉じる (直した内容は残る)",
+        interruptVerb: "届く前の指示をすぐ送る",
+        prevHint: undefined,
+        prev: "undefined",
+      },
+    },
+  ])(
+    "$name では、欄の名前・動詞・ヒントをその項目に合わせる",
+    async ({ working, ups, expected }) => {
+      const e = await editing({ working });
+      for (let i = 0; i < ups; i++) await e.up();
+      expect(chrome(e.prompt())).toEqual(expected);
+      e.disconnect();
+    },
+  );
+
+  it("届く前の指示が無いと、↑ で呼び出せず、ヒントも出さない", async () => {
+    const f = fixture();
+    await f.session.load();
+    const disconnect = f.session.connect();
+    const controller = f.session.controller;
+    controller.openPrompt(controller.options.prompt!()!);
+    expect(chrome(controller.snapshot().prompt)).toEqual({
+      label: "指示",
+      verb: "送る",
+      escHint: undefined,
+      interruptVerb: undefined,
+      prevHint: undefined,
+      prev: "undefined",
+    });
+    disconnect();
+  });
+
+  it("直しているあいだ、入力欄の内容を書きかけとして保存しない", async () => {
+    const e = await editing();
+    await e.up();
+    e.type("件数と所要時間を教えて");
+    await e.f.session.saveDraft();
+    expect(e.f.data.draft).toEqual({
+      text: "書きかけ",
+      images: [],
+      updatedAt: 1,
+      updatedBy: "tab",
+    });
+    e.disconnect();
+  });
+
+  it("Normal の Enter で直した内容を保存して閉じ、次に開くと書きかけが出る", async () => {
+    const e = await editing();
+    await e.up();
+    e.type("件数と所要時間を教えて");
+    await e.controller.submitPrompt(e.controller.promptText());
+    e.controller.openPrompt(e.controller.options.prompt!()!);
+    expect({
+      edits: e.edits,
+      notice: e.controller.snapshot().notice,
+      label: e.prompt().label,
+      text: e.controller.promptText(),
+      sends: e.sends,
+      queued: e.f.shown().filter((line) => line.startsWith("届く前の指示: ")),
+    }).toEqual({
+      edits: [["q2", { text: "件数と所要時間を教えて", images: [] }]],
+      notice: { message: "預けた指示を直しました", kind: "info" },
+      label: "指示",
+      text: "書きかけ",
+      sends: [],
+      queued: ["届く前の指示: BOM 付きのときも確かめて", "届く前の指示: 件数と所要時間を教えて"],
+    });
+    e.disconnect();
+  });
+
+  it("Esc で直した内容を保存して閉じ、次に開くと書きかけが出る", async () => {
+    const e = await editing();
+    await e.up();
+    e.type("件数と所要時間を教えて");
+    e.controller.closePrompt(e.controller.promptText());
+    await Promise.resolve();
+    e.controller.openPrompt(e.controller.options.prompt!()!);
+    expect({ edits: e.edits, label: e.prompt().label, text: e.controller.promptText() }).toEqual({
+      edits: [["q2", { text: "件数と所要時間を教えて", images: [] }]],
+      label: "指示",
+      text: "書きかけ",
+    });
+    e.disconnect();
+  });
+
+  it.each([
+    {
+      name: "作業中",
+      working: true,
+      notice: "AI を止めて、届く前の指示 2 件をすぐに送りました",
+    },
+    { name: "作業中でない", working: false, notice: "届く前の指示 2 件を送りました" },
+  ])(
+    "$name に直して Ctrl+Enter を押すと、保存してから届く前の指示をすぐに送る",
+    async ({ working, notice }) => {
+      const e = await editing({ working });
+      await e.up();
+      e.type("件数と所要時間を教えて");
+      const closed = await e.controller.submitPrompt(e.controller.promptText(), true);
+      expect({
+        closed,
+        prompt: e.controller.snapshot().prompt,
+        edits: e.edits,
+        sends: e.sends,
+        notice: e.controller.snapshot().notice,
+      }).toEqual({
+        closed: true,
+        prompt: null,
+        edits: [["q2", { text: "件数と所要時間を教えて", images: [] }]],
+        sends: [{ text: "", images: [], mode: "interrupt", clientMessageId: "message-1" }],
+        notice: { message: notice, kind: "info" },
+      });
+      e.disconnect();
+    },
+  );
+
+  it("届けるのに失敗すると、直している指示に留まって未送信を出し、もう一度 Ctrl+Enter で送れる", async () => {
+    const e = await editing();
+    await e.up();
+    e.type("件数と所要時間を教えて");
+    const send = e.f.api.send;
+    e.f.api.send = async () => {
+      throw new ConversationApiError(503, "runner_unavailable", "ランナーにつながりません");
+    };
+    await e.controller.submitPrompt(e.controller.promptText(), true);
+    const failed = {
+      label: e.prompt().label,
+      unsent: e.prompt().unsent,
+      text: e.controller.promptText(),
+    };
+    e.f.api.send = send;
+    await e.controller.submitPrompt(e.controller.promptText(), true);
+    expect({ failed, edits: e.edits.length, sends: e.sends }).toEqual({
+      failed: {
+        label: "預けた指示を直す (2 / 2 件目)",
+        unsent: "ランナーにつながりません",
+        text: "件数と所要時間を教えて",
+      },
+      edits: 1,
+      sends: [{ text: "", images: [], mode: "interrupt", clientMessageId: "message-1" }],
+    });
+    e.disconnect();
+  });
+
+  it("保存に失敗すると、移らずに今の指示に留まり、理由を出す", async () => {
+    const e = await editing();
+    await e.up();
+    e.type("件数と所要時間を教えて");
+    e.f.api.editQueue = async () => {
+      throw new ConversationApiError(500, "internal", "保存できませんでした");
+    };
+    await expect(e.down()).rejects.toThrow("保存できませんでした");
+    expect({ label: e.prompt().label, text: e.controller.promptText() }).toEqual({
+      label: "預けた指示を直す (2 / 2 件目)",
+      text: "件数と所要時間を教えて",
+    });
+    e.disconnect();
+  });
+
+  it("本文を空にして保存しようとすると、保存せずに留まり、取り消し方を案内する", async () => {
+    const e = await editing();
+    await e.up();
+    e.type("");
+    await e.controller.submitPrompt("");
+    expect({
+      edits: e.edits,
+      label: e.prompt().label,
+      notice: e.controller.snapshot().notice,
+    }).toEqual({
+      edits: [],
+      label: "預けた指示を直す (2 / 2 件目)",
+      notice: {
+        message: "内容が空です。取り消すときは、届く前の指示の行で dd を押してください",
+        kind: "error",
+      },
+    });
+    e.disconnect();
+  });
+
+  it("書きかけを保存できないときは移らず、理由を出す", async () => {
+    const e = await editing();
+    e.f.session.connection(false);
+    await expect(e.up()).rejects.toThrow("サーバーにつながりません");
+    expect({ label: e.prompt().label, text: e.controller.promptText() }).toEqual({
+      label: "指示",
+      text: "書きかけ",
+    });
+    e.disconnect();
+  });
+
+  it("直しているあいだに貼った画像は直している指示に付き、:images clear も指示の画像に効く", async () => {
+    const e = await editing();
+    await e.up();
+    e.prompt().paste!([new File(["image"], "image.png", { type: "image/png" })]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const pasted = e.prompt().images;
+    await e.controller.submitPrompt(e.controller.promptText());
+    e.controller.openPrompt(e.controller.options.prompt!()!);
+    await e.up();
+    await e.controller.command("images clear");
+    expect({
+      pasted,
+      cleared: e.prompt().images,
+      edits: e.edits,
+      draft: e.f.data.draft?.images,
+    }).toEqual({
+      pasted: 1,
+      cleared: 0,
+      edits: [["q2", { text: "終わったらテストの件数を教えて", images: ["img"] }]],
+      draft: [],
+    });
+    e.disconnect();
+  });
+
+  it("別のタブで届く前の指示が増えると、件数を数え直す", async () => {
+    const e = await editing();
+    await e.up();
+    e.f.data.queue.push(queued("q3", "別のタブの指示", 3));
+    await e.f.session.refresh();
+    expect(e.prompt().label).toBe("預けた指示を直す (2 / 3 件目)");
+    e.disconnect();
+  });
+
+  it("書きかけに戻るときは、脇に置いているあいだに別のタブが書いた書きかけを出す", async () => {
+    const e = await editing();
+    await e.up();
+    e.f.data.draft = { text: "別のタブの書きかけ", images: [], updatedAt: 50, updatedBy: "other" };
+    await e.down();
+    expect({
+      label: e.prompt().label,
+      text: e.controller.promptText(),
+      notice: e.controller.snapshot().notice,
+    }).toEqual({
+      label: "指示",
+      text: "別のタブの書きかけ",
+      notice: { message: "別の端末で書いた内容に置き換わりました", kind: "info" },
+    });
+    e.disconnect();
+  });
+
+  it.each([
+    {
+      name: "変えていない指示が消えた",
+      change: false,
+      delivered: false,
+      draft: null,
+      text: "書きかけ",
+      notice: "この指示は、もう届く前の指示にありません",
+    },
+    {
+      name: "直した指示が届いていた",
+      change: true,
+      delivered: true,
+      draft: null,
+      text: "書きかけ\n\n件数と所要時間を教えて",
+      notice: "この指示はもう届いていました。直した内容を書きかけの後ろに足しました",
+    },
+    {
+      name: "直した指示が取り消された",
+      change: true,
+      delivered: false,
+      draft: "書きかけ\n\n終わったらテストの件数を教えて",
+      text: "書きかけ\n\n件数と所要時間を教えて",
+      notice: "この指示は取り消されました。直した内容を書きかけに戻しました",
+    },
+    {
+      name: "直した指示が取り消され、書きかけに元の本文が見つからない",
+      change: true,
+      delivered: false,
+      draft: "別の書きかけ",
+      text: "別の書きかけ\n\n件数と所要時間を教えて",
+      notice: "この指示は取り消されました。直した内容を書きかけに戻しました",
+    },
+  ])("$name ときは、書きかけに戻る", async ({ change, delivered, draft, text, notice }) => {
+    const e = await editing();
+    await e.up();
+    if (change) e.type("件数と所要時間を教えて");
+    e.f.data.queue = e.f.data.queue.filter((item) => item.id !== "q2");
+    if (draft !== null)
+      e.f.data.draft = { text: draft, images: [], updatedAt: 50, updatedBy: "other" };
+    if (delivered)
+      e.f.session.receiveEvent({
+        seq: 2,
+        createdAt: 2,
+        type: "user_message",
+        payload: {
+          text: "BOM 付きのときも確かめて\n\n終わったらテストの件数を教えて",
+          images: [],
+          origin: "developer",
+          queued_ids: ["q1", "q2"],
+        },
+      });
+    await e.f.session.refresh();
+    expect({
+      label: e.prompt().label,
+      text: e.controller.promptText(),
+      notice: e.controller.snapshot().notice,
+    }).toEqual({ label: "指示", text, notice: { message: notice, kind: "info" } });
+    e.disconnect();
+  });
+
+  it("書きかけが空で届く前の指示があると、Ctrl+Enter で届く前の指示だけをすぐに送ったと知らせる", async () => {
+    const e = await editing({ draft: "" });
+    await e.controller.submitPrompt("", true);
+    expect(e.controller.snapshot().notice).toEqual({
+      message: "AI を止めて、届く前の指示 2 件をすぐに送りました",
+      kind: "info",
+    });
+    e.disconnect();
+  });
+
+  it("保存の応答を待つあいだに書き足した内容と画像は、入力欄に残り、次の Enter で保存する", async () => {
+    const e = await editing();
+    await e.up();
+    e.type("件数と所要時間を教えて");
+    const gate = deferred();
+    const editQueue = e.f.api.editQueue;
+    e.f.api.editQueue = async (...args) => {
+      await gate.promise;
+      return editQueue(...args);
+    };
+    const first = e.controller.submitPrompt(e.controller.promptText());
+    await Promise.resolve();
+    e.type("件数と所要時間とメモリを教えて");
+    e.prompt().paste!([new File(["image"], "image.png", { type: "image/png" })]);
+    gate.resolve();
+    await first;
+    const during = {
+      label: e.prompt().label,
+      text: e.controller.promptText(),
+      images: e.prompt().images,
+    };
+    await e.controller.submitPrompt(e.controller.promptText());
+    expect({ during, edits: e.edits, prompt: e.controller.snapshot().prompt }).toEqual({
+      during: {
+        label: "預けた指示を直す (2 / 2 件目)",
+        text: "件数と所要時間とメモリを教えて",
+        images: 1,
+      },
+      edits: [
+        ["q2", { text: "件数と所要時間を教えて", images: [] }],
+        ["q2", { text: "件数と所要時間とメモリを教えて", images: ["img"] }],
+      ],
+      prompt: null,
+    });
+    e.disconnect();
+  });
+
+  it("Esc で閉じたときに保存できなければ、直した内容のまま入力欄を開き直す", async () => {
+    const e = await editing();
+    await e.up();
+    e.type("件数と所要時間を教えて");
+    e.f.api.editQueue = async () => {
+      throw new ConversationApiError(500, "internal", "保存できませんでした");
+    };
+    e.controller.closePrompt(e.controller.promptText());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect({
+      label: e.prompt().label,
+      text: e.controller.promptText(),
+      notice: e.controller.snapshot().notice,
+    }).toEqual({
+      label: "預けた指示を直す (2 / 2 件目)",
+      text: "件数と所要時間を教えて",
+      notice: { message: "保存できませんでした", kind: "error" },
+    });
+    e.disconnect();
+  });
+
+  it("書きかけの保存に失敗すると、↑ で移らない", async () => {
+    const e = await editing();
+    e.f.api.saveDraft = async () => {
+      throw new ConversationApiError(500, "internal", "書きかけを保存できませんでした");
+    };
+    await e.up();
+    expect({
+      label: e.prompt().label,
+      text: e.controller.promptText(),
+      notice: e.controller.snapshot().notice,
+    }).toEqual({
+      label: "指示",
+      text: "書きかけ",
+      notice: { message: "書きかけを保存できませんでした", kind: "error" },
+    });
+    e.disconnect();
+  });
+
+  it("取り消しの復帰を待っているあいだは、↑ で指示を呼び出さない", async () => {
+    const e = await editing({ draft: "" });
+    e.controller.closePrompt("");
+    e.f.api.deleteQueue = async (_id, itemId) => {
+      const item = e.f.data.queue.find((value) => value.id === itemId)!;
+      e.f.data.queue = e.f.data.queue.filter((value) => value.id !== itemId);
+      e.f.data.draft = { text: item.text, images: [], updatedAt: 5, updatedBy: "tab" };
+    };
+    const gate = deferred();
+    e.f.api.send = async () => {
+      await gate.promise;
+      return { result: "delivered", queueItem: null };
+    };
+    e.controller.registerWindow("main", {
+      focus() {},
+      lines: () => [{ kind: "queued", text: "届く前の指示: BOM", id: "queue:q1" }],
+      position: () => ({ line: 0, column: 0, topLine: 0 }),
+      place() {},
+      view: "conversation",
+      name: "会話",
+      posKey: "c1",
+      url: "/conversations/c1",
+      scrollCursor() {},
+    });
+    e.controller.focus("main");
+    await e.controller.run("item.delete");
+    const undoing = e.controller.run("item.undo");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    e.controller.openPrompt(e.controller.options.prompt!()!);
+    await expect(e.up()).rejects.toThrow(
+      "預けた指示を戻しています。対象の編集や送信は、復帰の結果が出てから行ってください。",
+    );
+    expect(e.prompt().label).toBe("指示");
+    gate.resolve();
+    await undoing;
+    e.disconnect();
+  });
+
+  it("直した指示が取り消されたときは、元の本文の画像を直した指示の画像に置き換える", async () => {
+    const e = await editing();
+    e.f.data.queue[1].images = ["old-image"];
+    await e.f.session.refresh();
+    await e.up();
+    e.prompt().paste!([new File(["image"], "image.png", { type: "image/png" })]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    e.f.data.queue = e.f.data.queue.filter((item) => item.id !== "q2");
+    e.f.data.draft = {
+      text: "書きかけ\n\n終わったらテストの件数を教えて",
+      images: ["draft-image", "old-image"],
+      updatedAt: 50,
+      updatedBy: "other",
+    };
+    await e.f.session.refresh();
+    await e.f.session.saveDraft();
+    expect(e.f.data.draft).toEqual({
+      text: "書きかけ\n\n終わったらテストの件数を教えて",
+      images: ["draft-image", "old-image", "img"],
+      updatedAt: 51,
+      updatedBy: "tab",
+    });
+    e.disconnect();
+  });
+
+  it("ストックの指示と一緒に送る入力欄では、↑ で届く前の指示を呼び出さない", async () => {
+    const e = await editing();
+    e.controller.closePrompt(e.controller.promptText());
+    e.f.session.openReviewPrompt(["s1"]);
+    expect({ prev: typeof e.prompt().prev, prevHint: e.prompt().prevHint }).toEqual({
+      prev: "undefined",
+      prevHint: undefined,
+    });
+    e.disconnect();
+  });
+
+  it("届けるあいだに書き足すと、直している指示に留まり、次の Ctrl+Enter を別の送信として送る", async () => {
+    const e = await editing();
+    await e.up();
+    const gate = deferred();
+    const send = e.f.api.send;
+    e.f.api.send = async (...args) => {
+      await gate.promise;
+      return send(...args);
+    };
+    const first = e.controller.submitPrompt(e.controller.promptText(), true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    e.type("終わったらテストの件数と所要時間を教えて");
+    gate.resolve();
+    await first;
+    const label = e.prompt().label;
+    e.f.api.send = send;
+    await e.controller.submitPrompt(e.controller.promptText(), true);
+    expect({ label, edits: e.edits, sends: e.sends }).toEqual({
+      label: "預けた指示を直す (2 / 2 件目)",
+      edits: [["q2", { text: "終わったらテストの件数と所要時間を教えて", images: [] }]],
+      sends: [
+        { text: "", images: [], mode: "interrupt", clientMessageId: "message-1" },
+        { text: "", images: [], mode: "interrupt", clientMessageId: "message-2" },
+      ],
+    });
+    e.disconnect();
+  });
+
+  it("画面を離れるときに直した内容を保存できなくても、入力欄を開き直さない", async () => {
+    const e = await editing();
+    await e.up();
+    e.type("件数と所要時間を教えて");
+    e.f.api.editQueue = async () => {
+      throw new ConversationApiError(500, "internal", "保存できませんでした");
+    };
+    e.disconnect();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect({
+      prompt: e.controller.snapshot().prompt,
+      notice: e.controller.snapshot().notice,
+    }).toEqual({ prompt: null, notice: { message: "保存できませんでした", kind: "error" } });
+  });
+
+  it("直しているあいだに別のタブが書きかけを変えても、入力欄の内容は直している指示のまま", async () => {
+    const e = await editing();
+    await e.up();
+    e.type("件数と所要時間を教えて");
+    e.f.data.draft = { text: "別のタブの書きかけ", images: [], updatedAt: 50, updatedBy: "other" };
+    await e.f.session.refresh();
+    expect({ label: e.prompt().label, text: e.controller.promptText() }).toEqual({
+      label: "預けた指示を直す (2 / 2 件目)",
+      text: "件数と所要時間を教えて",
+    });
+    e.disconnect();
+  });
+
+  it("書きかけを保存しているあいだに入力欄を開き直したら、新しい入力欄では指示を呼び出さない", async () => {
+    const e = await editing();
+    const gate = deferred();
+    const saveDraft = e.f.api.saveDraft;
+    e.f.api.saveDraft = async (...args) => {
+      await gate.promise;
+      return saveDraft(...args);
+    };
+    const moving = e.up();
+    e.controller.closePrompt(e.controller.promptText());
+    e.controller.openPrompt(e.controller.options.prompt!()!);
+    gate.resolve();
+    await moving;
+    expect({ label: e.prompt().label, text: e.controller.promptText() }).toEqual({
+      label: "指示",
+      text: "書きかけ",
+    });
+    e.disconnect();
+  });
+
+  it("別の指示の取り消しを戻しているあいだも、直している指示は書き換えられる", async () => {
+    const e = await editing();
+    await e.up();
+    e.f.api.deleteQueue = async (_id, itemId) => {
+      const item = e.f.data.queue.find((value) => value.id === itemId)!;
+      e.f.data.queue = e.f.data.queue.filter((value) => value.id !== itemId);
+      e.f.data.draft = {
+        text: `書きかけ\n\n${item.text}`,
+        images: [],
+        updatedAt: 5,
+        updatedBy: "tab",
+      };
+    };
+    const gate = deferred();
+    e.f.api.send = async () => {
+      await gate.promise;
+      return { result: "delivered", queueItem: null };
+    };
+    e.controller.registerWindow("main", {
+      focus() {},
+      lines: () => [{ kind: "queued", text: "届く前の指示: BOM", id: "queue:q1" }],
+      position: () => ({ line: 0, column: 0, topLine: 0 }),
+      place() {},
+      view: "conversation",
+      name: "会話",
+      posKey: "c1",
+      url: "/conversations/c1",
+      scrollCursor() {},
+    });
+    e.controller.focus("main");
+    await e.controller.run("item.delete");
+    const undoing = e.controller.run("item.undo");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const text = e.controller.promptText();
+    const allowed = e.prompt().allowChange!(
+      `${text}と所要時間`,
+      ChangeSet.of([{ from: text.length, insert: "と所要時間" }], text.length).desc,
+    );
+    expect({ allowed, notice: e.controller.snapshot().notice?.kind }).toEqual({
+      allowed: true,
+      notice: "info",
+    });
+    gate.resolve();
+    await undoing;
+    e.disconnect();
+  });
+
+  it("Ctrl+Enter で保存した指示がもう無いと、届けずに書きかけに戻る", async () => {
+    const e = await editing();
+    await e.up();
+    e.type("件数と所要時間を教えて");
+    e.f.data.queue = e.f.data.queue.filter((item) => item.id !== "q2");
+    await e.controller.submitPrompt(e.controller.promptText(), true);
+    expect({ sends: e.sends, label: e.prompt().label }).toEqual({ sends: [], label: "指示" });
+    e.disconnect();
+  });
+
+  it.each([
+    { name: "Enter", exit: "submit" },
+    { name: "Ctrl+Enter", exit: "interrupt" },
+    { name: "Esc", exit: "close" },
+    { name: "↑", exit: "prev" },
+  ])("画像を上げているあいだに $name を押しても、画像を付けて保存する", async ({ exit }) => {
+    const e = await editing();
+    await e.up();
+    await e.up();
+    await e.down();
+    const gate = deferred();
+    const upload = e.f.api.upload;
+    e.f.api.upload = async (...args) => {
+      await gate.promise;
+      return upload(...args);
+    };
+    e.prompt().paste!([new File(["image"], "image.png", { type: "image/png" })]);
+    const text = e.controller.promptText();
+    const leaving =
+      exit === "submit"
+        ? e.controller.submitPrompt(text)
+        : exit === "interrupt"
+          ? e.controller.submitPrompt(text, true)
+          : exit === "close"
+            ? Promise.resolve(e.controller.closePrompt(text))
+            : e.up();
+    gate.resolve();
+    await leaving;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(e.edits).toEqual([["q2", { text: "終わったらテストの件数を教えて", images: ["img"] }]]);
+    e.disconnect();
+  });
+
+  it("届けるあいだに貼った画像は、届いたあとも直している指示に残る", async () => {
+    const e = await editing();
+    await e.up();
+    const sending = deferred();
+    const uploading = deferred();
+    const send = e.f.api.send;
+    e.f.api.send = async (...args) => {
+      await sending.promise;
+      return send(...args);
+    };
+    const upload = e.f.api.upload;
+    e.f.api.upload = async (...args) => {
+      await uploading.promise;
+      return upload(...args);
+    };
+    const first = e.controller.submitPrompt(e.controller.promptText(), true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    e.prompt().paste!([new File(["image"], "image.png", { type: "image/png" })]);
+    sending.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    uploading.resolve();
+    await first;
+    expect({ label: e.prompt().label, images: e.prompt().images }).toEqual({
+      label: "預けた指示を直す (2 / 2 件目)",
+      images: 1,
+    });
+    e.disconnect();
+  });
+
+  it("前の指示へ移る保存のあいだに入力欄を閉じると、次に開く入力欄は書きかけになる", async () => {
+    const e = await editing();
+    await e.up();
+    e.type("件数と所要時間を教えて");
+    const gate = deferred();
+    const editQueue = e.f.api.editQueue;
+    e.f.api.editQueue = async (...args) => {
+      await gate.promise;
+      return editQueue(...args);
+    };
+    const moving = e.up();
+    e.controller.closePrompt(e.controller.promptText());
+    gate.resolve();
+    await moving;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    e.controller.openPrompt(e.controller.options.prompt!()!);
+    expect({ label: e.prompt().label, text: e.controller.promptText() }).toEqual({
+      label: "指示",
+      text: "書きかけ",
+    });
+    e.disconnect();
+  });
+
+  it("書きかけを読み直すあいだに別の入力欄を開くと、その入力欄を書きかけに差し替えない", async () => {
+    const e = await editing();
+    await e.up();
+    const gate = deferred();
+    const get = e.f.api.get;
+    e.f.api.get = async (...args) => {
+      await gate.promise;
+      return get(...args);
+    };
+    const moving = e.down();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    e.controller.closePrompt(e.controller.promptText());
+    e.f.session.openReviewPrompt(["s1"]);
+    gate.resolve();
+    await moving;
+    expect({ label: e.prompt().label, prevHint: e.prompt().prevHint }).toEqual({
+      label: "指示",
+      prevHint: undefined,
+    });
+    e.disconnect();
+  });
+
+  it("閉じたあとに直した指示が取り消されていたと分かると、開いている入力欄に戻した書きかけを出す", async () => {
+    const e = await editing();
+    await e.up();
+    e.type("件数と所要時間を教えて");
+    const gate = deferred();
+    e.f.api.editQueue = async () => {
+      await gate.promise;
+      throw new ConversationApiError(404, "not_found", "預かった指示が見つかりません");
+    };
+    e.controller.closePrompt(e.controller.promptText());
+    e.f.session.openReviewPrompt(["s1"]);
+    e.f.api.get = () => new Promise(() => {});
+    gate.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect({ text: e.controller.promptText(), prevHint: e.prompt().prevHint }).toEqual({
+      text: "書きかけ\n\n件数と所要時間を教えて",
+      prevHint: undefined,
+    });
+    e.disconnect();
+  });
+
+  it("書きかけを書いているあいだに AI が作業を始めて指示が預けられると、↑ の案内とすぐ送る動詞を出す", async () => {
+    const f = fixture();
+    await f.session.load();
+    const disconnect = f.session.connect();
+    const controller = f.session.controller;
+    controller.openPrompt(controller.options.prompt!()!);
+    f.data.conversation.runState = "working";
+    f.data.queue = [queued("q1", "別のタブの指示", 1)];
+    await f.session.refresh();
+    expect({
+      prevHint: controller.snapshot().prompt?.prevHint,
+      interruptVerb: controller.snapshot().prompt?.interruptVerb,
+    }).toEqual({ prevHint: "届く前の指示を直す", interruptVerb: "AI を止めてすぐ送る" });
+    disconnect();
+  });
+
+  it("直している指示に画像が 20 枚あると、それ以上は貼れない", async () => {
+    const e = await editing();
+    e.f.data.queue[1].images = Array.from({ length: 20 }, (_, index) => `image-${index}`);
+    await e.f.session.refresh();
+    await e.up();
+    e.prompt().paste!([new File(["image"], "image.png", { type: "image/png" })]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect({ images: e.prompt().images, notice: e.controller.snapshot().notice }).toEqual({
+      images: 20,
+      notice: { message: "画像は 1 通に 20 枚までです", kind: "error" },
+    });
+    e.disconnect();
+  });
+
+  it("以前の相談の本文の位置が分からなくなる直し方では、保存せずに理由を出す", async () => {
+    const e = await editing();
+    e.f.data.queue[1] = {
+      ...queued("q2", "旧形式の相談", 2),
+      timeline_anchors: [
+        {
+          from: 0,
+          to: 6,
+          originalText: "旧形式の相談",
+          comments: [{ task_id: "t1", text: "旧形式の相談" }],
+        },
+      ],
+    };
+    await e.f.session.refresh();
+    await e.up();
+    e.type("旧形式を直した相談");
+    await e.controller.submitPrompt(e.controller.promptText());
+    expect({ edits: e.edits, notice: e.controller.snapshot().notice }).toEqual({
+      edits: [],
+      notice: { message: unlocatedConsultationNotice, kind: "error" },
+    });
+    e.disconnect();
+  });
+
+  it("相談を直すと、相談の範囲を直した本文に合わせて保存する", async () => {
+    const e = await editing();
+    const text = "タイムラインのタスク t1「書き出し」について: 文字コードを確かめて";
+    const bodyFrom = text.indexOf("文字コード");
+    e.f.data.queue[1] = {
+      ...queued("q2", text, 2),
+      timeline_anchors: [{ task_id: "t1", from: 0, bodyFrom, to: text.length }],
+    };
+    await e.f.session.refresh();
+    await e.up();
+    e.type(`${text}と改行も`);
+    await e.controller.submitPrompt(e.controller.promptText());
+    expect(e.edits).toEqual([
+      [
+        "q2",
+        {
+          text: `${text}と改行も`,
+          images: [],
+          timeline_anchors: [{ task_id: "t1", from: 0, bodyFrom, to: text.length + 4 }],
+        },
+      ],
+    ]);
+    e.disconnect();
+  });
+
+  it.each([
+    {
+      name: "ストックとまとめて預けた指示",
+      head: "ストックした指示が 1 件あります。順に対応してください。\n\n1. この会話の発言から\n> 引用した行\n指摘の本文\n\n",
+      item: (head: string) => ({
+        deliveryContext: {
+          stockIds: ["s1"],
+          original: { text: "開発者の本文", images: [] },
+          originalRanges: [{ from: head.length, to: head.length + 6 }],
+        },
+      }),
+    },
+    {
+      name: "本文の範囲を持たないまとめた指示",
+      head: "ストックした指示が 1 件あります。順に対応してください。\n\n1. この会話の発言から\n> 引用した行\n指摘の本文\n\n",
+      item: () => ({
+        deliveryContext: { stockIds: ["s1"], original: { text: "開発者の本文", images: [] } },
+      }),
+    },
+    {
+      name: "ストックから預けた指示",
+      head: "src/a.ts 1〜2 行目\n> 一行目\n> 二行目\n",
+      item: () => ({ stockItemId: "s1" }),
+    },
+  ])("$name は、前置きと引用を入力欄に出さず、保つ", async ({ head, item }) => {
+    const e = await editing();
+    e.f.data.queue[1] = {
+      ...queued("q2", `${head}開発者の本文`, 2),
+      images: ["developer-image"],
+      ...item(head),
+    };
+    await e.f.session.refresh();
+    await e.up();
+    const shown = e.controller.promptText();
+    e.type("直した本文");
+    await e.controller.submitPrompt(e.controller.promptText());
+    expect({ shown, edits: e.edits }).toEqual({
+      shown: "開発者の本文",
+      edits: [["q2", { text: `${head}直した本文`, images: ["developer-image"] }]],
+    });
+    e.disconnect();
+  });
+
+  it.each([
+    {
+      name: "本文が複数の範囲に分かれた指示",
+      ranges: [
+        { from: 10, to: 16 },
+        { from: 27, to: 33 },
+      ],
+    },
+    { name: "本文の範囲が分からない指示", ranges: undefined },
+  ])("$name は、前置きを含めた全文を入力欄に出す", async ({ ranges }) => {
+    const e = await editing();
+    const text = "差し戻しの前置き\n\n一つ目の本文\n\nストックの引用\n\n二つ目の本文";
+    e.f.data.queue[1] = {
+      ...queued("q2", text, 2),
+      deliveryContext: {
+        stockIds: ["s1"],
+        original: { text: "一つ目の本文\n\n二つ目の本文", images: [] },
+        ...(ranges ? { originalRanges: ranges } : {}),
+      },
+    };
+    await e.f.session.refresh();
+    await e.up();
+    expect(e.controller.promptText()).toBe(text);
+    e.disconnect();
+  });
+
+  it("届く前の指示の行の cc でも、書きかけを脇に置いて指示を直せる", async () => {
+    const e = await editing();
+    e.controller.closePrompt(e.controller.promptText());
+    e.controller.registerWindow("main", {
+      focus() {},
+      lines: () => [{ kind: "queued", text: "届く前の指示: BOM", id: "queue:q1" }],
+      position: () => ({ line: 0, column: 0, topLine: 0 }),
+      place() {},
+      view: "conversation",
+      name: "会話",
+      posKey: "c1",
+      url: "/conversations/c1",
+      scrollCursor() {},
+    });
+    e.controller.focus("main");
+    await e.controller.run("item.edit");
+    e.type("BOM 付きと改行コードも確かめて");
+    await e.f.session.saveDraft();
+    expect({
+      label: e.prompt().label,
+      text: e.controller.promptText(),
+      draft: e.f.data.draft?.text,
+    }).toEqual({
+      label: "預けた指示を直す (1 / 2 件目)",
+      text: "BOM 付きと改行コードも確かめて",
+      draft: "書きかけ",
+    });
+    e.disconnect();
+  });
 });

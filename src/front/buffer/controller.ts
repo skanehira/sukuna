@@ -40,12 +40,19 @@ export type PromptSpec = {
   discardOnClose?: boolean;
   images?: number;
   submit(text: string): void | boolean | Promise<void | boolean>;
-  close(text: string): void;
+  close(this: void, text: string): void;
   interrupt?(text: string): void | boolean | Promise<void | boolean>;
+  interruptVerb?: string;
+  escHint?: string;
+  prev?(this: void, text: string): void | Promise<void>;
+  prevHint?: string;
+  next?(this: void, text: string): void | Promise<void>;
   paste?(images: File[]): void;
 };
-export function promptCloseHint(spec: Pick<PromptSpec, "discardOnClose">): string {
-  return spec.discardOnClose ? "閉じる (書きかけは捨てる)" : "閉じる (書きかけは残る)";
+export function promptCloseHint(spec: Pick<PromptSpec, "discardOnClose" | "escHint">): string {
+  return (
+    spec.escHint ?? (spec.discardOnClose ? "閉じる (書きかけは捨てる)" : "閉じる (書きかけは残る)")
+  );
 }
 export type WindowHandle = {
   focus(): void;
@@ -132,7 +139,7 @@ export class BufferController {
   private pending = new Set<string>();
   private status = new Map<string, string>();
   private hints = new Map<string, Hint[]>();
-  private promptUpdate: ((text: string) => void) | null = null;
+  private promptUpdate: ((text: string, cursorToEnd?: boolean) => void) | null = null;
   private promptFocus: (() => void) | null = null;
   private commandRevision = 0;
   private commandRetry: { input: string; run: () => Promise<void> } | null = null;
@@ -543,12 +550,7 @@ export class BufferController {
       ];
     if (this.state.mode === "TERMINAL") return [["terminal.normal", "Normal へ"]];
     if (this.state.prompt && this.state.active === "prompt")
-      return this.state.mode === "INSERT" || this.state.mode === "REPLACE"
-        ? [["Esc", `Normal へ (${this.state.prompt.verb}のは Normal から)`]]
-        : [
-            ["Enter", this.state.prompt.verb],
-            ["Esc", promptCloseHint(this.state.prompt)],
-          ];
+      return [["win.up", "主のウィンドウへ移る (入力欄は開いたまま)"]];
     if (this.state.mode.startsWith("VISUAL"))
       return [
         ["stock.question", "選んだ箇所に質問"],
@@ -711,7 +713,7 @@ export class BufferController {
     this.keymapWrite = write.catch(() => {});
     return write;
   }
-  registerPromptUpdate(update: (text: string) => void): () => void {
+  registerPromptUpdate(update: (text: string, cursorToEnd?: boolean) => void): () => void {
     this.promptUpdate = update;
     return () => {
       if (this.promptUpdate === update) this.promptUpdate = null;
@@ -720,6 +722,12 @@ export class BufferController {
   replacePromptText(text: string): void {
     this.promptDraft = text;
     this.promptUpdate?.(text);
+  }
+  showPromptItem(patch: Partial<PromptSpec>, text: string): void {
+    if (!this.state.prompt) return;
+    this.update({ prompt: { ...this.state.prompt, ...patch } });
+    this.promptDraft = text;
+    this.promptUpdate?.(text, true);
   }
   patchPrompt(patch: Partial<PromptSpec>): void {
     if (this.state.prompt) this.update({ prompt: { ...this.state.prompt, ...patch } });

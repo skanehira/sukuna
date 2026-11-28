@@ -81,7 +81,10 @@ export const defaultKeymap: KeymapEntry[] = [
     ["<CR>", "github-import.selected"],
   ].map(([keys, action]): KeymapEntry => ({ keys, context: "visual", to: { action } })),
   { keys: "<CR>", context: "prompt", to: { action: "prompt.submit" } },
+  { keys: "<C-CR>", context: "prompt", to: { action: "prompt.interrupt" } },
   { keys: "<A-CR>", context: "prompt", to: { action: "prompt.interrupt" } },
+  { keys: "<Up>", context: "prompt", to: { action: "prompt.prev" } },
+  { keys: "<Down>", context: "prompt", to: { action: "prompt.next" } },
   { keys: "<Tab>", context: "prompt", to: { action: "prompt.complete" } },
   { keys: "<C-]>", context: "terminal", to: { action: "terminal.normal" } },
 ];

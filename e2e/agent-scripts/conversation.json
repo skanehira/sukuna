@@ -217,6 +217,14 @@
           "end": "success"
         }
       ]
+    },
+    {
+      "match": "^E2E 預けた指示を直す作業$",
+      "steps": [{ "text": "作業を始めます。" }, { "hold": true }]
+    },
+    {
+      "match": "^BOM 付きのときも確かめて\\n\\n件数と所要時間を教えて$",
+      "steps": [{ "text": "預けた指示を 2 件受け取りました。" }, { "end": "success" }]
     }
   ],
   "completions": [
