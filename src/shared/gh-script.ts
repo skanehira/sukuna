@@ -5,7 +5,9 @@ const responseSchema = z.object({
   exit_code: z.number().int(),
 });
 export const ghScriptSchema = z.object({
-  responses: z.array(responseSchema.extend({ match: z.string() })),
+  responses: z.array(
+    responseSchema.extend({ match: z.string(), whenFileExists: z.string().optional() }),
+  ),
   fallback: responseSchema,
 });
 export type GhScript = z.input<typeof ghScriptSchema>;

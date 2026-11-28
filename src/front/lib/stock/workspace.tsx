@@ -4,7 +4,7 @@ import type { BufferController } from "../../buffer/controller";
 import type { ActionContext, ActionDef } from "../../buffer/keymap/registry";
 import type { LineInfo } from "../../buffer/line";
 import { isThreadRight, type RightView } from "../../buffer/right-window";
-import { StockWindow, stockView } from "../../components/stock/StockWindow";
+import { StockWindow, stockView, type PublishStock } from "../../components/stock/StockWindow";
 import { ThreadList, threadListView } from "../../components/stock/ThreadList";
 import { ThreadWindow, stockThreadView } from "../../components/stock/ThreadWindow";
 import type { LifecycleFeed } from "../../components/lifecycle/use-lifecycle";
@@ -16,10 +16,10 @@ import { parseRoute, routeUrl } from "../routes";
 import type { StockApi } from "./api";
 import type { StockMark } from "./marks";
 import { conversationSource, designSource, fileSource, makeQuote } from "./quote";
-import { StockSession } from "./session";
+import { StockSession, type QuoteSources } from "./session";
 
 const designView = "issue-design";
-const quoteViews = ["conversation", "file", "markdown-file", designView];
+const quoteViews = ["conversation", "file", "markdown-file", designView, "issue-diff"];
 const undoViews = [stockView, ...quoteViews];
 type Scope = Pick<Conversation, "id" | "title" | "issueId"> & { cwd?: string };
 export function designMarks(stock: StockSession, lines: readonly LineInfo[]) {
@@ -31,6 +31,13 @@ export function designMarks(stock: StockSession, lines: readonly LineInfo[]) {
   );
 }
 
+export type StockReview = {
+  issueId: string;
+  view: string;
+  sources: QuoteSources;
+  showSentInstructions?: boolean;
+  publish?: PublishStock;
+};
 type UndoEntry = {
   order: number;
   stock: StockSession;
@@ -65,7 +72,7 @@ export function createStockWorkspace({
   const scopes = new Map<string, Scope>();
   const sessions = new Map<string, StockSession>();
   const threadSessions = new WeakMap<StockSession, Map<string, ConversationSession>>();
-  let active: { id: string; issueId?: string; leave: () => void } | undefined;
+  let active: { id: string; issueId?: string; review?: StockReview; leave: () => void } | undefined;
   let cancellation = 0;
   let latestCancellation = 0;
   let undo: UndoEntry | undefined;
@@ -95,6 +102,11 @@ export function createStockWorkspace({
     route.view !== "edit";
   const current = () => {
     const value = route();
+    const review = active?.review;
+    if (active && review && value.kind === "issue" && value.id === review.issueId) {
+      const scope = scopes.get(active.id);
+      if (scope) return { stock: session(scope.id), scope, review };
+    }
     const scope =
       onIssue(value) && active
         ? scopes.get(active.id)
@@ -127,9 +139,9 @@ export function createStockWorkspace({
     previous?.leave();
   }
 
-  function enter(value: Scope, issueId?: string) {
+  function enter(value: Scope, issueId?: string, review?: StockReview) {
     scopes.set(value.id, value);
-    if (active?.id === value.id && active.issueId === issueId) return;
+    if (active?.id === value.id && active.issueId === issueId && active.review === review) return;
     leave();
     const store = session(value.id);
     let previous: string | undefined;
@@ -150,6 +162,7 @@ export function createStockWorkspace({
     active = {
       id: value.id,
       issueId,
+      review,
       leave: () => {
         stopReceiving();
         stopStatus();
@@ -168,7 +181,28 @@ export function createStockWorkspace({
     };
   }
 
-  function scopeSource(view: string) {
+  function enterReview(value: Scope, review: StockReview) {
+    enter(value, review.issueId, review);
+    return () => {
+      if (active?.review !== review) return;
+      leave();
+      queueMicrotask(() => {
+        if (active?.id === value.id && active.review?.issueId === review.issueId) return;
+        const right = controller.right.current;
+        if (
+          right &&
+          (((right.view === stockView || right.view === threadListView) &&
+            right.target === value.id) ||
+            (isThreadRight(right) && right.parent === value.id))
+        )
+          controller.closeRight();
+      });
+    };
+  }
+
+  function scopeSource(view: string): QuoteSources | undefined {
+    const review = current()?.review;
+    if (review && view === review.view) return review.sources;
     if (view === "conversation") return conversationSource;
     if (view === "file" || view === "markdown-file") {
       const file = new URLSearchParams(route().query).get("path");
@@ -215,17 +249,27 @@ export function createStockWorkspace({
       mode: "line" as const,
       ranges: [{ line: ctx.line, from: 0, to: lines[ctx.line]?.text.length ?? 0 }],
     };
-    const designPath =
+    const choices =
       ctx.view === designView
-        ? selection.ranges
-            .map(({ line }) => lines[line]?.designDiff)
-            .find((entry) => entry?.newNo !== undefined)?.path
-        : undefined;
-    const source = designPath ? designSource(designPath, lines) : scopeSource(ctx.view)?.(lines);
+        ? [
+            ...new Set(lines.flatMap(({ designDiff }) => (designDiff ? [designDiff.path] : []))),
+          ].map((path) => designSource(path, lines))
+        : (scopeSource(ctx.view)?.(lines) ?? []);
+    const selectedSources =
+      "kind" in choices
+        ? [choices]
+        : choices.filter(
+            (entry) =>
+              entry.kind !== "terminal" &&
+              selection.ranges.some(({ line }) => entry.positions[line] !== undefined),
+          );
+    if (selectedSources.length > 1)
+      return controller.notify("ファイルごとに範囲を選んでから指摘を書いてください", "error");
+    const [selected] = selectedSources;
     const quote =
-      source &&
+      selected &&
       makeQuote(
-        source,
+        selected,
         lines.map((line) => line.text),
         selection,
       );
@@ -272,7 +316,7 @@ export function createStockWorkspace({
         routeUrl({
           kind: "issue",
           id: scope.issueId,
-          view: quote.kind === "design_diff" ? "design" : "pr",
+          view: quote.kind === "design_diff" ? "design" : "diff",
           query: new URLSearchParams({
             path: quote.path,
             line: String(quote.start.line),
@@ -289,6 +333,7 @@ export function createStockWorkspace({
                   ...(quote.mode === "block" ? { quoteBlockEnd: String(quote.end.col) } : {}),
                 }
               : {}),
+            ...(quote.kind === "pr_diff" && { side: quote.start.side }),
           }).toString(),
         }),
       );
@@ -325,9 +370,16 @@ export function createStockWorkspace({
         const line = lines.findIndex(
           (entry) => entry.kind === "queued" && entry.id === `queue:${id}`,
         );
-        controller.place("main", line < 0 ? Math.max(0, lines.length - 1) : line, 0);
+        if (line >= 0) controller.place("main", line, 0);
+        else controller.notify("選んだ届く前の指示が見つかりません");
       } else
-        void controller.navigate(routeUrl({ kind: "conversation", id: scope.id, query: "tail=1" }));
+        void controller.navigate(
+          routeUrl({
+            kind: "conversation",
+            id: scope.id,
+            query: new URLSearchParams({ stock: item.id }).toString(),
+          }),
+        );
     }
     return true;
   }
@@ -519,15 +571,25 @@ export function createStockWorkspace({
     start,
     enter,
     enterIssue,
+    enterReview,
     leave,
     session,
     right(view: RightView) {
       const value = current();
       if (!value) return null;
-      const { stock, scope } = value;
-      if (view.view === stockView)
-        return <StockWindow stock={stock} title={scope.title} jump={jumpItem} />;
-      if (view.view === threadListView)
+      const { stock, scope, review } = value;
+      if (view.view === stockView && view.target === stock.id)
+        return (
+          <StockWindow
+            key={stock.id}
+            stock={stock}
+            title={scope.title}
+            jump={jumpItem}
+            showSentInstructions={review?.showSentInstructions}
+            publication={review?.publish ? { controller, publish: review.publish } : undefined}
+          />
+        );
+      if (view.view === threadListView && view.target === stock.id)
         return <ThreadList stock={stock} title={scope.title} open={pickThread} />;
       if (isThreadRight(view) && view.parent === stock.id) {
         const thread = threadSessions.get(stock)?.get(view.target);

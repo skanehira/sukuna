@@ -47,6 +47,9 @@ export function createBrowserController(
       }
       display(url, entry);
     },
+    replaceViewUrl(url, entry) {
+      browser.history.replaceState(stateFor(entry), "", url);
+    },
     back() {
       if (depth === 0) return false;
       browser.history.back();

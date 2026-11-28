@@ -245,11 +245,12 @@ export function addStock(
   kind: "question" | "instruction",
   text: string,
   commit?: string,
+  stockId: string = kind,
 ) {
   f.db
     .insert(stockItems)
     .values({
-      id: kind,
+      id: stockId,
       conversationId,
       kind,
       text,

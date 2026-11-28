@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { ghScriptSchema, type GhScript } from "../gh-script";
 import type { CommandOptions, CommandResult } from "../command";
 import type { GhRunner } from "./gh-runner";
@@ -14,8 +15,11 @@ export class ScriptedGh implements GhRunner {
       ...(opts.stdin === undefined ? {} : { stdin: opts.stdin }),
     });
     const response =
-      this.script.responses.find((r) => new RegExp(r.match).test(args.join(" "))) ??
-      this.script.fallback;
+      this.script.responses.find(
+        (r) =>
+          new RegExp(r.match).test(args.join(" ")) &&
+          (r.whenFileExists === undefined || existsSync(r.whenFileExists)),
+      ) ?? this.script.fallback;
     return Promise.resolve({
       stdout: response.stdout,
       stderr: response.stderr,

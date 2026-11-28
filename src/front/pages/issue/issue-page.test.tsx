@@ -25,7 +25,8 @@ function mount(
 ) {
   const navigate = vi.fn();
   const notify = vi.fn();
-  const controller = new BufferController({ url: "/issues/i", navigate, notify });
+  const replaceViewUrl = vi.fn();
+  const controller = new BufferController({ url: "/issues/i", navigate, notify, replaceViewUrl });
   const api = { ...issueApi(issue), reopen, ...(extra.getIssue ? { get: extra.getIssue } : {}) };
   const view = render(
     <SWRConfig value={{ provider: () => new Map() }}>
@@ -56,7 +57,7 @@ function mount(
   );
   const editor = () =>
     EditorView.findFromDOM(view.container.querySelector<HTMLElement>(".cm-editor")!)!;
-  return { controller, navigate, notify, editor };
+  return { controller, navigate, notify, editor, replaceViewUrl };
 }
 
 it.each([
@@ -71,13 +72,17 @@ it.each([
 });
 
 it("Ctrl+l と Ctrl+h で履歴を増やさず表示を切り替える", async () => {
-  const { editor, navigate } = mount(issueView());
+  const { editor, navigate, replaceViewUrl } = mount(issueView());
   act(() => editor().focus());
   await act(() => fireEvent.keyDown(editor().contentDOM, { key: "l", ctrlKey: true }));
   expect(await screen.findByRole("heading", { name: /\/ 設計$/ })).toBeVisible();
   await act(() => fireEvent.keyDown(editor().contentDOM, { key: "h", ctrlKey: true }));
   expect(await screen.findByRole("heading", { name: /\/ 会話$/ })).toBeVisible();
   expect(navigate).not.toHaveBeenCalled();
+  expect(replaceViewUrl.mock.calls).toEqual([
+    ["/issues/i/design", undefined],
+    ["/issues/i/conversation", undefined],
+  ]);
 });
 
 it("閉じた issue の再開メニューから確認なしで API に送り、精査待ちに切り替える", async () => {

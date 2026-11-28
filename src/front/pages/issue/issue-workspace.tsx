@@ -11,6 +11,7 @@ import { issueFormTitle } from "./issue-form-lines";
 import { issueDisplays } from "./issue-head-lines";
 import { IssuePage } from "./issue-page";
 import type { IssueDesign } from "./design-view";
+import type { PrReviewServices } from "./pr-view";
 
 const lastProjectKey = "sukuna:issue:last-project";
 const newIssueView = "issue-new";
@@ -29,6 +30,7 @@ export function createIssueWorkspace({
   stopConversation,
   projectForConversation,
   refreshListings,
+  prReview,
 }: {
   controller: BufferController;
   api: IssueApi;
@@ -38,11 +40,12 @@ export function createIssueWorkspace({
   subscribe: LifecycleFeed;
   schedule: (run: () => void, ms: number) => () => void;
   subscribeConversation: (session: ConversationSession, monitor?: WorkMonitor) => () => void;
-  loadConversation: (id: string) => Promise<ConversationSession>;
+  loadConversation: (id: string, current?: () => boolean) => Promise<ConversationSession>;
   stopConversation: (id: string) => Promise<unknown>;
   monitorConversation?: (session: ConversationSession, issueId: string) => WorkMonitor | undefined;
   projectForConversation: (id: string) => string | undefined;
   refreshListings: (projectId: string) => void;
+  prReview?: PrReviewServices;
 }) {
   const drafts = new Map<string, IssueDraft>();
   const draftFor = (projectId: string, positionKey: string): IssueDraft => {
@@ -96,6 +99,8 @@ export function createIssueWorkspace({
               initial={issue}
               initialDisplay={display}
               projectName={project.name}
+              project={project}
+              prReview={prReview}
               api={api}
               design={design}
               controller={controller}

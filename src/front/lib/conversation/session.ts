@@ -91,6 +91,7 @@ export class ConversationSession {
   private responseInputSeq: number | null = null;
   private reply = "";
   private removers: (() => void)[] = [];
+  private latestRefresh: Promise<void> | undefined;
   private draft: DraftSync;
   private nextFetch = 0;
   private appliedFetch = 0;
@@ -140,12 +141,14 @@ export class ConversationSession {
     this.state = { ...this.state, version: this.state.version + 1 };
     this.listeners.forEach((listener) => listener());
   }
-  async load(): Promise<string> {
-    await this.refresh();
+  async load(current?: () => boolean): Promise<string> {
+    await this.refresh(false, current);
+    if (current && !current()) return this.id;
     let after = this.contiguousSeq;
     let more = true;
     while (more) {
       const page = await this.api.events(this.id, after);
+      if (current && !current()) return this.id;
       for (const event of [...page.events].sort((a, b) => a.seq - b.seq)) this.receiveEvent(event);
       more = page.hasMore;
       const next = page.events.at(-1)?.seq ?? after;
@@ -169,21 +172,37 @@ export class ConversationSession {
     this.refreshTail();
     this.emit();
   }
-  async refresh(preserveDraft = false, current?: () => boolean): Promise<void> {
+  refresh(preserveDraft = false, current?: () => boolean): Promise<void> {
     const request = ++this.nextFetch;
     const draft = this.draft;
     const version = draft.readVersion();
-    const data = await this.api.get(this.id);
-    if (request < this.appliedFetch || (current && !current())) return;
-    this.appliedFetch = request;
-    if (
-      !this.state.data &&
-      !preserveDraft &&
-      this.draft === draft &&
-      draft.readVersion() === version
-    )
-      this.draft = new DraftSync(this.env.clientId, data.draft);
-    this.adopt(data, preserveDraft || this.draft !== draft, version);
+    const pending = this.api.get(this.id).then((data) => {
+      if (request < this.appliedFetch || (current && !current())) return;
+      this.appliedFetch = request;
+      if (
+        !this.state.data &&
+        !preserveDraft &&
+        this.draft === draft &&
+        draft.readVersion() === version &&
+        !draft.dirty()
+      )
+        draft.loadInitial(data.draft);
+      this.adopt(data, preserveDraft || this.draft !== draft, version);
+    });
+    this.latestRefresh = pending;
+    return pending;
+  }
+
+  async settleRefresh(current: () => boolean): Promise<void> {
+    while (current()) {
+      const latest = this.latestRefresh;
+      try {
+        await latest;
+      } catch (error) {
+        if (latest === this.latestRefresh && current()) throw error;
+      }
+      if (latest === this.latestRefresh) return;
+    }
   }
   connect(monitor = this.monitor): () => void {
     this.viewConnection = Symbol();
@@ -743,11 +762,17 @@ export class ConversationSession {
       this.state.data?.conversation.runState ?? "idle",
     );
   }
-  private prompt(): PromptSpec {
+  openReviewPrompt(stockIds: string[]): boolean {
+    if (!this.state.data || this.controller.snapshot().prompt) return false;
+    this.controller.openPrompt(this.prompt(stockIds));
+    return true;
+  }
+
+  private prompt(stockIds?: string[]): PromptSpec {
     const content = this.draft.content();
     return {
       label: this.queueEditing ? "預けた指示" : this.view === "stock-thread" ? "返信" : "指示",
-      target: `${this.view === "stock-thread" ? "スレッド" : "会話"}: ${this.state.data!.conversation.title}`,
+      target: `${this.view === "stock-thread" ? "スレッド" : "会話"}: ${this.state.data!.conversation.title}${stockIds === undefined ? "" : ` (ストックの指示 ${stockIds.length} 件と一緒に送る)`}`,
       scope: this.id,
       draftBinding: this.queueEditing
         ? { kind: "queue", itemId: this.queueEditing.id }
@@ -759,8 +784,8 @@ export class ConversationSession {
       allowEmpty: true,
       allowChange: (text, edits) => this.allowUndoEdit({ ...this.draft.content(), text }, edits),
       change: (text, edits) => this.editDraft(text, undefined, edits),
-      submit: (text) => this.send(text, false),
-      interrupt: (text) => this.send(text, true),
+      submit: (text) => this.send(text, false, stockIds),
+      interrupt: (text) => this.send(text, true, stockIds),
       close: (text) => {
         if (text !== this.draft.content().text) this.editDraft(text);
         this.queueEditing = null;
@@ -769,7 +794,9 @@ export class ConversationSession {
           this.controller.notify(
             this.undo?.pending
               ? "書きかけは預け直しが確定したあとに保存します。"
-              : "書きかけを残しました。i で続きを書けます",
+              : stockIds === undefined
+                ? "書きかけを残しました。i で続きを書けます"
+                : "書きかけを残しました。「指摘を書いて実装に戻す」で続きを書けます",
           );
       },
       paste: (files) => {
@@ -1093,7 +1120,7 @@ export class ConversationSession {
       return false;
     }
   }
-  private async send(text: string, interrupt: boolean): Promise<boolean> {
+  private async send(text: string, interrupt: boolean, stockIds: string[] = []): Promise<boolean> {
     this.requireUndoResult();
     const draft = this.draft;
     const version = draft.version();
@@ -1111,7 +1138,7 @@ export class ConversationSession {
       );
     };
     let sentMessageId: string | null = null;
-    if (!text.trim() && !images.length && !this.state.data?.queue.length)
+    if (!text.trim() && !images.length && !stockIds.length && !this.state.data?.queue.length)
       throw new Error("内容が空です。書いてから送ってください");
     this.cancelSave?.();
     try {
@@ -1149,6 +1176,7 @@ export class ConversationSession {
           images,
           mode: interrupt ? "interrupt" : "send",
           clientMessageId: sentMessageId,
+          ...(stockIds.length > 0 && { stockIds }),
           ...(anchors === undefined
             ? {}
             : { ...structured, timeline_comments: commentsFromAnchors(text, anchors) }),

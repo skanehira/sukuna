@@ -63,6 +63,8 @@ export function createConversationWorkspace(
   const sessions = new Map<string, ConversationSession>();
   const loadedSessions = new WeakSet<ConversationSession>();
   const active = new Set<ConversationSession>();
+  const reviewDrafts = new Set<ConversationSession>();
+  let stopReviewDraftFeed: (() => void) | undefined;
   const rightTimelines = new Set<ConversationSession>();
   const shown = new Map<string, number>();
   const listeners = new Set<() => void>();
@@ -83,6 +85,10 @@ export function createConversationWorkspace(
     )
       controller.focusMainFromRight();
   };
+  const draftChanged = (message?: ServerMessage) =>
+    !message ||
+    (message.type === "changed" &&
+      (!message.payload.parts || message.payload.parts.includes("draft")));
   const reload = (topic: string) => {
     if (topic === "app") settingsChanged?.();
     changes.get(topic)?.forEach((receive) => receive());
@@ -106,8 +112,8 @@ export function createConversationWorkspace(
     unavailable: (value) => {
       connected = !value;
       if (!value) fileRealtime?.connected();
-      active.forEach((session) => session.connection(connected));
-      for (const session of rightTimelines) if (!active.has(session)) session.connection(connected);
+      for (const session of new Set([...active, ...rightTimelines, ...reviewDrafts]))
+        session.connection(connected);
       listeners.forEach((listener) => listener());
     },
     reload,
@@ -258,10 +264,13 @@ export function createConversationWorkspace(
         session.recap?.leave();
     };
   };
-  const loadConversation = async (id: string): Promise<ConversationSession> => {
+  const loadConversation = async (
+    id: string,
+    current?: () => boolean,
+  ): Promise<ConversationSession> => {
     const session = sessionFor(id);
     session.recap?.visibility(visible);
-    await session.load();
+    await session.load(current);
     return session;
   };
   const issueMonitor = (session: ConversationSession, id: string) => {
@@ -368,6 +377,7 @@ export function createConversationWorkspace(
           recordSeq={Number.isSafeInteger(seq) && seq > 0 ? seq : undefined}
           recordLine={nonnegative("quoteLine")}
           recordColumn={nonnegative("quoteColumn")}
+          queuedStockId={params.get("stock") || undefined}
           marks={stock?.session(session.id).bufferMarks(conversationSource)}
           positionKey={`${screenKey(route)}:main`}
           activity={
@@ -493,6 +503,56 @@ export function createConversationWorkspace(
     stopConversation: api.stop,
     issueMonitor,
     subscribeIssueConversation,
+    reviewStock: stock,
+    watchReviewDraft(this: void, id: string, current: () => boolean) {
+      const session = sessionFor(id);
+      return subscribeChanges(`conversation:${id}`, (message) => {
+        if (!current() || active.has(session) || !draftChanged(message)) return;
+        void session.refresh(false, current).catch(() => {});
+      });
+    },
+    trackReviewDraft(this: void, session: ConversationSession) {
+      if (!reviewDrafts.has(session)) {
+        reviewDrafts.add(session);
+        if (!active.has(session) && !rightTimelines.has(session)) session.connection(connected);
+      }
+      const { promptId } = controller.snapshot();
+      const opening = controller.screenOpening();
+      let watching = true;
+      const current = () => {
+        const state = controller.snapshot();
+        return (
+          watching &&
+          opening === controller.screenOpening() &&
+          state.promptId === promptId &&
+          state.prompt?.scope === session.id
+        );
+      };
+      if (!current()) return;
+      stopReviewDraftFeed?.();
+      const unsubscribe = subscribeChanges(`conversation:${session.id}`, (message) => {
+        if (!current() || active.has(session) || !draftChanged(message)) return;
+        void session.refresh(false, current).catch((error: unknown) => {
+          if (current())
+            controller.notify(
+              error instanceof Error ? error.message : "書きかけを取得できませんでした",
+              "error",
+            );
+        });
+      });
+      const stopWatching = controller.subscribe(() => {
+        if (!current()) stop();
+      });
+      const stop = () => {
+        if (!watching) return;
+        watching = false;
+        stopWatching();
+        unsubscribe();
+        if (stopReviewDraftFeed === stop) stopReviewDraftFeed = undefined;
+      };
+      stopReviewDraftFeed = stop;
+      return stop;
+    },
     connection,
     renderRight: (view: RightView) => {
       const stockPanel = stock?.right(view);
@@ -605,6 +665,7 @@ export function createConversationWorkspace(
         unsubscribeInbox?.();
         stopFiles?.();
         stopStock?.();
+        stopReviewDraftFeed?.();
         realtime.stop();
       };
     },
