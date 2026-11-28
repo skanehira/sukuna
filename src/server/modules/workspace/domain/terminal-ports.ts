@@ -19,6 +19,7 @@ export interface TerminalSessionsPort {
     location: TerminalLocation,
     input: Pick<OpenTerminalInput, "cols" | "rows" | "conversationId">,
   ): Result<TerminalOpened, TerminalError>;
+  has(id: string): boolean;
   runningId(path: string): string | null;
   endAt(path: string): Promise<void>;
 }

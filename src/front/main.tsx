@@ -38,6 +38,8 @@ import {
 import { createRestoreConnection } from "./lib/restore-connection";
 import { createIssueApi } from "./pages/issue/issue-api";
 import { createIssueWorkspace } from "./pages/issue/issue-workspace";
+import { createWorktreeApi } from "./lib/worktree-api";
+import { createWorktreeWorkspace } from "./lib/worktree-workspace";
 
 const reload = () => window.location.reload();
 const restoreConnection = createRestoreConnection({
@@ -108,8 +110,10 @@ const restore = createRestoreWorkspace({
   storage: window.sessionStorage,
 });
 const stopRestore = restore.start();
+const conversationApi = createConversationApi(request);
+const stockApi = createStockApi(request);
 const conversations = createConversationWorkspace(
-  createConversationApi(request),
+  conversationApi,
   controller,
   {
     clientId: ulid(),
@@ -130,7 +134,7 @@ const conversations = createConversationWorkspace(
     verifyConnection: (signal) => restoreConnection.verify(signal, buildCheck.observe),
     recap: { api: createRecapApi(request), storage: window.sessionStorage },
     progress: { api: createProgressApi(request), storage: window.sessionStorage },
-    stock: createStockApi(request),
+    stock: stockApi,
     lifecycle: {
       api: createLifecycleApi(request),
       openExternal: (url) => {
@@ -143,6 +147,14 @@ const conversations = createConversationWorkspace(
     },
   },
 );
+const worktrees = createWorktreeWorkspace({
+  browser: window,
+  controller,
+  api: createWorktreeApi(request),
+  conversations: conversationApi,
+  stock: stockApi,
+});
+const stopWorktrees = worktrees.start();
 const projectSettings = {
   api: createProjectSettingsApi(request),
   projects: inbox.projects,
@@ -198,6 +210,7 @@ const loadScreen: ScreenLoader = async (route) => {
   return (
     loadSettingsScreen(route, controller, settings, formatTime, projectSettings) ??
     loadProjectUsageScreen(route, controller, projectUsage, formatTime) ??
+    worktrees.loadScreen(route) ??
     conversations.loadScreen(route)
   );
 };
@@ -223,6 +236,7 @@ import.meta.hot?.dispose(() => {
   stopRestore();
   stopIssues();
   stopConversations();
+  stopWorktrees();
   stopInboxNavigation();
   inbox.dispose();
   document.removeEventListener("visibilitychange", visibility);
@@ -252,7 +266,9 @@ createRoot(document.getElementById("root")!).render(
             identityRecovery={identityRecovery}
             loadScreen={loadScreen}
             renderTree={(route) => <Tree store={inbox} route={route} />}
-            renderRight={(view) => restore.right(view) ?? conversations.renderRight(view)}
+            renderRight={(view) =>
+              restore.right(view) ?? worktrees.renderRight(view) ?? conversations.renderRight(view)
+            }
             connection={connection}
           />
         )}

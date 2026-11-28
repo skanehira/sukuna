@@ -231,6 +231,37 @@ describe("ターミナル API と WebSocket", () => {
     if (root) rmSync(root, { recursive: true, force: true });
   });
 
+  it("HEAD は稼働中と終了後に状態を保持する端末だけ見つける", async () => {
+    const id = await openId();
+    const active = await request(`/api/terminals/${id}`, "HEAD");
+    const otherOrigin = await fetch(`${baseUrl}/api/terminals/${id}`, {
+      method: "HEAD",
+      headers: { origin: "https://other.example.invalid" },
+    });
+    const terminal = connect(id);
+    await terminal.wait((frame) => frame.type === "snapshot");
+    terminal.socket.send(JSON.stringify({ type: "input", data: "exit\r" }));
+    await terminal.wait((frame) => frame.type === "exit");
+    const ended = await request(`/api/terminals/${id}`, "HEAD");
+    const missing = await request("/api/terminals/missing-id", "HEAD");
+    const anonymous = createApp({
+      build: "test",
+      resolveIdentity: async () => ({ allowed: false, reason: "identity" }),
+      worktrees: createWorktreeDependencies(() => database, { terminals: sessions }),
+    });
+    const denied = await anonymous.request(`/api/terminals/${id}`, { method: "HEAD" });
+    expect([
+      active.status,
+      otherOrigin.status,
+      ended.status,
+      missing.status,
+      denied.status,
+    ]).toEqual([204, 401, 204, 404, 401]);
+    expect(ended.headers.get("cache-control")).toBe("no-store");
+    expect(await ended.text()).toBe("");
+    expect(sessions.runningId(worktree)).toBe(null);
+  });
+
   it("実 worktree のログインシェルで pwd と環境を読み、開いている画面へ同じ出力を配信する", async () => {
     const id = await openId();
     const a = connect(id);

@@ -16,6 +16,13 @@ SUKUNA_AGENT="fake"
 SUKUNA_AGENT_SCRIPT="$PWD/e2e/agent-scripts/conversation.json"
 SUKUNA_GH="$SUKUNA_HOME/gh.json"
 CLAUDE_CONFIG_DIR="$SUKUNA_HOME/claude-config"
+SHELL="$SUKUNA_HOME/terminal-shell"
+cat > "$SHELL" <<'TERMINAL_SHELL'
+#!/bin/sh
+exec /usr/bin/env -i PATH=/usr/bin:/bin TERM=xterm-256color /bin/sh -i
+TERMINAL_SHELL
+chmod 700 "$SHELL"
+export SHELL
 export SUKUNA_HOME SUKUNA_LOGIN SUKUNA_DEV_IDENTITY SUKUNA_RUNNER_SOCKET
 export SUKUNA_AGENT SUKUNA_AGENT_SCRIPT SUKUNA_GH CLAUDE_CONFIG_DIR
 

@@ -303,6 +303,9 @@ export function createPtySessions(
         reused,
       });
     },
+    has(id) {
+      return ids.has(id);
+    },
     runningId(path) {
       const session = byPath(path);
       return session?.running ? session.id : null;
