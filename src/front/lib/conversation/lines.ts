@@ -110,7 +110,10 @@ export function eventLines(
       ];
     }
     case "assistant_text":
-      return [line("speaker", "AI"), ...body(event.payload.text)];
+      return [
+        line("speaker", "AI"),
+        ...body(event.payload.text).map((text): LineInfo => ({ ...text, markdown: true })),
+      ];
     case "tool_use": {
       const { name, input } = event.payload;
       const target = toolTarget(name, input, result, id, cwd);

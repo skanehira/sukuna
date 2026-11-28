@@ -100,3 +100,32 @@ test("会話からキーだけでツリーと検索を開き、一致したフ�
   await expect(cursor).toBeInViewport();
   await capture(page, "検索で一致した5行目にカーソルがあるファイル");
 });
+
+test("Markdown のファイルの Mermaid の図を描き、図の中の HTML は要素にしない", async ({
+  page,
+  fileConversation,
+}) => {
+  const home = process.env.SUKUNA_E2E_HOME;
+  if (!home) throw new Error("E2E のデータディレクトリがありません。");
+  writeFileSync(
+    join(home, fileConversation, "DIAGRAM.md"),
+    [
+      "# 引き当ての流れ",
+      "",
+      "```mermaid",
+      "graph TD",
+      '  A["<img src=x onerror=window.mermaidInjected=1>"] --> B[引き当て]',
+      "```",
+      "",
+    ].join("\n"),
+  );
+
+  await page.goto(`/conversations/${fileConversation}/file?path=DIAGRAM.md&line=1`);
+  const diagram = page.locator(".cm-mermaid svg");
+  await expect(diagram).toBeVisible();
+  await expect(diagram).toContainText("引き当て");
+  await capture(page, "Markdown のファイルに描いた Mermaid の図");
+
+  await expect(page.locator(".cm-mermaid img")).toHaveCount(0);
+  expect(await page.evaluate(() => "mermaidInjected" in window)).toBe(false);
+});

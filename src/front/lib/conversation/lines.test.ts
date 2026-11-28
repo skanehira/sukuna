@@ -5,6 +5,39 @@ import type { Event } from "./types";
 const event = (seq: number, value: Omit<Event, "seq" | "createdAt">): Event =>
   ({ ...value, seq, createdAt: 0 }) as Event;
 describe("会話の行", () => {
+  it("AI の発言の本文の行だけに Markdown の印を付け、開発者の発言とツールの行には付けない", () => {
+    const marked = (value: Event) =>
+      eventLines(value, "c1", "/project").map((line) => line.markdown === true);
+    expect(
+      marked(
+        event(1, {
+          type: "assistant_text",
+          payload: { text: "**一**\n二", parent_tool_use_id: null },
+        }),
+      ),
+    ).toEqual([false, true, true]);
+    expect(
+      marked(
+        event(2, {
+          type: "user_message",
+          payload: { text: "**指示**", origin: "developer", images: [] },
+        }),
+      ),
+    ).toEqual([false, false]);
+    expect(
+      marked(
+        event(3, {
+          type: "tool_use",
+          payload: {
+            tool_use_id: "t",
+            name: "Bash",
+            input: { command: "ls" },
+            parent_tool_use_id: null,
+          },
+        }),
+      ),
+    ).toEqual([false]);
+  });
   it.each(["create", "edit", "update"] as const)(
     "%sの差分の本文を追加行として表示する",
     (change) => {

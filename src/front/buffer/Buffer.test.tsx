@@ -5,6 +5,7 @@ import { EditorView } from "@codemirror/view";
 import { getCM } from "@replit/codemirror-vim";
 import { Buffer, type BufferHandle, type BufferProps } from "./Buffer";
 import { bufferField } from "./state";
+import { mermaidRenderer } from "../lib/files/markdown-mermaid";
 import type { ColumnDef, LineInfo } from "./line";
 
 function text(value: string, extra: Partial<LineInfo> = {}): LineInfo {
@@ -543,5 +544,221 @@ describe("桁の装飾", () => {
 
     expect(lineClasses(view.state, 3)).toEqual(["cm-kind-tool"]);
     expect(view.state.doc.line(4).text).toBe("残すコマンド");
+  });
+});
+
+describe("AI の発言の Markdown の表示", () => {
+  const ai = (value: string, seq: number, extra: Partial<LineInfo> = {}): LineInfo =>
+    text(value, { seq, markdown: true, ...extra });
+  const texts = (view: EditorView, selector: string): string[] =>
+    [...view.contentDOM.querySelectorAll(selector)].map((el) => el.textContent ?? "");
+
+  it("印の付いた行だけ、記号を隠して強調とコードと見出しを整える", () => {
+    const { view } = mount({
+      lines: [
+        { kind: "speaker", text: "AI" },
+        ai("前置き", 1),
+        ai("## なぜ止めたか", 1),
+        ai("**太字** と `origin/main`", 1),
+        text("**あなたの発言** はそのまま"),
+      ],
+    });
+
+    expect(texts(view, ".cm-file-strong")).toEqual(["太字"]);
+    expect(texts(view, ".cm-file-inline-code")).toEqual(["origin/main"]);
+    expect(view.contentDOM.querySelector(".cm-file-heading-2")?.textContent).toBe("なぜ止めたか");
+    expect(view.contentDOM.textContent).toContain("**あなたの発言** はそのまま");
+    expect(view.contentDOM.textContent).not.toContain("**太字**");
+    expect(view.state.doc.line(4).text).toBe("**太字** と `origin/main`");
+  });
+
+  it("カーソルの行では記号を出す", () => {
+    const { view } = mount({ lines: [ai("**太字**", 1), ai("次の行", 1)] });
+
+    expect(view.contentDOM.textContent).toContain("**太字**");
+    expect(texts(view, ".cm-file-strong")).toEqual(["**太字**"]);
+  });
+
+  it("発言ごとに分けて読み、閉じていないコードの囲みが次の発言へ及ばない", () => {
+    const { view } = mount({
+      lines: [ai("前置き", 1), ai("```ts", 1), ai("const a = 1;", 1), ai("**次の発言**", 2)],
+    });
+
+    expect(texts(view, ".cm-file-code-line")).toEqual(["const a = 1;"]);
+    expect(texts(view, ".cm-file-strong")).toEqual(["次の発言"]);
+  });
+
+  describe("表", () => {
+    const table = [
+      ai("前置き", 1),
+      ai("| 列 | 値 |", 1),
+      ai("| --- | ---: |", 1),
+      ai("| とても長いセル | **1** |", 1),
+      ai("| | 空のあと |", 1),
+    ];
+    const rows = (view: EditorView) =>
+      [...view.contentDOM.querySelectorAll(".cm-line")]
+        .map((line) => [...line.querySelectorAll<HTMLElement>(".cm-file-table-cell")])
+        .filter((cells) => cells.length > 0);
+    const styleOf = (cell: HTMLElement) => cell.getAttribute("style") ?? "";
+    const widthEm = (cell: HTMLElement) =>
+      Number(/--cell-width: *([\d.]+)em/.exec(styleOf(cell))?.[1] ?? Number.NaN);
+
+    it("縦棒と区切りの行を隠し、セルだけを出す", () => {
+      const { view } = mount({ lines: table });
+
+      expect(rows(view).map((cells) => cells.map((cell) => cell.textContent))).toEqual([
+        ["列", "値"],
+        ["とても長いセル", "1"],
+        ["", "空のあと"],
+      ]);
+      expect(view.contentDOM.textContent).not.toContain("|");
+      expect(view.contentDOM.textContent).not.toContain("---");
+      expect(view.state.doc.line(4).text).toBe("| とても長いセル | **1** |");
+    });
+
+    it("同じ列のセルは、いちばん長いセルに合わせた同じ幅で出す", () => {
+      const { view } = mount({ lines: table });
+      const widths = rows(view).map((cells) => cells.map(widthEm));
+
+      expect(new Set(widths.map((row) => row[0])).size).toBe(1);
+      expect(new Set(widths.map((row) => row[1])).size).toBe(1);
+      expect(widths[0][0]).toBeGreaterThan(widths[0][1]);
+    });
+
+    it("URL のセルは、画面に出る URL の文字の幅で測る", () => {
+      const url = "https://example.com/bbbbbbbb";
+      const { view } = mount({
+        lines: [
+          ai("前置き", 1),
+          ai("| a | b |", 1),
+          ai("| --- | --- |", 1),
+          ai(`| <${url}> | x |`, 1),
+          ai("| 短 | y |", 1),
+        ],
+      });
+      const [, autolink, short] = rows(view);
+
+      expect(autolink[0].textContent).toBe(url);
+      expect(widthEm(short[0])).toBeGreaterThanOrEqual(url.length * 0.6);
+    });
+
+    it("ウィンドウより広い表は、短い列の幅を保って、長い列だけをウィンドウに収まるまで縮める", async () => {
+      const { view } = mount({
+        lines: [
+          ai("前置き", 1),
+          ai("| a | b |", 1),
+          ai("| --- | --- |", 1),
+          ai(`| 短 | ${"長".repeat(80)} |`, 1),
+        ],
+      });
+      Object.defineProperty(view.contentDOM, "clientWidth", { value: 300, configurable: true });
+      await nextFrame();
+      await nextFrame();
+      const [, body] = rows(view);
+      const line = body[0].closest<HTMLElement>(".cm-line") ?? view.contentDOM;
+      const size = Number.parseFloat(getComputedStyle(line).fontSize) || 16;
+
+      expect(widthEm(body[0])).toBeCloseTo(1 + 1.1, 6);
+      expect(widthEm(body[0]) + widthEm(body[1])).toBeCloseTo(300 / size - 2, 6);
+    });
+
+    it("画像だけのセルと、端に画像のあるセルも、枠の中に画像の印を出して列を保つ", () => {
+      const { view } = mount({
+        lines: [
+          ai("前置き", 1),
+          ai("| a | b |", 1),
+          ai("| --- | --- |", 1),
+          ai("| ![図](a.png) | x |", 1),
+          ai("| 説明 ![図](a.png) | y |", 1),
+        ],
+      });
+      const [, only, edge] = rows(view);
+
+      expect(only.map((cell) => cell.textContent)).toEqual(["[画像: 図]", "x"]);
+      expect(edge.map((cell) => cell.textContent)).toEqual(["説明 [画像: 図]", "y"]);
+    });
+
+    it("見出しの行のセルは太字にし、区切りの行の寄せを列に当てる", () => {
+      const { view } = mount({ lines: table });
+      const [head, body] = rows(view);
+
+      expect(head.map((cell) => cell.classList.contains("cm-file-table-head"))).toEqual([
+        true,
+        true,
+      ]);
+      expect(body.map((cell) => cell.classList.contains("cm-file-table-head"))).toEqual([
+        false,
+        false,
+      ]);
+      expect(body.map((cell) => cell.style.textAlign)).toEqual(["", "right"]);
+    });
+
+    it("カーソルの行は、記号を含めたソースのまま出す", () => {
+      const { view } = mount({ lines: table, startLine: 3 });
+
+      expect(rows(view)).toHaveLength(2);
+      expect(view.contentDOM.textContent).toContain("| とても長いセル | **1** |");
+    });
+  });
+
+  describe("Mermaid", () => {
+    const diagram = ["```mermaid", "graph TD", "A-->B", "```"];
+
+    it("発言の中の閉じた mermaid のブロックの次に図を描き、ほかの発言のフェンスとはつなげない", async () => {
+      const codes: string[] = [];
+      const { view } = mount({
+        lines: [
+          ...diagram.map((line) => ai(line, 1)),
+          ai("```mermaid", 2),
+          ai("graph LR", 2),
+          ai("```", 3),
+          text("```mermaid"),
+          text("graph TD"),
+          text("```"),
+        ],
+        display: mermaidRenderer.of(async (code) => {
+          codes.push(code);
+          return "<svg></svg>";
+        }),
+      });
+      await nextFrame();
+
+      expect(codes).toEqual(["graph TD\nA-->B"]);
+      expect(view.dom.querySelectorAll(".cm-mermaid svg")).toHaveLength(1);
+      expect(view.state.doc.lines).toBe(10);
+    });
+
+    it("書きかけの発言でフェンスが閉じると図を描く", async () => {
+      const codes: string[] = [];
+      const { handle, view } = mount({
+        lines: [text("先頭")],
+        display: mermaidRenderer.of(async (code) => {
+          codes.push(code);
+          return "<svg></svg>";
+        }),
+      });
+      handle.setTail(
+        "reply",
+        diagram.slice(0, 3).map((line) => text(line, { markdown: true })),
+      );
+      await nextFrame();
+      expect(view.dom.querySelector(".cm-mermaid")).toBeNull();
+
+      handle.setTail(
+        "reply",
+        diagram.map((line) => text(line, { markdown: true })),
+      );
+      await nextFrame();
+      expect(codes).toEqual(["graph TD\nA-->B"]);
+    });
+  });
+
+  it("追記した発言の行も整える", async () => {
+    const { handle, view } = mount({ lines: [text("先頭")] });
+    handle.append([ai("**届いた**", 3)]);
+    await nextFrame();
+
+    expect(texts(view, ".cm-file-strong")).toEqual(["届いた"]);
   });
 });
