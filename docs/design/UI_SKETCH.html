@@ -98,6 +98,8 @@ const CONV = mk([
   ["ai", "AI"],
   ["text", "開始の 24 時間前までとします。過ぎたら店舗への連絡を案内します。", { id: "d2" }],
   ["tool", "● Read(src/booking/cancel.ts)  84 行", { id: "lastread", go: { s: "file", file: "src/booking/cancel.ts" } }],
+  ["tool", "● take_screenshot()  Took a screenshot of the current page's viewport."],
+  ["shot", "    画像 1 / 1 (Enter で元の大きさで開く)"],
   ["you", "あなた", { id: "c3" }],
   ["text", "在庫の引き当ても同じ API でやりたい。", { id: "mine" }],
   ["sep", "──── ここから未読 ────", { id: "unread" }],
@@ -365,7 +367,7 @@ const LINE = {
   head: "text-[13px] font-bold text-ink app-head", you: "!leading-5", ai: "!leading-5", text: "", ask: "font-bold", tool: "font-mono text-[12px] text-muted", note: "text-[13px] text-muted",
   choice: "", action: "", item: "", wait: "text-wait", add: "font-mono text-[12px] bg-add", del: "font-mono text-[12px] bg-del", code: "font-mono text-[13px] whitespace-pre", tree: "font-mono text-[13px] whitespace-pre",
   dir: "font-mono text-[12px] text-muted whitespace-pre", file: "font-mono text-[13px] whitespace-pre", task: "whitespace-pre", bar: "", sep: "text-accent text-[12px] font-medium", gone: "!leading-[0px]", sect: "whitespace-pre app-head", row: "whitespace-pre", irow: "whitespace-pre",
-  act: "app-act whitespace-pre", kv: "", rkv: "app-hang", key: "", agent: "whitespace-pre", ahead: "whitespace-pre app-colhead", step: "whitespace-pre", flow: "whitespace-pre text-[13px] text-muted", wt: "whitespace-pre", queued: "text-doing", skeleton: "app-skel",
+  act: "app-act whitespace-pre", kv: "", rkv: "app-hang", key: "", agent: "whitespace-pre", ahead: "whitespace-pre app-colhead", step: "whitespace-pre", flow: "whitespace-pre text-[13px] text-muted", wt: "whitespace-pre", queued: "text-doing", skeleton: "app-skel", shot: "font-mono text-[12px] text-muted app-shot",
 };
 const PAD = { head: 14, you: 4, ai: 4, sect: 8 };
 /* メニューの行のかたまりの前後に、少しだけ隙間を空ける。枠の外に空けるので、前後の行の余白として持たせる */
@@ -517,6 +519,7 @@ const THEME = (side) => EditorView.theme({
   ".cm-line.app-you": { backgroundColor: "var(--raised)", boxShadow: "inset 3px 0 0 var(--accent)", marginRight: "16px" },
   ".cm-line.app-ai": { boxShadow: "inset 3px 0 0 color-mix(in srgb, var(--ink) 28%, transparent)" },
   ".cm-line.app-you.app-turn-a": { borderTopRightRadius: "8px" }, ".cm-line.app-you.app-turn-z": { borderBottomRightRadius: "8px" },
+  ".cm-line.app-shot": { paddingBottom: "calc(8rem + 8px)", backgroundImage: "linear-gradient(var(--raised), var(--raised))", backgroundSize: "14rem 8rem", backgroundRepeat: "no-repeat", backgroundPosition: "16px calc(100% - 4px)" },
   ".cm-line.app-skel": { backgroundImage: "linear-gradient(var(--raised), var(--raised))", backgroundSize: "60% 12px", backgroundRepeat: "no-repeat", backgroundPosition: "8px center", animation: "pulse 2s cubic-bezier(0.4,0,0.6,1) infinite" },
   ".cm-gutters": { backgroundColor: "transparent", border: "none", color: "var(--muted)", fontFamily: MONO, fontSize: "12px" },
   ".app-num .cm-gutterElement": { width: "2.5rem", textAlign: "right", paddingRight: "8px" }, ".app-num .cur": { color: "var(--ink)" },
@@ -636,10 +639,12 @@ function PromptEditor({ label, initial, working, stocking, plain, onSubmit, onCl
     <div onKeyDownCapture={onKey}>
       {cands.length > 0 && <div className="text-[13px] font-mono mb-1">{cands.map((c, n) => <span key={c} className={`mr-4 ${n === 0 ? "text-accent" : "text-muted"}`}>{c}</span>)}<span className="text-muted">Tab で選ぶ</span></div>}
       <div ref={host} className="rounded-md bg-surface px-1" />
+      {images > 0 && <div aria-label="貼った画像" className="mt-1 flex flex-wrap gap-2">{Array.from({ length: images }, (_, n) => <div key={n} className="relative h-[80px] w-[120px] overflow-hidden rounded border border-line bg-surface"><span className="absolute left-0 top-0 rounded-br bg-raised px-1 font-mono text-[11px]">{n + 1}</span></div>)}</div>}
       <div className="text-[12px] text-muted mt-1 flex flex-wrap gap-x-4 items-center">
-        {pmode === "INSERT" ? <Hint items={[["Esc", "Normal へ (" + verb.split(" ")[0] + "のは Normal から)"]]} /> : <Hint items={[["Enter", verb], ...(working && !stocking ? [["Alt+Enter", "AI を止めてすぐ送る"]] : []), ["Esc", "閉じる (書きかけは残る)"]]} />}
+        {pmode === "INSERT" ? <Hint items={[["Esc", "Normal へ (" + verb.split(" ")[0] + "のは Normal から)"], ...(!plain ? [["Ctrl+v", "貼り付け"]] : [])]} /> : <Hint items={[["Enter", verb], ...(working && !stocking ? [["Alt+Enter", "AI を止めてすぐ送る"]] : []), ["Esc", "閉じる (書きかけは残る)"]]} />}
         {!plain && <Hint items={[["/", "スキル"]]} />}
         {images > 0 && <span className="text-accent">画像 {images} 件 (送信時に一緒に送る)</span>}
+        {images > 0 && <span>:images delete &lt;番号&gt; で外す</span>}
         {!plain && <button type="button" tabIndex={-1} className="underline" onClick={() => setImages((n) => n + 1)}>画像を貼る (見本)</button>}
       </div>
     </div>
