@@ -263,17 +263,30 @@ export function IssuePage({
   const issue = data ?? initial;
   const [display, setDisplay] = useState(() => initialDisplay ?? firstIssueDisplay(initial));
   const displayRef = useRef(display);
+  const issueId = initial.id;
   const [conversationId, setConversationId] = useState<string>();
-  const showConversation = useCallback((id?: string) => {
-    setConversationId(id);
-    setDisplay("conversation");
-  }, []);
+  const selectDisplay = useCallback(
+    (next: IssueDisplay) => {
+      if (opening !== controller.screenOpening() || displayRef.current === next) return;
+      displayRef.current = next;
+      controller.replaceViewUrl(routeUrl({ kind: "issue", id: issueId, view: next }));
+      setDisplay(next);
+    },
+    [controller, issueId, opening],
+  );
+  const showConversation = useCallback(
+    (id?: string) => {
+      if (opening !== controller.screenOpening()) return;
+      setConversationId(id);
+      selectDisplay("conversation");
+    },
+    [controller, opening, selectDisplay],
+  );
   const selected =
     issue.conversations.find((item) => item.id === conversationId) ?? firstIssueConversation(issue);
   const title = `${projectName} / #${issue.number} ${issue.title} / ${displayLabels[display]}`;
 
   const stopping = useRef(false);
-  const issueId = initial.id;
   const selectedId = selected?.id;
   useEffect(() => {
     const current = () => opening === controller.screenOpening();
@@ -328,12 +341,6 @@ export function IssuePage({
 
   useEffect(() => {
     const current = () => opening === controller.screenOpening();
-    const selectDisplay = (next: IssueDisplay) => {
-      if (!current() || displayRef.current === next) return;
-      displayRef.current = next;
-      controller.replaceViewUrl(routeUrl({ kind: "issue", id: issue.id, view: next }));
-      setDisplay(next);
-    };
     const switchDisplay = (direction: number) => {
       if (!current()) return false;
       const index = issueDisplays.indexOf(displayRef.current);
@@ -381,7 +388,7 @@ export function IssuePage({
       removers.forEach((remove) => remove());
       controller.setHints("issue", []);
     };
-  }, [api, controller, issue, mutate, opening, refreshListings]);
+  }, [api, controller, issue, mutate, opening, refreshListings, selectDisplay]);
 
   if (display === "conversation")
     return (
