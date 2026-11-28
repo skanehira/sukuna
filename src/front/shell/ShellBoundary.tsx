@@ -1,19 +1,34 @@
 import { Component, type ReactNode } from "react";
+import { Buffer } from "../buffer/Buffer";
 
 export function WindowError({
   message,
   onHome,
   onReload,
+  keyboardBuffer = false,
 }: {
   message: string;
   onHome?: () => void;
   onReload: () => void;
+  keyboardBuffer?: boolean;
 }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col items-start gap-5 overflow-auto px-4 py-8 text-[13px]">
-      <p role="alert" className="text-wait">
-        {message}
-      </p>
+      {keyboardBuffer ? (
+        <div className="flex min-h-14 w-full flex-col" role="alert">
+          <Buffer
+            key={message}
+            side="main"
+            temporary
+            lines={message.split(/\r\n?|\n/).map((text) => ({ kind: "note", text, tone: "wait" }))}
+            onReady={() => {}}
+          />
+        </div>
+      ) : (
+        <p role="alert" className="text-wait">
+          {message}
+        </p>
+      )}
       <div className="flex flex-wrap gap-3">
         {onHome ? (
           <button

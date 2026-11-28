@@ -15,8 +15,9 @@ SUKUNA_RUNNER_SOCKET="$SUKUNA_HOME/runner.sock"
 SUKUNA_AGENT="fake"
 SUKUNA_AGENT_SCRIPT="$PWD/e2e/agent-scripts/conversation.json"
 SUKUNA_GH="$SUKUNA_HOME/gh.json"
+CLAUDE_CONFIG_DIR="$SUKUNA_HOME/claude-config"
 export SUKUNA_HOME SUKUNA_LOGIN SUKUNA_DEV_IDENTITY SUKUNA_RUNNER_SOCKET
-export SUKUNA_AGENT SUKUNA_AGENT_SCRIPT SUKUNA_GH
+export SUKUNA_AGENT SUKUNA_AGENT_SCRIPT SUKUNA_GH CLAUDE_CONFIG_DIR
 
 runner_pid=""
 cleanup() {
@@ -36,4 +37,5 @@ printf '%s\n' '{"responses":[],"fallback":{"stdout":"","stderr":"No GitHub fixtu
 vp run dev:runner &
 runner_pid=$!
 node e2e/seed-project.mjs "$SUKUNA_HOME" "$SUKUNA_RUNNER_SOCKET"
+node e2e/seed-work-monitor.mjs "$SUKUNA_HOME" "$SUKUNA_RUNNER_SOCKET" "$CLAUDE_CONFIG_DIR"
 vp dev --port "$PORT" --strictPort

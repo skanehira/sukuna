@@ -10,7 +10,9 @@
     {
       "match": "^予約 API を作って$",
       "steps": [
-        { "text": "確認したいことが2点あります。" },
+        {
+          "text": "確認したいことが2点あります。"
+        },
         {
           "ask": [
             {
@@ -18,8 +20,14 @@
               "header": "方法",
               "multi_select": false,
               "options": [
-                { "label": "定期処理", "description": "1分ごと" },
-                { "label": "次の処理", "description": "必要なとき" }
+                {
+                  "label": "定期処理",
+                  "description": "1分ごと"
+                },
+                {
+                  "label": "次の処理",
+                  "description": "必要なとき"
+                }
               ]
             },
             {
@@ -30,8 +38,30 @@
             }
           ]
         },
-        { "text": "選んだ方針で設計を進めます。" },
-        { "end": "success" }
+        {
+          "text": "選んだ方針で設計を進めます。"
+        },
+        {
+          "end": "success"
+        }
+      ]
+    },
+    {
+      "match": "^タイムラインの作業を始める$",
+      "steps": [
+        {
+          "tool": "Read",
+          "input": {
+            "file_path": "src/orders/export.ts"
+          },
+          "result": "既存の書き出しを確認した。"
+        },
+        {
+          "text": "文字コードの判定を終え、注文 CSV の出力を確認しています。"
+        },
+        {
+          "hold": true
+        }
       ]
     },
     {

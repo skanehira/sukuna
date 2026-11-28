@@ -130,7 +130,11 @@ describe("会話の直近・目次・決まったこと API", () => {
         "INSERT INTO questions (id,conversation_id,seq,kind,text,answered) VALUES (?,?,?,?,?,?)",
       )
       .run("x", "c", 1, "text", "回答済み", 1);
-    database.sqlite.prepare("INSERT INTO drafts VALUES ('c','',?,1,'tab')").run('["image.png"]');
+    database.sqlite
+      .prepare(
+        "INSERT INTO drafts (conversation_id,text,images,updated_at,updated_by) VALUES ('c','',?,1,'tab')",
+      )
+      .run('["image.png"]');
     for (const [id, stockState] of [
       ["s1", "stocked"],
       ["s2", "stocked"],
@@ -175,7 +179,11 @@ describe("会話の直近・目次・決まったこと API", () => {
     });
   });
   it("空の会話と空の書きかけには空の直近を返す", async () => {
-    database.sqlite.prepare("INSERT INTO drafts VALUES ('c','', '[]',1,'tab')").run();
+    database.sqlite
+      .prepare(
+        "INSERT INTO drafts (conversation_id,text,images,updated_at,updated_by) VALUES ('c','', '[]',1,'tab')",
+      )
+      .run();
     expect(recapResponseSchema.parse(await (await request("c/recap")).json())).toEqual({
       lastUserMessage: null,
       questions: [],

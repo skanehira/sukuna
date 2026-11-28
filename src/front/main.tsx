@@ -12,6 +12,7 @@ import { ShellBoundary } from "./shell/ShellBoundary";
 import { createRecapApi } from "./lib/recap/api";
 import { createConversationApi } from "./lib/conversation/api";
 import { createLifecycleApi } from "./lib/lifecycle/api";
+import { createProgressApi } from "./lib/conversation/work-monitor";
 import { createConversationWorkspace } from "./lib/conversation/workspace";
 import { createFilesApi } from "./lib/files/api";
 import type { RealtimeSocket } from "./lib/realtime";
@@ -125,6 +126,7 @@ const conversations = createConversationWorkspace(
     files: createFilesApi(request),
     verifyConnection: (signal) => restoreConnection.verify(signal, buildCheck.observe),
     recap: { api: createRecapApi(request), storage: window.sessionStorage },
+    progress: { api: createProgressApi(request), storage: window.sessionStorage },
     lifecycle: {
       api: createLifecycleApi(request),
       openExternal: (url) => {

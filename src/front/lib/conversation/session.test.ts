@@ -224,6 +224,37 @@ function deferred() {
   return { promise, resolve };
 }
 
+it("ファイルを読んでいる間に別タブで保存した指示を、相談の入力欄に残す", async () => {
+  const f = fixture();
+  await f.session.load();
+  f.data.draft = { text: "別タブで残した指示", images: [], updatedAt: 10, updatedBy: "other" };
+
+  await f.session.consultTimeline({ id: "csv", title: "注文 CSV" }, () => true);
+
+  expect(f.session.controller.promptText()).toBe(
+    "別タブで残した指示\n\nタイムラインのタスク csv「注文 CSV」について: ",
+  );
+});
+
+it("相談のために下書きを取得している間に右を閉じたら、入力欄を開かない", async () => {
+  const f = fixture();
+  await f.session.load();
+  const gate = deferred();
+  const get = f.api.get;
+  f.api.get = async (id) => {
+    await gate.promise;
+    return get(id);
+  };
+  let visible = true;
+  const opening = f.session.consultTimeline({ id: "csv", title: "注文 CSV" }, () => visible);
+  visible = false;
+  gate.resolve();
+  await opening;
+
+  expect(f.session.controller.snapshot().prompt).toBeNull();
+  expect(f.data.draft).toBeNull();
+});
+
 it.each(
   ["send", "interrupt", "queue-edit", "queue-only"].flatMap((mode) =>
     [false, true].flatMap((delayedGet) =>

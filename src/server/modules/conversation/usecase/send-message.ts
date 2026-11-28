@@ -1,12 +1,12 @@
-import type { ConversationContent } from "../../../../shared/conversation/api";
+import type { ConversationMessage } from "../../../../shared/conversation/api";
 import type { ConversationDependencies } from "../domain/ports";
 import { reopen } from "./reopen";
 export function prepareMessageAcceptance(
   id: string,
-  input: ConversationContent,
+  input: Pick<ConversationMessage, "text" | "images" | "preserveDraft">,
   deps: ConversationDependencies,
 ): (duplicate: boolean) => void {
-  const previous = deps.repository.draft(id);
+  const previous = input.preserveDraft ? null : deps.repository.draft(id);
   return (duplicate) => {
     if (duplicate) return;
     const cleared = deps.repository.transaction(() => {

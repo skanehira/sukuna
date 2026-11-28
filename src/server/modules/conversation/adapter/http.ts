@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { Result } from "neverthrow";
 import { z } from "zod";
 import {
-  conversationContentSchema,
+  editableConversationContentSchema,
   eventPageSchema,
   permissionDecisionSchema,
   saveConversationAnswersSchema,
@@ -24,6 +24,7 @@ import { switchWorkspace } from "../usecase/switch-workspace";
 import { prepareMessageAcceptance } from "../usecase/send-message";
 import { saveDraft } from "../usecase/save-draft";
 import { saveAnswers, sendAnswers } from "../usecase/answers";
+import { validTimelineAnchors } from "../../../../shared/progress/draft";
 import { editQueue, cancelQueue } from "../usecase/edit-queue";
 import { uploadImage } from "../usecase/upload-image";
 import { resumeConversation } from "../usecase/resume";
@@ -180,7 +181,7 @@ export function createConversationRoutes(
       : c.json({ error: invalid }, 400);
   });
   app.patch("/conversations/:id/queue/:itemId", async (c) => {
-    const input = await body(c, conversationContentSchema);
+    const input = await body(c, editableConversationContentSchema.refine(validTimelineAnchors));
     return input.success
       ? respond(c, editQueue(c.req.param("id"), c.req.param("itemId"), input.data, deps))
       : c.json({ error: invalid }, 400);

@@ -1,3 +1,5 @@
+import type { RestoreConversationDraft } from "../../../../shared/conversation/api";
+import type { TimelineAnchor } from "../../../../shared/progress/draft";
 import { RunOptions } from "./run-options";
 import type { CommandCache } from "../domain/agent-port";
 import {
@@ -82,6 +84,8 @@ export type SendInput = {
   interrupt?: boolean;
   origin: Origin;
   timelineComments?: TimelineInputComment[];
+  timelineAnchors?: TimelineAnchor[];
+  restoreDraft?: RestoreConversationDraft;
 };
 type DeliveryOptions = {
   includeQueued?: boolean;

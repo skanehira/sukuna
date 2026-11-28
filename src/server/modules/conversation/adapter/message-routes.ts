@@ -1,6 +1,7 @@
 import type { Handler } from "hono";
 import { z } from "zod";
 import { sendConversationMessageSchema } from "../../../../shared/conversation/api";
+import { hasUnlocatedEdits, unlocatedConsultationNotice } from "../../../../shared/progress/draft";
 import type { IdentityEnv } from "../../identity/adapter/middleware";
 import type { MessageDependencies } from "../domain/message-port";
 
@@ -22,12 +23,15 @@ export function createMessageHandler(deps: MessageDependencies): Handler<Identit
     if (!parsed.success)
       return c.json({ error: { code: "invalid_input", message: "入力を確認してください。" } }, 400);
     const input = parsed.data;
+    if (hasUnlocatedEdits(input))
+      return c.json({ error: { code: "conflict", message: unlocatedConsultationNotice } }, 409);
     const accept = deps.prepareAcceptance?.(id, input);
     const result = await deps.runner.call(
       "POST",
       `/conversations/${encodeURIComponent(id)}/messages`,
       {
         ...(deps.receiptMetadata ? { receipt_metadata: true } : {}),
+        ...(input.restoreDraft === undefined ? {} : { restore_draft: input.restoreDraft }),
         text: input.text,
         images: input.images,
         interrupt: input.mode === "interrupt",
@@ -36,6 +40,9 @@ export function createMessageHandler(deps: MessageDependencies): Handler<Identit
         ...(input.timeline_comments === undefined
           ? {}
           : { timeline_comments: input.timeline_comments }),
+        ...(input.timeline_anchors === undefined
+          ? {}
+          : { timeline_anchors: input.timeline_anchors }),
       },
     );
     if (result.isErr()) return c.json({ error: result.error }, 503);

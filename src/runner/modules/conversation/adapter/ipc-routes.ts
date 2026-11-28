@@ -171,6 +171,8 @@ export function createIpcRoutes(
         clientId: p.client_id,
         origin: p.origin,
         timelineComments: p.timeline_comments,
+        timelineAnchors: p.timeline_anchors,
+        restoreDraft: p.restore_draft,
       },
       (fresh) => {
         duplicate = !fresh;

@@ -20,6 +20,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { createProgressRepository } from "./modules/conversation/adapter/progress-repository";
 import { createMessageRepository } from "./modules/conversation/adapter/message-repository";
 import type { MessageDependencies } from "./modules/conversation/domain/message-port";
+import { createTimelineWatch } from "./modules/conversation/adapter/timeline-watch";
 import { createTimelineFilePort } from "./modules/conversation/adapter/timeline-file";
 import type { ProgressDependencies } from "./modules/conversation/domain/progress-port";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -229,6 +230,17 @@ export async function initializeRuntime(
           component: "server.inbox",
           message: "一覧のお知らせの記録を更新できませんでした。",
         }),
+      timeline: createTimelineWatch({
+        database: database.sqlite,
+        configDir: process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"),
+        changed: (id, seq) =>
+          hub?.publish({
+            topic: `conversation:${id}`,
+            seq,
+            type: "changed",
+            payload: { parts: ["timeline"] },
+          }),
+      }),
     });
     runner = new RunnerLink({
       socket:

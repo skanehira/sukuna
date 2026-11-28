@@ -45,7 +45,14 @@ export function PromptEditor({
           vim(),
           drawSelection(),
           keymap.of(defaultKeymap),
+          EditorState.lineSeparator.of("\n"),
           EditorView.lineWrapping,
+          EditorState.changeFilter.of(
+            (transaction) =>
+              externalChange ||
+              !transaction.docChanged ||
+              spec.allowChange?.(transaction.newDoc.toString(), transaction.changes) !== false,
+          ),
           EditorView.contentAttributes.of({ "aria-label": spec.label }),
           EditorView.theme({
             "&": { maxHeight: "10rem", fontSize: "15px" },
@@ -58,7 +65,7 @@ export function PromptEditor({
               const text = update.state.doc.toString();
               controller.setPromptDraft(text);
               setQuery(text);
-              if (!externalChange) spec.change?.(text);
+              if (!externalChange) spec.change?.(text, update.changes);
               setCompleting(changingCompletion || /^\/\S*$/.test(text));
               if (!changingCompletion) {
                 cycling = false;

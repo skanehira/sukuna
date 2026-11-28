@@ -1,3 +1,4 @@
+import { readDraft, writeDraft } from "../../../../shared/conversation/sqlite-draft";
 import type Database from "better-sqlite3";
 import { readPublicConversation } from "../../../../shared/conversation/sqlite-public-conversation";
 import {
@@ -6,21 +7,29 @@ import {
 } from "../../../../shared/conversation/sqlite-workspace-switch-receipts";
 import { eventSchema } from "../../../../shared/events";
 import { answersSchema } from "../../../../shared/events";
-import type { ConversationDraft, PendingAnswers } from "../../../../shared/conversation/api";
+import type { PendingAnswers } from "../../../../shared/conversation/api";
 import type { ConversationRepository } from "../domain/ports";
 import type { QueueItem } from "../domain/message-port";
+import { commentsFromAnchors, timelineAnchorSchema } from "../../../../shared/progress/draft";
 import { timelineInputCommentSchema } from "../../../../shared/progress/schema";
 export function createConversationRepository(sqlite: Database.Database): ConversationRepository {
   const queue = (id: string): QueueItem[] =>
     (
       sqlite
         .prepare(
-          "SELECT id,text,images,position,stock_item_id AS stockItemId,client_id AS clientId,created_at AS createdAt,timeline_comments AS comments FROM queued_instructions WHERE conversation_id=? ORDER BY position,rowid",
+          "SELECT id,text,images,position,stock_item_id AS stockItemId,client_id AS clientId,created_at AS createdAt,timeline_comments AS comments,timeline_anchors AS anchors FROM queued_instructions WHERE conversation_id=? ORDER BY position,rowid",
         )
-        .all(id) as (Omit<QueueItem, "images"> & { images: string; comments: string | null })[]
-    ).map(({ images, comments, ...row }) => ({
+        .all(id) as (Omit<QueueItem, "images"> & {
+        images: string;
+        comments: string | null;
+        anchors: string | null;
+      })[]
+    ).map(({ images, comments, anchors, ...row }) => ({
       ...row,
       images: JSON.parse(images) as string[],
+      ...(anchors === null
+        ? {}
+        : { timeline_anchors: timelineAnchorSchema.array().parse(JSON.parse(anchors)) }),
       ...(comments === null
         ? {}
         : { timeline_comments: timelineInputCommentSchema.array().parse(JSON.parse(comments)) }),
@@ -58,26 +67,31 @@ export function createConversationRepository(sqlite: Database.Database): Convers
     workspaceSwitchReceipt: (attempt, now) => readWorkspaceSwitchReceipt(sqlite, attempt, now),
     cancelWorkspaceSwitch: (id, attempt, now) =>
       writeWorkspaceSwitchReceipt(sqlite, attempt, { conversationId: id, conversation: null }, now),
-    draft: (id) => {
-      const row = sqlite
-        .prepare(
-          "SELECT text,images,updated_at AS updatedAt,updated_by AS updatedBy FROM drafts WHERE conversation_id=?",
-        )
-        .get(id) as (Omit<ConversationDraft, "images"> & { images: string }) | undefined;
-      return row ? { ...row, images: JSON.parse(row.images) as string[] } : null;
-    },
-    writeDraft: (id, draft) => {
-      sqlite
-        .prepare(
-          "INSERT INTO drafts (conversation_id,text,images,updated_at,updated_by) VALUES (?,?,?,?,?) ON CONFLICT(conversation_id) DO UPDATE SET text=excluded.text,images=excluded.images,updated_at=excluded.updated_at,updated_by=excluded.updated_by",
-        )
-        .run(id, draft.text, JSON.stringify(draft.images), draft.updatedAt, draft.updatedBy);
-    },
+    draft: (id) => readDraft(sqlite, id),
+    writeDraft: (id, draft) => writeDraft(sqlite, id, draft),
     queue,
     editQueue: (id, itemId, input) => {
-      const result = sqlite
-        .prepare("UPDATE queued_instructions SET text=?,images=? WHERE conversation_id=? AND id=?")
-        .run(input.text, JSON.stringify(input.images), id, itemId);
+      const anchors = input.timeline_anchors;
+      const images = JSON.stringify(input.images);
+      const result =
+        anchors === undefined
+          ? sqlite
+              .prepare(
+                "UPDATE queued_instructions SET text=?,images=?,timeline_anchors=CASE WHEN text=? THEN timeline_anchors ELSE NULL END WHERE conversation_id=? AND id=?",
+              )
+              .run(input.text, images, input.text, id, itemId)
+          : sqlite
+              .prepare(
+                "UPDATE queued_instructions SET text=?,images=?,timeline_anchors=?,timeline_comments=? WHERE conversation_id=? AND id=?",
+              )
+              .run(
+                input.text,
+                images,
+                JSON.stringify(anchors),
+                JSON.stringify(commentsFromAnchors(input.text, anchors)),
+                id,
+                itemId,
+              );
       return result.changes ? (queue(id).find((item) => item.id === itemId) ?? null) : null;
     },
     removeQueue: (id, itemId) => {

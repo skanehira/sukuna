@@ -19,7 +19,14 @@ import { missingReport, restartInstruction, resumeDependency } from "./domain/in
 import { designSubmittedSchema } from "../../../shared/api/design";
 import { issueViewSchema } from "../../../shared/issue/schema";
 import { z } from "zod";
-import { issueEvents, issues, projects, settings, stockItems } from "../../../shared/db/schema";
+import {
+  drafts,
+  issueEvents,
+  issues,
+  projects,
+  settings,
+  stockItems,
+} from "../../../shared/db/schema";
 
 const issueResponse = z.object({ issue: issueViewSchema });
 
@@ -489,6 +496,60 @@ it("設計用 worktree を作れなかった後の最初の指示に開発者の
     reason: "worktree_retry",
   });
 });
+
+it.each([
+  { expired: false, status: 409, code: "conflict" },
+  { expired: true, status: 503, code: "runner_unavailable" },
+])(
+  "worktree の準備中に別タブが下書きを変えると受理を拒否する 期限切れ=$expired",
+  async ({ expired, status, code }) => {
+    await confirm(42, "在庫");
+    await expect.poll(async () => (await snapshot()).stopReason).toBe("failed");
+    const id = stageConversation("design")!.id;
+    prepareGit(false, f.home);
+    const expected = {
+      text: "戻した指示と書きかけ",
+      images: [],
+      updatedAt: 1_000_000,
+      updatedBy: "tab",
+    };
+    const replacement = { ...expected, text: "残す書きかけ", updatedAt: 1_000_001 };
+    const peer = { ...expected, text: "別のタブの編集", updatedAt: 1_000_002, updatedBy: "peer" };
+    f.runner.runtime.store.writeDraft(id, expected);
+    f.interceptGit((args) => {
+      if (args[0] !== "worktree" || args[1] !== "add") return;
+      f.interceptGit(undefined);
+      f.db.update(drafts).set(peer).where(eq(drafts.conversationId, id)).run();
+      if (expired) f.setTime(1_011_000);
+    });
+    const probe = new RunnerLink({
+      socket: join(f.home, "runner.sock"),
+      log: () => {},
+      notice: () => {},
+      connection: () => {},
+      now: () => 1_000_000,
+    });
+    const response = (
+      await probe.call("POST", `/conversations/${id}/messages`, {
+        text: "戻した指示",
+        images: [],
+        origin: "developer",
+        interrupt: false,
+        client_id: "restore-after-worktree-retry",
+        restore_draft: { expected, replacement },
+      })
+    )._unsafeUnwrap();
+
+    expect(response).toMatchObject({ status, body: { error: { code } } });
+    if (!expired)
+      expect(response.body).toMatchObject({
+        error: { message: "別の端末で書きかけが変わりました。預け直す前の書きかけを残しました。" },
+      });
+    expect(f.runner.runtime.store.draft(id)).toEqual(peer);
+    expect(stageConversation("design")?.worktreeId).toBeNull();
+    expect(messages(id)).toHaveLength(0);
+  },
+);
 
 it("担当外の精査会話に発言すると設計の会話を案内する", async () => {
   prepareGit();

@@ -123,6 +123,74 @@ it("Vim検索の入力欄はフォーカスを保ち、検索のEnterでは行�
   expect(navigate.mock.calls).toEqual([["/b"]]);
 });
 
+it("表示できなくなった右から開いたコマンド行は、文と入力フォーカスを保ってから主へ戻る", () => {
+  const controller = new BufferController();
+  const { views } = mount(controller, lines, { right: true });
+  act(() => controller.focus("right"));
+  key(views[2], ":");
+  const command = screen.getByRole("textbox", { name: "コマンド" });
+  fireEvent.change(command, { target: { value: "保つコマンド" } });
+
+  act(() => controller.focusMainFromRight());
+  expect(command).toHaveFocus();
+  expect(command).toHaveValue("保つコマンド");
+  expect(screen.getByRole("status")).toHaveTextContent("会話");
+  fireEvent.keyDown(command, { key: "Escape" });
+
+  expect(views[1].contentDOM).toHaveFocus();
+});
+
+it("右が表示できなくなった相談を送信中にツリーを選ぶと、送信後もツリーを操作できる", async () => {
+  const controller = new BufferController();
+  const { views } = mount(controller, lines, { right: true });
+  let finish = () => {};
+  const sending = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  act(() => {
+    controller.focus("right");
+    controller.openPrompt({
+      label: "指示",
+      target: "会話",
+      verb: "送る",
+      initialText: "選んだ相談",
+      submit: () => sending,
+      close: () => {},
+    });
+    controller.focusMainFromRight();
+  });
+  const prompt = screen.getByRole("textbox", { name: "指示" });
+  expect(prompt).toHaveFocus();
+  expect(prompt).toHaveTextContent("選んだ相談");
+  let submission: Promise<boolean>;
+  act(() => {
+    submission = controller.submitPrompt("選んだ相談");
+    controller.focus("tree");
+  });
+  await act(async () => {
+    finish();
+    await submission;
+  });
+
+  expect(views[0].contentDOM).toHaveFocus();
+  expect(prompt).not.toBeInTheDocument();
+});
+
+it("表示できなくなった右で始めた確認をやめると、主に戻る", () => {
+  const controller = new BufferController();
+  const { views } = mount(controller, lines, { right: true });
+  const run = vi.fn();
+  act(() => {
+    controller.focus("right");
+    controller.confirm("実行しますか?", controller.context(), run);
+    controller.focusMainFromRight();
+  });
+  key(views[1], "n");
+
+  expect(views[1].contentDOM).toHaveFocus();
+  expect(run).not.toHaveBeenCalled();
+});
+
 describe("メニューと確認", () => {
   it("カーソルの行と番号で選んだ行を実行し、無い番号は知らせる", async () => {
     const controller = new BufferController();

@@ -1,3 +1,4 @@
+import type { TimelineAnchor } from "../progress/draft";
 import { sql } from "drizzle-orm";
 import type { IssueState, IssueStopReason } from "../issue/state";
 import {
@@ -123,6 +124,7 @@ export const drafts = sqliteTable("drafts", {
     .$type<string[]>()
     .notNull()
     .default(sql`'[]'`),
+  timelineAnchors: text("timeline_anchors", { mode: "json" }).$type<TimelineAnchor[]>(),
   updatedAt: integer("updated_at").notNull(),
   updatedBy: text("updated_by").notNull(),
 });
@@ -141,6 +143,7 @@ export const queuedInstructions = sqliteTable("queued_instructions", {
   stockItemId: text("stock_item_id"),
   clientId: text("client_id"),
   createdAt: integer("created_at").notNull(),
+  timelineAnchors: text("timeline_anchors", { mode: "json" }).$type<TimelineAnchor[]>(),
   timelineComments: text("timeline_comments", { mode: "json" }).$type<
     { task_id: string; text: string }[]
   >(),

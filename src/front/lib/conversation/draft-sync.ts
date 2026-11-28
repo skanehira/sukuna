@@ -9,7 +9,7 @@ export class DraftSync {
   private localRevision = 0;
   constructor(clientId: string, draft: Draft | null) {
     this.clientId = clientId;
-    this.value = { text: draft?.text ?? "", images: draft?.images ?? [] };
+    this.value = fromDraft(draft);
     this.editedAt = draft?.updatedAt ?? 0;
     this.savedAt = this.editedAt;
   }
@@ -56,15 +56,29 @@ export class DraftSync {
     return true;
   }
   private adopt(draft: Draft | null): void {
-    const next = { text: draft?.text ?? "", images: draft?.images ?? [] };
-    if (
-      this.value.text !== next.text ||
-      this.value.images.length !== next.images.length ||
-      this.value.images.some((id, index) => id !== next.images[index])
-    )
-      this.revision++;
+    const next = fromDraft(draft);
+    if (!sameDraftContent(this.value, next)) this.revision++;
     this.value = next;
     this.editedAt = draft?.updatedAt ?? 0;
     this.savedAt = this.editedAt;
   }
+}
+
+function fromDraft(draft: DraftContent | null): DraftContent {
+  const anchors = draft?.timeline_anchors;
+  return {
+    text: draft?.text ?? "",
+    images: draft?.images ?? [],
+    ...(anchors === undefined ? {} : { timeline_anchors: anchors }),
+  };
+}
+
+export function sameDraftContent(left: DraftContent, right: DraftContent | null): boolean {
+  const next = fromDraft(right);
+  return (
+    left.text === next.text &&
+    JSON.stringify(left.timeline_anchors) === JSON.stringify(next.timeline_anchors) &&
+    left.images.length === next.images.length &&
+    left.images.every((id, index) => id === next.images[index])
+  );
 }

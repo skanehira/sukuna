@@ -128,7 +128,12 @@ export function createDesignRepository(
       return (
         db
           .update(drafts)
-          .set({ text: "", images: [], updatedAt: Math.max(now, current.updatedAt) })
+          .set({
+            text: "",
+            images: [],
+            timelineAnchors: null,
+            updatedAt: Math.max(now, current.updatedAt),
+          })
           .where(eq(drafts.conversationId, id))
           .run().changes === 1
       );
